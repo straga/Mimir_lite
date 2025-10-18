@@ -1,0 +1,13 @@
+node_modules/
+build/
+dist/
+coverage/
+# Memory persistence files
+.mcp-memory-store.json
+.mcp-memory-store.json.tmp
+.mcp-memory-store.json.healthcheck.env
+validation-output/
+generated-agents/
+.env
+data/
+logs/

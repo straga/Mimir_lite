@@ -1,0 +1,59 @@
+{
+  "name": "Debug Agent Benchmark",
+  "description": "Test agent's ability to find and document bugs through systematic investigation",
+  "task": "Read testing/agentic/AGENTS.md using read_file, count the bugs listed, then run the test suite using run_terminal_cmd. After that, start investigating bugs by reading the source files and creating reproduction tests. Work autonomously through multiple bugs.",
+  "rubric": {
+    "categories": [
+      {
+        "name": "Bug Discovery",
+        "maxPoints": 35,
+        "criteria": [
+          "Found multiple bugs (1-5: 10pts, 6-10: 20pts, 11-15: 30pts, 16+: 35pts)",
+          "Bugs are genuine issues (not cosmetic or style)",
+          "Bug descriptions are clear and specific"
+        ]
+      },
+      {
+        "name": "Root Cause Analysis",
+        "maxPoints": 20,
+        "criteria": [
+          "Line numbers cited for each bug",
+          "Root cause explained clearly",
+          "Chain of causation documented",
+          "Edge cases and conditions identified"
+        ]
+      },
+      {
+        "name": "Debugging Methodology",
+        "maxPoints": 20,
+        "criteria": [
+          "Reproduction tests created",
+          "Debug markers added strategically",
+          "Debug markers removed after use",
+          "Evidence captured from test runs"
+        ]
+      },
+      {
+        "name": "Process Quality",
+        "maxPoints": 15,
+        "criteria": [
+          "Investigated multiple bugs autonomously",
+          "Clean workspace (no leftover markers)",
+          "Systematic approach evident",
+          "Documented findings progressively"
+        ]
+      },
+      {
+        "name": "Production Impact",
+        "maxPoints": 10,
+        "criteria": [
+          "Critical bugs prioritized",
+          "Actionable fix directions provided",
+          "Business impact assessed",
+          "Severity levels indicated"
+        ]
+      }
+    ]
+  }
+}
+

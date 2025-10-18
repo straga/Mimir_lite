@@ -1,0 +1,49 @@
+#!/usr/bin/env node
+
+/**
+ * Global wrapper for mimir-chain command
+ * Usage: mimir-chain "Your request here"
+ * 
+ * Note: This file uses CommonJS (require) instead of ES modules
+ * to ensure compatibility as a global bin script.
+ */
+
+import { spawn } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Path to the GRAPH-RAG-TODO-main installation
+const INSTALL_DIR = path.resolve(__dirname, '..');
+const CHAIN_SCRIPT = path.join(INSTALL_DIR, 'build', 'orchestrator', 'agent-chain.js');
+const AGENTS_DIR = path.join(INSTALL_DIR, 'docs', 'agents');
+
+// Get the user's request from command line args
+const userRequest = process.argv.slice(2).join(' ');
+
+if (!userRequest) {
+  console.error('❌ Error: No request provided');
+  console.error('Usage: mimir-chain "Your request here"');
+  process.exit(1);
+}
+
+console.log(`🔗 Running Mimir Chain from: ${INSTALL_DIR}`);
+console.log(`📝 Request: ${userRequest}`);
+console.log(`📂 Output will be saved to: ${process.cwd()}/chain-output.md\n`);
+
+// Run the chain script with absolute paths
+const child = spawn('node', [CHAIN_SCRIPT, '--agents-dir', AGENTS_DIR, userRequest], {
+  cwd: process.cwd(), // Run in user's current directory
+  env: {
+    ...process.env,
+    MIMIR_INSTALL_DIR: INSTALL_DIR, // Pass install dir as env var
+    MIMIR_AGENTS_DIR: AGENTS_DIR // Pass agents dir as env var
+  },
+  stdio: 'inherit'
+});
+
+child.on('exit', (code) => {
+  process.exit(code);
+});
