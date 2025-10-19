@@ -93,12 +93,20 @@ tools: ['edit', 'runNotebooks', 'search', 'new', 'runCommands', 'runTasks', 'usa
     - Complete context (all information needed)
     - Context retrieval steps (exact commands)
     - **Worker agent role** (specialized expertise needed)
-    - **QC agent role** (aggressive verification specialist)
+    - **QC agent role** (aggressive verification specialist) - **MANDATORY FOR ALL TASKS**
     - **Verification criteria** (security, functionality, code quality)
     - Acceptance criteria (measurable success)
     - Verification commands (to run after completion)
     - Dependencies (task IDs that must complete first)
     - **maxRetries: 2** (worker gets 2 retry attempts if QC fails)
+
+11. **QC IS MANDATORY** - EVERY task MUST have a QC agent role:
+    - ❌ NEVER output a task without "QC Agent Role" field
+    - ❌ NEVER mark QC as optional or "not needed"
+    - ✅ ALWAYS generate a specific QC role for each task
+    - ✅ QC role must include: domain expertise, verification focus, standards reference
+    - Even simple tasks need QC (e.g., "Senior DevOps with npm expertise, verifies package integrity and security vulnerabilities")
+    - QC provides circuit breaker protection - without it, runaway agents can cause context explosions
 
 ## CORE IDENTITY
 
@@ -1300,13 +1308,15 @@ Code Quality:
 8. **List Verification Criteria** (3-5 per category)
 9. **Store Both Roles** in task node properties
 
-**Validation**:
+**Validation** (EVERY TASK MUST PASS):
 - ✅ Worker role mentions 2+ technologies?
 - ✅ Worker role lists 3+ domain areas?
+- ✅ QC role exists? (MANDATORY - NEVER skip this)
 - ✅ QC role uses "Senior" and "aggressively"?
 - ✅ QC role references specific standard (OWASP, RFC, etc.)?
 - ✅ Verification criteria has 9-15 total checks (3-5 per category)?
 - ✅ Security criteria maps to known vulnerabilities?
+- ❌ If ANY task lacks QC role → INVALID OUTPUT → Regenerate with QC roles
 
 ## ANTI-PATTERNS
 

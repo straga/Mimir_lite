@@ -165,6 +165,9 @@ export interface ExecutionResult {
   qcVerificationHistory?: QCResult[]; // All QC attempts
   qcFailureReport?: string; // QC-generated failure report if maxRetries exceeded
   attemptNumber?: number; // Which attempt this result represents
+  
+  // Circuit Breaker results
+  circuitBreakerAnalysis?: string; // QC analysis when circuit breaker triggers
 }
 
 /**
@@ -985,6 +988,224 @@ async function updateGraphNode(taskId: string, properties: Record<string, any>):
 }
 
 /**
+ * Analyze circuit breaker failure using QC agent
+ * Provides diagnostic analysis of why the worker failed
+ */
+async function analyzeCircuitBreakerFailure(
+  task: TaskDefinition,
+  workerOutput: string,
+  workerResult: any,
+  attemptNumber: number
+): Promise<string> {
+  console.log(`\n🔍 Analyzing circuit breaker failure...`);
+  
+  const analysisPrompt = `# CIRCUIT BREAKER ANALYSIS REQUEST
+
+You are a QC agent analyzing why a worker agent exceeded safety thresholds.
+
+## Task
+${task.title}
+
+## Original Prompt
+${task.prompt}
+
+## Worker Behavior
+- **Tool Calls:** ${workerResult.metadata?.toolCallCount || 0} (limit: 80)
+- **Messages:** ${workerResult.metadata?.messageCount || 0}
+- **Context Tokens:** ~${workerResult.metadata?.estimatedContextTokens?.toLocaleString() || 'unknown'}
+- **Duration:** ${workerResult.metadata?.duration?.toFixed(2) || 'unknown'}s
+- **Attempt:** ${attemptNumber}
+
+## Worker Output (Last 2000 chars)
+${workerOutput.slice(-2000)}
+
+## Conversation History (Last 10 messages)
+${JSON.stringify(workerResult.conversationHistory?.slice(-10) || [], null, 2).substring(0, 3000)}
+
+---
+
+## YOUR ANALYSIS TASK
+
+Analyze what went wrong and provide:
+
+1. **Root Cause**: Why did the worker exceed limits?
+   - Was it stuck in a loop?
+   - Did it repeat the same actions?
+   - Was the task unclear or too complex?
+   - Did it fail to recognize completion?
+
+2. **Specific Mistakes**: What did the worker do wrong?
+   - List 3-5 specific mistakes with examples
+   - Quote tool calls or actions that were problematic
+
+3. **Recommended Fix**: How should the worker approach this task?
+   - Provide a step-by-step plan (max 5 steps)
+   - Be specific about what to do differently
+   - Focus on completing the task efficiently
+
+Keep your analysis concise and actionable (max 1000 words).`;
+
+  try {
+    // Use QC preamble if available, otherwise create a minimal analysis agent
+    const qcPreamblePath = task.qcPreamblePath || await generateAnalysisPreamble();
+    
+    const analysisAgent = new CopilotAgentClient({
+      preamblePath: qcPreamblePath,
+      agentType: 'qc',
+      temperature: 0.0,
+    });
+    
+    await analysisAgent.loadPreamble(qcPreamblePath);
+    const result = await analysisAgent.execute(analysisPrompt);
+    
+    console.log(`✅ Circuit breaker analysis complete`);
+    console.log(`   Analysis length: ${result.output.length} chars`);
+    
+    return result.output;
+  } catch (error: any) {
+    console.error(`❌ Circuit breaker analysis failed: ${error.message}`);
+    return `## Circuit Breaker Analysis Failed
+
+Error: ${error.message}
+
+**Fallback Guidance:**
+- Task exceeded safety thresholds (${workerResult.metadata?.toolCallCount || 0} tool calls)
+- Review the last few actions in the conversation history
+- Simplify your approach and avoid repetitive actions
+- If stuck, break the task into smaller steps`;
+  }
+}
+
+/**
+ * Generate a minimal analysis preamble for circuit breaker QC
+ */
+async function generateAnalysisPreamble(): Promise<string> {
+  const preamblePath = path.join('generated-agents', 'circuit-breaker-qc.md');
+  
+  // Check if already exists
+  try {
+    await fs.access(preamblePath);
+    return preamblePath;
+  } catch {
+    // Create minimal preamble
+    const preamble = `# Circuit Breaker QC Agent
+
+You are a diagnostic QC agent specialized in analyzing why worker agents fail.
+
+Your role is to:
+1. Review worker execution metrics and output
+2. Identify root causes of failure (loops, confusion, incorrect approach)
+3. Provide specific, actionable remediation guidance
+
+Keep your analysis concise, evidence-based, and focused on helping the worker succeed on retry.`;
+
+    await fs.writeFile(preamblePath, preamble, 'utf-8');
+    return preamblePath;
+  }
+}
+
+/**
+ * Auto-generate QC role when PM agent didn't provide one
+ * Analyzes task to determine appropriate verification expertise
+ */
+async function autoGenerateQCRole(task: TaskDefinition): Promise<string> {
+  const prompt = task.prompt.toLowerCase();
+  const title = task.title.toLowerCase();
+  const combined = `${title} ${prompt}`;
+  
+  // Detect task domain and risk level
+  const isSecurity = /auth|password|token|jwt|secret|credential|encrypt|hash/.test(combined);
+  const isAPI = /api|endpoint|route|request|response|http/.test(combined);
+  const isDatabase = /database|db|sql|query|migration|schema/.test(combined);
+  const isFileSystem = /file|directory|write|read|path/.test(combined);
+  const isConfig = /config|env|environment|setting/.test(combined);
+  const isTest = /test|spec|jest|mocha/.test(combined);
+  const isDocs = /document|readme|doc|guide/.test(combined);
+  
+  // Estimate complexity/risk
+  const estimatedToolCalls = parseInt(task.estimatedDuration) || 30; // Default 30min = ~10 tool calls
+  const isHighRisk = isSecurity || isDatabase || estimatedToolCalls > 15;
+  const isMediumRisk = isAPI || isFileSystem || isConfig;
+  
+  // Generate role based on domain
+  let role = 'Senior ';
+  let expertise: string[] = [];
+  let verificationFocus: string[] = [];
+  let standards = '';
+  
+  if (isSecurity) {
+    role += 'security auditor';
+    expertise = ['authentication protocols', 'cryptography', 'OWASP Top 10'];
+    verificationFocus = ['input validation', 'token handling', 'secure storage', 'error messages'];
+    standards = 'OWASP and OAuth2 RFC expert';
+  } else if (isAPI) {
+    role += 'API architect';
+    expertise = ['RESTful design', 'HTTP standards', 'API security'];
+    verificationFocus = ['endpoint correctness', 'status codes', 'error handling', 'request validation'];
+    standards = 'REST API best practices and OpenAPI expert';
+  } else if (isDatabase) {
+    role += 'database architect';
+    expertise = ['schema design', 'data integrity', 'query optimization'];
+    verificationFocus = ['schema correctness', 'data validation', 'transaction safety', 'migration rollback'];
+    standards = 'SQL standards and database normalization expert';
+  } else if (isTest) {
+    role += 'QA engineer';
+    expertise = ['test coverage', 'edge case analysis', 'test frameworks'];
+    verificationFocus = ['test completeness', 'edge cases', 'assertion quality', 'test independence'];
+    standards = 'Testing best practices and TDD expert';
+  } else if (isDocs) {
+    role += 'technical writer';
+    expertise = ['documentation clarity', 'API documentation', 'code examples'];
+    verificationFocus = ['clarity', 'completeness', 'accuracy', 'code example correctness'];
+    standards = 'Technical writing standards expert';
+  } else {
+    role += 'code reviewer';
+    expertise = ['code quality', 'TypeScript/JavaScript', 'best practices'];
+    verificationFocus = ['correctness', 'maintainability', 'error handling', 'edge cases'];
+    standards = 'Clean Code and SOLID principles expert';
+  }
+  
+  const qcRole = `${role} with expertise in ${expertise.join(', ')}. Aggressively verifies ${verificationFocus.join(', ')}. ${standards}.`;
+  
+  return qcRole;
+}
+
+/**
+ * Auto-generate verification criteria when PM agent didn't provide them
+ */
+async function autoGenerateVerificationCriteria(task: TaskDefinition): Promise<string> {
+  const qcRole = task.qcRole || await autoGenerateQCRole(task);
+  const prompt = task.prompt.toLowerCase();
+  
+  const criteria: string[] = [];
+  
+  // Security criteria
+  if (/auth|password|token|jwt|secret/.test(prompt) || /security/.test(qcRole)) {
+    criteria.push('- [ ] No hardcoded secrets or credentials');
+    criteria.push('- [ ] Input validation prevents injection attacks');
+    criteria.push('- [ ] Sensitive data properly encrypted/hashed');
+  }
+  
+  // Functionality criteria (always present)
+  criteria.push('- [ ] All specified requirements implemented');
+  criteria.push('- [ ] No runtime errors or exceptions');
+  criteria.push('- [ ] Edge cases handled appropriately');
+  
+  // Code quality criteria (always present)
+  criteria.push('- [ ] Code follows repository conventions');
+  criteria.push('- [ ] Error handling is comprehensive');
+  criteria.push('- [ ] Comments explain complex logic');
+  
+  // Test criteria
+  if (/test/.test(prompt)) {
+    criteria.push('- [ ] Test coverage includes happy path and edge cases');
+    criteria.push('- [ ] Tests are independent and repeatable');
+  }
+  
+  return criteria.join('\n');
+}
+
+/**
  * Execute a single task with Worker → QC → Retry flow
  */
 export async function executeTask(
@@ -1009,10 +1230,11 @@ export async function executeTask(
   const qcVerificationHistory: QCResult[] = [];
   let errorContext: any = null;
   
-  // If no QC role, execute worker directly (legacy behavior)
+  // 🚨 PHASE 4: QC IS NOW MANDATORY FOR ALL TASKS
+  // QC roles and preambles should have been generated during task parsing
+  // This is a safety check in case executeTask is called directly
   if (!task.qcRole || !task.qcPreamblePath) {
-    console.log('⚠️  No QC verification configured - executing worker directly');
-    return await executeTaskLegacy(task, preamblePath, startTime);
+    throw new Error(`Task ${task.id} missing QC configuration. QC is now mandatory for all tasks. Please regenerate chain-output.md with QC roles.`);
   }
   
   // Create initial task node in graph for tracking
@@ -1091,6 +1313,97 @@ ${task.prompt}`;
       console.log(`✅ Worker completed in ${(workerDuration / 1000).toFixed(2)}s`);
       console.log(`📊 Tokens: ${workerResult.tokens.input + workerResult.tokens.output}`);
       console.log(`🔧 Tool calls: ${workerResult.toolCalls}`);
+      
+      // 🚨 CIRCUIT BREAKER: Check if intervention needed
+      if (workerResult.metadata) {
+        const { qcRecommended, circuitBreakerTriggered, toolCallCount, messageCount, estimatedContextTokens } = workerResult.metadata;
+        
+        if (circuitBreakerTriggered) {
+          console.log(`\n${'🚨'.repeat(40)}`);
+          console.log(`🚨 CIRCUIT BREAKER TRIGGERED - HARD LIMIT EXCEEDED`);
+          console.log(`   Tool Calls: ${toolCallCount} (limit: 80)`);
+          console.log(`   Messages: ${messageCount}`);
+          console.log(`   Estimated Context: ~${estimatedContextTokens.toLocaleString()} tokens`);
+          console.log(`${'🚨'.repeat(40)}\n`);
+          
+          // Invoke QC for emergency analysis
+          console.log(`🔍 Invoking QC agent for emergency analysis...`);
+          
+          const circuitBreakerAnalysis = await analyzeCircuitBreakerFailure(
+            task,
+            workerOutput,
+            workerResult,
+            attemptNumber
+          );
+          
+          // Store circuit breaker analysis in graph
+          await updateGraphNode(task.id, {
+            status: 'circuit_breaker_triggered',
+            attemptNumber,
+            workerOutput: workerOutput.substring(0, 50000),
+            workerToolCalls: toolCallCount,
+            workerDuration: workerDuration,
+            circuitBreakerAnalysis: circuitBreakerAnalysis.substring(0, 5000),
+            lastUpdated: new Date().toISOString(),
+          });
+          
+          if (attemptNumber < maxRetries) {
+            console.log(`\n♻️  Preparing retry with circuit breaker guidance...`);
+            errorContext = {
+              qcScore: 0,
+              qcFeedback: `Circuit breaker triggered: ${toolCallCount} tool calls (limit: 80)`,
+              issues: [
+                `Excessive tool usage: ${toolCallCount} calls`,
+                `Worker may be stuck in a loop`,
+                `Approaching context limits: ~${estimatedContextTokens.toLocaleString()} tokens`,
+              ],
+              requiredFixes: [
+                `CRITICAL: Review the circuit breaker analysis below`,
+                `DO NOT repeat the same actions`,
+                `Focus on completing the task with minimal tool calls`,
+                `If stuck, simplify your approach`,
+              ],
+              previousAttempt: attemptNumber,
+              circuitBreakerAnalysis,
+            };
+            attemptNumber++;
+            continue; // Skip normal QC, go straight to retry with guidance
+          } else {
+            // Max retries exhausted with circuit breaker
+            const duration = Date.now() - startTime;
+            await updateGraphNode(task.id, {
+              status: 'failed',
+              completedAt: new Date().toISOString(),
+              totalDuration: duration,
+              finalAttempt: maxRetries,
+              outcome: 'failure',
+              failureReason: `Circuit breaker triggered after ${maxRetries} attempts`,
+            });
+            
+            return {
+              taskId: task.id,
+              status: 'failure',
+              output: workerOutput,
+              duration,
+              preamblePath,
+              agentRoleDescription: task.agentRoleDescription,
+              prompt: task.prompt,
+              error: `Circuit breaker triggered: ${toolCallCount} tool calls exceeded limit`,
+              circuitBreakerAnalysis,
+              attemptNumber: maxRetries,
+              graphNodeId: task.id,
+            };
+          }
+        }
+        
+        if (qcRecommended) {
+          console.log(`\n⚠️  QC INTERVENTION RECOMMENDED`);
+          console.log(`   Tool Calls: ${toolCallCount}`);
+          console.log(`   Messages: ${messageCount}`);
+          console.log(`   Estimated Context: ~${estimatedContextTokens.toLocaleString()} tokens`);
+          console.log(`   💡 QC will review for potential issues\n`);
+        }
+      }
       
       // Store worker output in graph immediately (status: awaiting_qc)
       await updateGraphNode(task.id, {
@@ -1280,6 +1593,24 @@ async function executeTaskLegacy(
     console.log(`📊 Tokens: ${result.tokens.input + result.tokens.output}`);
     console.log(`🔧 Tool calls: ${result.toolCalls}`);
     
+    // 🚨 Check for circuit breaker issues (legacy tasks without QC)
+    if (result.metadata?.qcRecommended) {
+      console.log(`\n⚠️  WARNING: Task exceeded safety thresholds`);
+      console.log(`   Tool Calls: ${result.metadata.toolCallCount}`);
+      console.log(`   Messages: ${result.metadata.messageCount}`);
+      console.log(`   Context: ~${result.metadata.estimatedContextTokens.toLocaleString()} tokens`);
+      console.log(`   💡 Consider adding QC verification to this task type\n`);
+    }
+    
+    if (result.metadata?.circuitBreakerTriggered) {
+      console.log(`\n${'🚨'.repeat(40)}`);
+      console.log(`🚨 WARNING: Circuit breaker would have triggered`);
+      console.log(`   This task completed but exceeded safety limits`);
+      console.log(`   Tool Calls: ${result.metadata.toolCallCount} (limit: 80)`);
+      console.log(`   💡 RECOMMENDATION: Add QC verification to prevent runaway execution`);
+      console.log(`${'🚨'.repeat(40)}\n`);
+    }
+    
     const executionResult: Omit<ExecutionResult, 'graphNodeId'> = {
       taskId: task.id,
       status: 'success',
@@ -1387,23 +1718,43 @@ export async function executeChainOutput(
     rolePreambles.set(role, preamblePath);
   }
   
-  // Generate QC preambles
-  if (qcRoleMap.size > 0) {
-    console.log('\n📝 Generating QC Preambles...\n');
-    for (const [qcRole, qcTasks] of qcRoleMap.entries()) {
-      console.log(`   QC (${qcTasks.length} tasks): ${qcRole.substring(0, 60)}...`);
-      const qcPreamblePath = await generatePreamble(qcRole, outputDir);
-      qcRolePreambles.set(qcRole, qcPreamblePath);
+  // Generate QC preambles (now mandatory for ALL tasks)
+  console.log('\n📝 Generating QC Preambles...\n');
+  
+  // Auto-generate QC roles for tasks without them (Phase 4: QC mandatory)
+  let autoGeneratedCount = 0;
+  for (const task of tasks) {
+    if (!task.qcRole) {
+      task.qcRole = await autoGenerateQCRole(task);
+      task.verificationCriteria = task.verificationCriteria || await autoGenerateVerificationCriteria(task);
+      autoGeneratedCount++;
+      console.log(`   🤖 Auto-generated QC for ${task.id}: ${task.qcRole.substring(0, 60)}...`);
       
-      // Store QC preamble path on each task
-      for (const task of qcTasks) {
-        task.qcPreamblePath = qcPreamblePath;
-      }
+      // Add to QC role map
+      const qcExisting = qcRoleMap.get(task.qcRole) || [];
+      qcExisting.push(task);
+      qcRoleMap.set(task.qcRole, qcExisting);
+    }
+  }
+  
+  if (autoGeneratedCount > 0) {
+    console.log(`\n   ℹ️  Auto-generated QC roles for ${autoGeneratedCount} tasks (QC now mandatory)\n`);
+  }
+  
+  // Generate preambles for all QC roles
+  for (const [qcRole, qcTasks] of qcRoleMap.entries()) {
+    console.log(`   QC (${qcTasks.length} tasks): ${qcRole.substring(0, 60)}...`);
+    const qcPreamblePath = await generatePreamble(qcRole, outputDir);
+    qcRolePreambles.set(qcRole, qcPreamblePath);
+    
+    // Store QC preamble path on each task
+    for (const task of qcTasks) {
+      task.qcPreamblePath = qcPreamblePath;
     }
   }
   
   console.log(`\n✅ Generated ${rolePreambles.size} worker preambles`);
-  console.log(`✅ Generated ${qcRolePreambles.size} QC preambles\n`);
+  console.log(`✅ Generated ${qcRolePreambles.size} QC preambles (${autoGeneratedCount} auto-generated)\n`);
   
   // Organize tasks into parallel batches
   console.log('-'.repeat(80));

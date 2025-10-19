@@ -1,14 +1,22 @@
 # Circuit Breaker & QC Intervention System
 
-**Status**: Phase 1 Implemented  
+**Status**: Phase 1-3 Implemented ✅  
 **Date**: October 19, 2025  
-**Version**: 1.0.0
+**Version**: 2.0.0
 
 ---
 
 ## Overview
 
-This system prevents agent runaways through **message trimming** and **intelligent circuit breakers** that trigger QC intervention instead of blind abortion.
+This system prevents agent runaways through **recursion limits**, **intelligent circuit breakers**, and **QC intervention** that analyzes failures and provides remediation guidance instead of blind abortion.
+
+### System Components
+
+1. **Recursion Limit** (180 messages) - Hard stop before context explosion
+2. **Circuit Breaker Monitoring** - Tracks tool calls, messages, context size
+3. **QC Emergency Analysis** - Diagnoses why worker failed when limits exceeded
+4. **Guided Retry** - Worker retries with specific remediation plan
+5. **Audit Trail** - All analyses stored in graph for debugging
 
 ---
 
@@ -100,73 +108,184 @@ Console warnings are emitted when thresholds are approached:
 
 ---
 
-## Phase 3: QC Intervention (NEXT STEP)
+## Phase 3: QC Intervention ✅ IMPLEMENTED
 
-### Current Behavior
+### Implementation Complete
 
-When circuit breakers trigger:
-- ⚠️ **Warnings logged** to console
-- 📊 **Metadata returned** to task executor
-- ❌ **No automatic intervention** yet
+When circuit breakers trigger, the system now automatically intervenes:
 
-### Planned Behavior
+**Previous Behavior:**
+- ⚠️ Warnings logged to console
+- 📊 Metadata returned to task executor
+- ❌ No automatic intervention
 
-When `qcRecommended === true`:
+**Current Behavior (IMPLEMENTED):**
 
-1. **Pause Execution** - Stop before completion
-2. **Invoke QC Agent** - Review worker's actions
-3. **QC Analysis**:
-   ```
-   - What was the worker trying to do?
-   - What went wrong (loop, confusion, wrong approach)?
-   - What mistakes were made?
-   - What should be done differently?
-   ```
-4. **Generate Remediation**:
-   ```markdown
-   ## Analysis
-   Worker attempted to [X] but got stuck in a loop doing [Y].
-   
-   ## Mistakes
-   - Repeated file edits without checking results
-   - Didn't recognize task completion
-   - Ignored error messages
-   
-   ## Suggested Approach
-   1. Read the file ONCE
-   2. Make targeted edit
-   3. Verify with test
-   4. If test fails, analyze error FIRST before re-editing
-   ```
-5. **Retry with Focused Context**:
+### When `circuitBreakerTriggered === true` (Hard Limit):
+
+1. **🚨 Emergency Stop** - Immediately halt execution
+2. **🔍 Invoke QC Analysis** - Emergency diagnostic review
+3. **📊 QC Emergency Analysis**:
+   - Review task requirements and worker behavior
+   - Identify root cause (loop, confusion, wrong approach)
+   - Count specific mistakes with evidence
+   - Generate focused remediation plan
+4. **♻️ Retry with Intervention**:
    - Original task prompt
-   - QC analysis of mistakes
-   - Suggested remediation path
-   - **Trimmed context** (last 10-15 messages only)
-   - Max 2 retries with QC review
+   - **Circuit breaker analysis** (root cause + fixes)
+   - Specific mistakes to avoid
+   - Step-by-step remediation plan
+   - Max 2 retries with analysis
+5. **❌ Fail if Still Exceeds**:
+   - After max retries, task fails with analysis
+   - Circuit breaker analysis stored in graph
+   - Full audit trail preserved
 
-### Implementation Location
+### When `qcRecommended === true` (Warning):
 
-This logic will be added to `task-executor.ts`:
+1. **⚠️ Log Warning** - Continue but flag for review
+2. **📊 Pass to Standard QC** - Normal QC verification flow
+3. **💡 QC Extra Scrutiny**:
+   - QC agent knows worker approached limits
+   - Checks for signs of loops or inefficiency
+   - May flag for human review if pattern continues
+
+### Implementation
+
+Located in `src/orchestrator/task-executor.ts`:
 
 ```typescript
 // After worker execution
-if (result.metadata?.qcRecommended) {
-  console.log('🚨 Circuit breaker triggered - invoking QC for analysis');
+if (workerResult.metadata?.circuitBreakerTriggered) {
+  console.log(`🚨 CIRCUIT BREAKER TRIGGERED - HARD LIMIT EXCEEDED`);
   
-  const qcAnalysis = await invokeQCAgent({
-    workerOutput: result.output,
-    toolCalls: result.toolCalls,
-    conversationHistory: result.conversationHistory,
-    taskPrompt: task.prompt,
-  });
+  const circuitBreakerAnalysis = await analyzeCircuitBreakerFailure(
+    task,
+    workerOutput,
+    workerResult,
+    attemptNumber
+  );
   
-  if (qcAnalysis.shouldRetry) {
-    // Retry with focused context + remediation
-    return retryWithQCGuidance(task, qcAnalysis);
+  if (attemptNumber < maxRetries) {
+    // Retry with circuit breaker guidance
+    errorContext = {
+      qcScore: 0,
+      qcFeedback: `Circuit breaker triggered: ${toolCallCount} tool calls`,
+      issues: [
+        `Excessive tool usage: ${toolCallCount} calls`,
+        `Worker may be stuck in a loop`,
+        `Approaching context limits`,
+      ],
+      requiredFixes: [
+        `Review the circuit breaker analysis`,
+        `DO NOT repeat the same actions`,
+        `Focus on minimal tool calls`,
+      ],
+      circuitBreakerAnalysis,
+    };
+    continue; // Skip normal QC, retry immediately
+  } else {
+    // Max retries exhausted - FAIL with analysis
+    return { status: 'failure', circuitBreakerAnalysis, ... };
   }
 }
 ```
+
+### Circuit Breaker Analysis Agent
+
+The QC analysis agent:
+- Uses existing QC preamble if available
+- Creates minimal diagnostic preamble if needed
+- Analyzes last 10 messages + final output
+- Identifies specific repeated actions
+- Generates 3-5 step remediation plan
+- Keeps analysis under 1000 words for retry context
+
+**Analysis Prompt Structure:**
+```
+# CIRCUIT BREAKER ANALYSIS REQUEST
+
+## Task: [Title]
+## Worker Behavior:
+- Tool Calls: 81 (limit: 80)
+- Messages: 243
+- Context: ~762K tokens
+- Duration: 148s
+
+## Worker Output (Last 2000 chars)
+[Recent output...]
+
+## Conversation History (Last 10 messages)
+[Message history...]
+
+YOUR TASK:
+1. Root Cause: Why did worker exceed limits?
+2. Specific Mistakes: What went wrong? (3-5 examples)
+3. Recommended Fix: Step-by-step plan (max 5 steps)
+```
+
+### Example Console Output
+
+When circuit breaker triggers:
+
+```
+🚀 Starting agent execution...
+📤 Invoking agent with LangGraph...
+
+... [worker makes many tool calls] ...
+
+✅ Worker completed in 148.23s
+📊 Tokens: 762170
+🔧 Tool calls: 81
+
+🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨
+🚨 CIRCUIT BREAKER TRIGGERED - HARD LIMIT EXCEEDED
+   Tool Calls: 81 (limit: 80)
+   Messages: 243
+   Estimated Context: ~762,170 tokens
+🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨
+
+🔍 Invoking QC agent for emergency analysis...
+🔍 Analyzing circuit breaker failure...
+✅ Circuit breaker analysis complete
+   Analysis length: 1847 chars
+
+♻️  Preparing retry with circuit breaker guidance...
+
+────────────────────────────────────────────────────────
+🔄 ATTEMPT 2/2
+────────────────────────────────────────────────────────
+
+👷 Executing worker agent...
+📥 Task prompt augmented with error context:
+
+🚨 PREVIOUS ATTEMPT FAILED - CIRCUIT BREAKER TRIGGERED
+
+**Analysis:**
+Worker got stuck in a loop editing the same file repeatedly without 
+verifying results...
+
+**Mistakes to Avoid:**
+- Repeated file edits without checking results
+- Didn't recognize task completion
+- Made 15+ redundant tool calls
+
+**Your Approach This Time:**
+1. Read the target file ONCE
+2. Make ONE targeted edit
+3. Verify the change worked
+4. STOP if successful
+
+---
+
+[Original task prompt]
+```
+
+**Benefits:**
+- ✅ Worker gets specific guidance on what went wrong
+- ✅ Retry has focused context (not full 762K token history)
+- ✅ QC analysis helps worker avoid same mistakes
+- ✅ Full audit trail stored in graph
 
 ---
 
