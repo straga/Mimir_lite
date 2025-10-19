@@ -8,6 +8,7 @@ coverage/
 .mcp-memory-store.json.healthcheck.env
 validation-output/
 generated-agents/tmp
+generated-agents/worker-*
 .env
 data/
 logs/

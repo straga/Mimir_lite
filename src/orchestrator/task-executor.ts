@@ -245,80 +245,169 @@ export function organizeTasks(tasks: TaskDefinition[]): TaskDefinition[][] {
 export function parseChainOutput(markdown: string): TaskDefinition[] {
   const tasks: TaskDefinition[] = [];
   
-  // Split markdown into task sections (between ### Task ID markers)
-  const taskSections = markdown.split(/(?=### Task ID:)/);
+  // LOOSE PARSING: Try multiple patterns to find task sections
+  // Pattern 1: ### Task ID: or #### Task ID: or **Task ID:**
+  // Pattern 2: task-X.Y anywhere in a heading
+  // Pattern 3: Task X.Y: Title format
   
-  for (const section of taskSections) {
-    if (!section.trim() || !section.includes('### Task ID:')) continue;
+  // Split by any heading that might contain a task
+  const possibleTaskSections = markdown.split(/(?=#{2,4}\s+Task|\*\*Task)/i);
+  
+  for (const section of possibleTaskSections) {
+    if (!section.trim()) continue;
     
-    // Extract task ID
-    const taskIdMatch = section.match(/### Task ID:\s*(.+)/);
-    if (!taskIdMatch) continue;
-    const taskId = taskIdMatch[1].trim();
+    // Try to extract task ID using multiple patterns (LOOSE)
+    let taskId: string | undefined;
     
-    // Helper function to extract field value with simple markdown formatting
-    // Format: **Field Name**\nValue (no colons, clean and simple)
-    const extractField = (fieldName: string, required: boolean = false): string | undefined => {
-      // Single pattern: **Field**\n content until next **Field Name** (full word match) or separator
-      // Updated pattern to avoid matching **BOLD TEXT** inside content (requires space or end after **)
-      const pattern = new RegExp(`\\*\\*${fieldName}\\*\\*\\s*\\n([\\s\\S]+?)(?=\\n\\*\\*[A-Z][A-Za-z\\s]+\\*\\*|\\n---|\\n###|\\n####|$)`, 'i');
-      const match = section.match(pattern);
-      if (match) {
-        return match[1].trim();
+    // Pattern 1: ### Task ID: task-X.Y or #### Task ID: task-X.Y
+    const taskIdPattern1 = section.match(/#{2,4}\s+Task\s+ID[:\s]+([^\n]+)/i);
+    if (taskIdPattern1) {
+      taskId = taskIdPattern1[1].trim();
+    }
+    
+    // Pattern 2: **Task ID:** task-X.Y or - **Task ID:** task-X.Y
+    if (!taskId) {
+      const taskIdPattern2 = section.match(/\*\*Task\s+ID[:\s]*\*\*[:\s]*([^\n]+)/i);
+      if (taskIdPattern2) {
+        taskId = taskIdPattern2[1].trim();
       }
+    }
+    
+    // Pattern 3: task-X.Y anywhere in first line
+    if (!taskId) {
+      const taskIdPattern3 = section.match(/task[-\s]*(\d+\.\d+)/i);
+      if (taskIdPattern3) {
+        taskId = `task-${taskIdPattern3[1]}`;
+      }
+    }
+    
+    // Pattern 4: Task X.Y: anywhere in heading
+    if (!taskId) {
+      const taskIdPattern4 = section.match(/Task\s+(\d+\.\d+)[:\s]/i);
+      if (taskIdPattern4) {
+        taskId = `task-${taskIdPattern4[1]}`;
+      }
+    }
+    
+    if (!taskId) continue;
+    
+    // Helper function to extract field value (VERY LOOSE)
+    // Try multiple patterns and return first match
+    const extractField = (fieldName: string, aliases: string[] = []): string | undefined => {
+      const allNames = [fieldName, ...aliases];
+      
+      for (const name of allNames) {
+        // Pattern 1: **Field Name**\nValue or **Field Name:**\nValue
+        const pattern1 = new RegExp(`\\*\\*${name}[:\\s]*\\*\\*[:\\s]*\\n([\\s\\S]+?)(?=\\n\\*\\*[A-Z]|\\n---|\\n#{2,4}|$)`, 'i');
+        const match1 = section.match(pattern1);
+        if (match1) return match1[1].trim();
+        
+        // Pattern 2: - **Field Name**: Value or - **Field Name:** Value
+        const pattern2 = new RegExp(`-\\s*\\*\\*${name}[:\\s]*\\*\\*[:\\s]*([^\\n]+)`, 'i');
+        const match2 = section.match(pattern2);
+        if (match2) return match2[1].trim();
+        
+        // Pattern 3: **Field Name**: Value (inline)
+        const pattern3 = new RegExp(`\\*\\*${name}[:\\s]*\\*\\*[:\\s]*([^\\n]+)`, 'i');
+        const match3 = section.match(pattern3);
+        if (match3) return match3[1].trim();
+        
+        // Pattern 4: Field Name: Value (no bold)
+        const pattern4 = new RegExp(`${name}[:\\s]+([^\\n]+)`, 'i');
+        const match4 = section.match(pattern4);
+        if (match4) return match4[1].trim();
+      }
+      
       return undefined;
     };
     
-    // Extract parallel group (optional) - special case for numeric value
-    const parallelGroupText = extractField('Parallel Group', false);
+    // Extract fields with LOOSE matching (multiple aliases for each field)
+    
+    // Parallel Group (optional)
+    const parallelGroupText = extractField('Parallel Group', ['Parallel', 'Group']);
     const parallelGroup = parallelGroupText ? parseInt(parallelGroupText, 10) : undefined;
     
-    // Extract agent role description (required)
-    const agentRole = extractField('Agent Role Description', true);
-    if (!agentRole) continue;
+    // Agent Role / Worker Role (try multiple names)
+    const agentRole = extractField('Agent Role Description', ['Worker Role', 'Agent Role', 'Role Description', 'Role']) 
+                   || extractField('Worker Role', [])
+                   || extractField('Agent Role', []);
     
-    // Extract recommended model (required)
-    const model = extractField('Recommended Model', true);
-    if (!model) continue;
+    // Skip if no role found (but be lenient - use taskId as fallback)
+    const finalAgentRole = agentRole || `Agent for ${taskId}`;
     
-    // Extract optimized prompt - expects <prompt>Content</prompt> format
-    // (This format is generated by Ecko agent - see docs/agents/claudette-ecko.md)
+    // Recommended Model (optional - default to gpt-4.1)
+    const model = extractField('Recommended Model', ['Model', 'Recommended']) || 'gpt-4.1';
+    
+    // Prompt (try multiple field names, be very loose)
     let prompt: string | undefined;
-    let promptSection = extractField('Optimized Prompt', true);
-    if (!promptSection) continue;
+    const promptSection = extractField('Optimized Prompt', ['Prompt', 'Task Description', 'Description', 'Instructions', 'Work'])
+                       || extractField('Prompt', [])
+                       || extractField('Description', []);
     
-    // Extract content from <prompt> tags
-    const promptTagMatch = promptSection.match(/<prompt>\s*([\s\S]+?)\s*<\/prompt>/i);
-    if (promptTagMatch) {
-      prompt = promptTagMatch[1].trim();
-    } else {
-      // Fallback: if no tags found, use raw content (strip any HTML)
-      prompt = promptSection.replace(/<[^>]+>/g, '').trim();
+    if (promptSection) {
+      // Try to extract from <prompt> tags if present
+      const promptTagMatch = promptSection.match(/<prompt>\s*([\s\S]+?)\s*<\/prompt>/i);
+      if (promptTagMatch) {
+        prompt = promptTagMatch[1].trim();
+      } else {
+        // Use raw content, strip HTML tags
+        prompt = promptSection.replace(/<[^>]+>/g, '').trim();
+      }
     }
     
-    // Extract dependencies (required)
-    const depsText = extractField('Dependencies', true);
-    if (!depsText) continue;
-    const deps = depsText.toLowerCase() === 'none' ? [] : depsText.split(',').map(d => d.trim());
+    // If still no prompt, try to extract from the section content itself
+    if (!prompt || prompt.length < 20) {
+      // Look for any substantial paragraph after the task ID
+      const paragraphs = section.split(/\n\n+/);
+      for (const para of paragraphs) {
+        const cleaned = para.replace(/^\s*[-*]\s*\*\*[^*]+\*\*[:\s]*/gm, '').trim();
+        if (cleaned.length > 50 && !cleaned.match(/^#{1,4}\s/)) {
+          prompt = cleaned;
+          break;
+        }
+      }
+    }
     
-    // Extract estimated duration (required)
-    const duration = extractField('Estimated Duration', true);
-    if (!duration) continue;
+    // If still no prompt, use section content
+    if (!prompt) {
+      prompt = section.substring(0, 500).trim();
+    }
     
-    // Extract QC Agent Role (optional)
-    const qcRole = extractField('QC Agent Role', false);
+    // Dependencies (very loose - look for task IDs)
+    const depsText = extractField('Dependencies', ['Depends On', 'Requires', 'After']);
+    let deps: string[] = [];
+    if (depsText) {
+      if (depsText.toLowerCase().includes('none') || depsText.toLowerCase().includes('n/a')) {
+        deps = [];
+      } else {
+        // Extract all task-X.Y patterns from the text
+        const taskIdMatches = depsText.match(/task[-\s]*\d+\.\d+/gi);
+        if (taskIdMatches) {
+          deps = taskIdMatches.map(t => t.replace(/\s/g, '-').toLowerCase());
+        } else {
+          // Fallback: split by comma
+          deps = depsText.split(/[,;]/).map(d => d.trim()).filter(d => d);
+        }
+      }
+    }
     
-    // Extract Verification Criteria (optional)
-    const verificationCriteria = extractField('Verification Criteria', false);
+    // Estimated Duration (optional - default to "30 min")
+    const duration = extractField('Estimated Duration', ['Duration', 'Time', 'Estimate']) || '30 min';
     
-    // Extract Max Retries (optional)
-    const retriesText = extractField('Max Retries', false);
-    const maxRetries = retriesText ? parseInt(retriesText, 10) : 2; // Default to 2
+    // QC Agent Role (optional)
+    const qcRole = extractField('QC Agent Role', ['QC Role', 'Verification Role', 'Reviewer']);
+    
+    // Verification Criteria (optional)
+    const verificationCriteria = extractField('Verification Criteria', ['Criteria', 'Acceptance Criteria', 'Success Criteria', 'Checks']);
+    
+    // Max Retries (optional - default to 2)
+    const retriesText = extractField('Max Retries', ['Retries', 'Max Attempts', 'Attempts']);
+    const maxRetries = retriesText ? parseInt(retriesText, 10) : 2;
     
     tasks.push({
       id: taskId,
       title: taskId,
-      agentRoleDescription: agentRole,
+      agentRoleDescription: finalAgentRole,
       recommendedModel: model,
       prompt: prompt,
       dependencies: deps,
@@ -334,7 +423,7 @@ export function parseChainOutput(markdown: string): TaskDefinition[] {
 }
 
 /**
- * Generate preamble for agent role via agentinator
+ * Generate preamble for agent role via agentinator (or create a simple one as fallback)
  */
 export async function generatePreamble(
   roleDescription: string,
@@ -358,22 +447,21 @@ export async function generatePreamble(
   
   console.log(`  🔨 Generating preamble for role: ${roleDescription.substring(0, 60)}...`);
   
-  // Determine the Mimir installation directory
-  // If running via mimir-execute, MIMIR_INSTALL_DIR will be set
-  // Otherwise, assume we're in the project root
-  const mimirInstallDir = process.env.MIMIR_INSTALL_DIR || process.cwd();
-  
-  // Call agentinator via npm script (must run from Mimir directory)
-  const command = `npm run create-agent "${roleDescription}"`;
-  
+  // Try agentinator first, but fall back to simple preamble if it fails
   try {
+    // Determine the Mimir installation directory
+    const mimirInstallDir = process.env.MIMIR_INSTALL_DIR || process.cwd();
+    
+    // Call agentinator via npm script (must run from Mimir directory)
+    const command = `npm run create-agent "${roleDescription}"`;
+    
     const { stdout, stderr } = await execAsync(command, {
-      cwd: mimirInstallDir, // Run from Mimir installation, not user's project
+      cwd: mimirInstallDir,
       maxBuffer: 10 * 1024 * 1024,
+      timeout: 30000, // 30 second timeout
     });
     
-    // Agentinator outputs to its own generated-agents/ directory (in Mimir installation)
-    // Find the most recent file there
+    // Agentinator outputs to its own generated-agents/ directory
     const mimirGeneratedDir = path.join(mimirInstallDir, 'generated-agents');
     const files = await fs.readdir(mimirGeneratedDir);
     const mdFiles = files
@@ -381,22 +469,65 @@ export async function generatePreamble(
       .sort()
       .reverse();
     
-    if (mdFiles.length === 0) {
-      throw new Error('Agentinator did not generate a file');
+    if (mdFiles.length > 0) {
+      // Copy the generated file to user's output directory
+      const generatedFile = path.join(mimirGeneratedDir, mdFiles[0]);
+      const content = await fs.readFile(generatedFile, 'utf-8');
+      await fs.writeFile(preamblePath, content, 'utf-8');
+      console.log(`  ✅ Generated: ${path.basename(preamblePath)}`);
+      return preamblePath;
     }
-    
-    // Copy the generated file to user's output directory with our preferred format
-    const generatedFile = path.join(mimirGeneratedDir, mdFiles[0]);
-    const content = await fs.readFile(generatedFile, 'utf-8');
-    await fs.writeFile(preamblePath, content, 'utf-8');
-    
-    console.log(`  ✅ Generated: ${path.basename(preamblePath)}`);
-    return preamblePath;
-    
   } catch (error: any) {
-    console.error(`  ❌ Failed to generate preamble: ${error.message}`);
-    throw error;
+    console.warn(`  ⚠️  Agentinator failed (${error.message}), creating simple preamble...`);
   }
+  
+  // Fallback: Create a simple but effective preamble directly
+  const simplePreamble = `# Agent Preamble
+
+## Role Description
+
+${roleDescription}
+
+## Instructions
+
+You are an expert software engineer tasked with completing this specific role. Follow these guidelines:
+
+1. **Read the task prompt carefully** - Understand all requirements before starting
+2. **Use available tools** - You have access to filesystem, terminal, and search tools
+3. **Work incrementally** - Make small changes and verify they work
+4. **Be thorough** - Complete all aspects of the task
+5. **Handle errors** - If something fails, debug and fix it
+6. **Follow best practices** - Write clean, maintainable, well-tested code
+7. **Document changes** - Add comments and update documentation as needed
+
+## Available Tools
+
+You have access to:
+- **File operations**: read_file, write, search_replace, list_dir, grep, delete_file
+- **Terminal**: run_terminal_cmd (for running commands, tests, builds)
+- **Search**: web_search (for looking up documentation, examples)
+- **Graph operations**: For storing/retrieving context from the knowledge graph
+
+## Success Criteria
+
+Your task is complete when:
+- All requirements in the task prompt are met
+- Code compiles/runs without errors
+- Tests pass (if applicable)
+- No regressions introduced
+- Changes are well-documented
+
+## Communication Style
+
+- Be concise but thorough
+- Explain your reasoning briefly
+- Report what you're doing as you work
+- Ask for clarification if requirements are ambiguous
+`;
+
+  await fs.writeFile(preamblePath, simplePreamble, 'utf-8');
+  console.log(`  ✅ Created simple preamble: ${path.basename(preamblePath)}`);
+  return preamblePath;
 }
 
 /**

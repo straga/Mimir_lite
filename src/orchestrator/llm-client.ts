@@ -225,13 +225,18 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
     }
     
     // Create React agent using the new LangGraph API
+    // Note: LangGraph's createReactAgent handles message history internally
+    // We rely on the increased recursion limit (150) and shorter completion windows
+    // to prevent context overflow
     this.agent = createReactAgent({
       llm: this.llm,
       tools: this.tools,
       prompt: new SystemMessage(enhancedSystemPrompt),
     });
 
+    const ctxWindow = await this.getContextWindow();
     console.log('✅ Agent initialized with tool-calling enabled using LangGraph');
+    console.log(`📊 Context: ${ctxWindow.toLocaleString()} tokens, Recursion limit: 150`);
   }
   
   private async initializeLLM(): Promise<void> {
@@ -413,7 +418,7 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
           messages: [new HumanMessage(task)],
         },
         {
-          recursionLimit: 50, // Increase from default 25 for complex prompts
+          recursionLimit: 150, // Increased from 50 to allow more complex tool-calling chains
         }
       );
       console.log('📥 Agent invocation complete');
