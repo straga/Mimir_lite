@@ -1,9 +1,10 @@
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatOllama } from '@langchain/ollama';
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
-import { SystemMessage, HumanMessage } from '@langchain/core/messages';
+import { SystemMessage, HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { CompiledStateGraph } from '@langchain/langgraph';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { BaseMessage } from '@langchain/core/messages';
 import fs from 'fs/promises';
 import { CopilotModel, LLMProvider } from './types.js';
 import { allTools, planningTools, getToolNames } from './tools.js';
@@ -224,10 +225,9 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
       throw error;
     }
     
-    // Create React agent using the new LangGraph API
-    // Note: LangGraph's createReactAgent handles message history internally
-    // We rely on the increased recursion limit (150) and shorter completion windows
-    // to prevent context overflow
+    // Create React agent using the LangGraph API
+    // NOTE: Message trimming must be handled at the invoke() level, not here
+    // stateModifier breaks LangChain's internal API with trimMessages
     this.agent = createReactAgent({
       llm: this.llm,
       tools: this.tools,
@@ -236,7 +236,8 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
 
     const ctxWindow = await this.getContextWindow();
     console.log('✅ Agent initialized with tool-calling enabled using LangGraph');
-    console.log(`📊 Context: ${ctxWindow.toLocaleString()} tokens, Recursion limit: 150`);
+    console.log(`📊 Context: ${ctxWindow.toLocaleString()} tokens, Recursion limit: 250`);
+    console.log(`⚠️  WARNING: No message trimming - tasks >50 tool calls may hit context limits`);
   }
   
   private async initializeLLM(): Promise<void> {
@@ -392,12 +393,91 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
     });
   }
 
+  /**
+   * Summarize conversation history to prevent context explosion
+   * Uses the LLM to create a dense summary of the conversation so far
+   * Preserves the most recent messages for continuity
+   * 
+   * @param messages - Full message history to summarize
+   * @param keepRecentCount - Number of recent messages to preserve (default: 10)
+   * @returns Summarized messages: [system, summary, ...recent messages]
+   */
+  private async summarizeMessages(messages: BaseMessage[], keepRecentCount: number = 10): Promise<BaseMessage[]> {
+    if (messages.length <= keepRecentCount + 2) {
+      // Not enough messages to warrant summarization
+      return messages;
+    }
+    
+    const systemMessage = messages.find(m => m._getType() === 'system');
+    const recentMessages = messages.slice(-keepRecentCount);
+    const toSummarize = messages.slice(systemMessage ? 1 : 0, -keepRecentCount);
+    
+    if (toSummarize.length === 0) {
+      return messages;
+    }
+    
+    // Build conversation text for summarization
+    const conversationText = toSummarize.map(msg => {
+      const type = msg._getType();
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      
+      if (type === 'human') return `Human: ${content}`;
+      if (type === 'ai') return `Assistant: ${content}`;
+      if (type === 'tool') return `Tool Result: ${content.substring(0, 200)}...`; // Truncate tool results
+      return `${type}: ${content}`;
+    }).join('\n\n');
+    
+    // Request concise summary from LLM
+    const summaryPrompt = `Summarize the following conversation history concisely. Focus on:
+- Key decisions made
+- Important findings or errors
+- Tools used and their outcomes
+- Current state of the work
+
+Keep the summary under 500 tokens. Be specific and factual.
+
+CONVERSATION HISTORY:
+${conversationText}
+
+CONCISE SUMMARY:`;
+    
+    try {
+      const summaryResult = await this.llm!.invoke([new HumanMessage(summaryPrompt)]);
+      const summaryContent = summaryResult.content.toString();
+      
+      console.log(`📝 Summarized ${toSummarize.length} messages into ${Math.ceil(summaryContent.length / 4)} tokens`);
+      console.log(`   Kept ${keepRecentCount} recent messages for continuity`);
+      
+      // Build new message array: [system?, summary, ...recent]
+      const result: BaseMessage[] = [];
+      if (systemMessage) result.push(systemMessage);
+      result.push(new AIMessage({
+        content: `[CONVERSATION SUMMARY]\n${summaryContent}\n[END SUMMARY]\n\nContinuing with recent messages...`
+      }));
+      result.push(...recentMessages);
+      
+      return result;
+    } catch (error: any) {
+      console.warn(`⚠️  Failed to summarize messages: ${error.message}`);
+      console.warn(`   Falling back to keeping all messages (may hit context limits)`);
+      return messages;
+    }
+  }
+
   async execute(task: string, retryCount: number = 0): Promise<{
     output: string;
     conversationHistory: Array<{ role: string; content: string }>;
     tokens: { input: number; output: number };
     toolCalls: number;
     intermediateSteps: any[];
+    metadata?: {
+      toolCallCount: number;
+      messageCount: number;
+      estimatedContextTokens: number;
+      qcRecommended: boolean;
+      circuitBreakerTriggered: boolean;
+      duration: number;
+    };
   }> {
     if (!this.agent) {
       throw new Error('Agent not initialized. Call loadPreamble() first.');
@@ -412,13 +492,20 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
     
     try {
       console.log('📤 Invoking agent with LangGraph...');
+      
+      // Circuit breaker: Stop execution if tool calls exceed threshold
+      const MAX_TOOL_CALLS = 60; // Stop before context explosion
+      const MAX_MESSAGES = 180; // ~60 tool calls × 3 messages per call
+      let toolCallsSoFar = 0;
+      let lastMessageCount = 0;
+      
       // LangGraph agents use messages format
       const result = await this.agent.invoke(
         {
           messages: [new HumanMessage(task)],
         },
         {
-          recursionLimit: 150, // Increased from 50 to allow more complex tool-calling chains
+          recursionLimit: MAX_MESSAGES, // Prevent context explosion (was 250)
         }
       );
       console.log('📥 Agent invocation complete');
@@ -457,11 +544,41 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
         });
       }
 
-      // Count tool calls from messages
-      const toolCalls = messages.filter((msg: any) => 
-        msg._getType() === 'ai' && msg.tool_calls && msg.tool_calls.length > 0
-      ).length;
+      // Count tool calls from messages (total tool_calls across all AI messages)
+      const toolCalls = messages.reduce((total: number, msg: any) => {
+        if (msg._getType() === 'ai' && msg.tool_calls && msg.tool_calls.length > 0) {
+          return total + msg.tool_calls.length;
+        }
+        return total;
+      }, 0);
 
+      console.log(`\n✅ Task completed in ${duration}s`);
+      console.log(`📊 Tokens: ${this.estimateTokens(output)}`);
+      console.log(`🔧 Tool calls: ${toolCalls}`);
+      
+      // Circuit breaker warnings
+      const messageCount = messages.length;
+      if (toolCalls > 50) {
+        console.warn(`⚠️  HIGH TOOL USAGE: ${toolCalls} tool calls - agent may be stuck in a loop`);
+        console.warn(`💡 Consider: QC review, task simplification, or circuit breaker intervention`);
+      }
+      if (messageCount > 200) {
+        console.warn(`⚠️  High message count (${messageCount}) - approaching recursion limit of 250`);
+      }
+      
+      // Calculate estimated context size
+      const estimatedContext = messages.reduce((sum: number, msg: any) => {
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+        return sum + Math.ceil(content.length / 4);
+      }, 0);
+      if (estimatedContext > 100000) {
+        console.warn(`⚠️  HIGH CONTEXT: ~${estimatedContext.toLocaleString()} tokens - approaching limits`);
+      }
+
+      // Determine if QC intervention is recommended
+      const qcRecommended = toolCalls > 50 || messageCount > 150 || estimatedContext > 100000;
+      const circuitBreakerTriggered = toolCalls > 80; // Hard limit
+      
       return {
         output,
         conversationHistory,
@@ -471,6 +588,15 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
         },
         toolCalls,
         intermediateSteps: messages as any[], // Return messages as intermediate steps
+        // Circuit breaker metadata for task executor
+        metadata: {
+          toolCallCount: toolCalls,
+          messageCount: messageCount,
+          estimatedContextTokens: estimatedContext,
+          qcRecommended,
+          circuitBreakerTriggered,
+          duration: parseFloat(duration),
+        },
       };
     } catch (error: any) {
       // Check if this is a tool call parsing error
@@ -492,6 +618,8 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
       }
       
       // If not a tool call error or max retries exceeded, provide helpful error message
+      const isRecursionError = error.message?.includes('Recursion limit');
+      
       if (isToolCallError) {
         console.error('\n❌ Agent execution failed due to malformed tool calls after retries');
         console.error('💡 Suggestion: This model may not support tool calling reliably.');
@@ -499,6 +627,17 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
         console.error('   - For PM agent: Use copilot/gpt-4o (set agentDefaults.pm.provider="copilot")');
         console.error('   - For Ollama: Try qwen2.5-coder, deepseek-coder, or llama3.1 instead of gpt-oss');
         console.error(`\n   Original error: ${error.message}\n`);
+      } else if (isRecursionError) {
+        console.error('\n❌ Agent execution failed: Recursion limit reached (250 steps)');
+        console.error('💡 This task is too complex or the agent is stuck in a loop.');
+        console.error('   Possible causes:');
+        console.error('   - Task requires too many tool calls (current: >100)');
+        console.error('   - Agent is repeating the same actions');
+        console.error('   - Task description is ambiguous, causing confusion');
+        console.error('\n   Suggestions:');
+        console.error('   - Break this task into smaller subtasks');
+        console.error('   - Make task requirements more specific and clear');
+        console.error('   - Review the agent preamble for better guidance\n');
       } else {
         console.error('\n❌ Agent execution failed:', error.message);
         console.error('Stack trace:', error.stack);
