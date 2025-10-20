@@ -10,6 +10,8 @@
 import { CopilotAgentClient } from './llm-client.js';
 import { CopilotModel } from './types.js';
 import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
+import { createGraphManager } from '../managers/index.js';
+import type { GraphManager } from '../managers/GraphManager.js';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -17,6 +19,19 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+
+// Module-level GraphManager instance (initialized on first use)
+let graphManagerInstance: GraphManager | null = null;
+
+/**
+ * Get or create GraphManager instance
+ */
+async function getGraphManager(): Promise<GraphManager> {
+  if (!graphManagerInstance) {
+    graphManagerInstance = await createGraphManager();
+  }
+  return graphManagerInstance;
+}
 
 /**
  * Parse PM-recommended model string
