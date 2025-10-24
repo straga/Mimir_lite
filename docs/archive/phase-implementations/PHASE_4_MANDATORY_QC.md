@@ -310,14 +310,6 @@ Auto-generation includes risk-level detection:
 
 No configuration needed! QC is now mandatory by default.
 
-**To disable auto-generation** (NOT recommended):
-```typescript
-// In task-executor.ts
-if (!task.qcRole || !task.qcPreamblePath) {
-  return await executeTaskLegacy(task, preamblePath, startTime);
-  // ^ This path is now only for backward compatibility
-}
-```
 
 ---
 

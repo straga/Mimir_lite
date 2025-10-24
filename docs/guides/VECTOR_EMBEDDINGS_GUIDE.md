@@ -54,7 +54,7 @@ MIMIR_EMBEDDINGS_ENABLED=true
 MIMIR_EMBEDDINGS_MODEL=nomic-embed-text
 ```
 
-**The embedding model will be automatically pulled** when you run `scripts/setup-ollama-models.sh` or `scripts/docker-quickstart.sh`. 
+**The embedding model will be automatically pulled** when you run `scripts/setup-ollama-models.sh` or `scripts/setup.sh`. 
 
 **Manual installation (optional):**
 
@@ -629,4 +629,4 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
 
 ---
 
-**Questions?** Check [GitHub Issues](https://github.com/orneryd/GRAPH-RAG-TODO/issues) or open a discussion.
+**Questions?** Check [GitHub Issues](https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/issues) or open a discussion.

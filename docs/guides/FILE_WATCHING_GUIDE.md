@@ -430,4 +430,4 @@ Currently using **manual indexing** (one-time scan). Future:
 
 ---
 
-**Questions?** Check [GitHub Issues](https://github.com/orneryd/GRAPH-RAG-TODO/issues) or the project README.
+**Questions?** Check [GitHub Issues](https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/issues) or the project README.

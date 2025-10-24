@@ -9,7 +9,10 @@ coverage/
 validation-output/
 generated-agents/tmp
 generated-agents/worker-*
+generated-agents/qc-*
 test-output-executor/
 .env
 data/
 logs/
+# Snyk Security Extension - AI Rules (auto-generated)
+.cursor/rules/snyk_rules.mdc

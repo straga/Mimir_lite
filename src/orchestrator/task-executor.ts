@@ -12,13 +12,12 @@ import { CopilotModel } from './types.js';
 import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
 import { createGraphManager } from '../managers/index.js';
 import type { GraphManager } from '../managers/GraphManager.js';
+import { allTools } from './tools.js';
+import { createAgent } from './create-agent.js';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 
-const execAsync = promisify(exec);
 
 // Module-level GraphManager instance (initialized on first use)
 let graphManagerInstance: GraphManager | null = null;
@@ -115,7 +114,6 @@ function mapModelName(friendlyName: string): CopilotModel {
     'gpt-4': CopilotModel.GPT_4,
     'gpt-4o': CopilotModel.GPT_4O,
     'gpt-4o-mini': CopilotModel.GPT_4O_MINI,
-    'claude sonnet 4': CopilotModel.CLAUDE_SONNET_4,
     'claude-sonnet-4': CopilotModel.CLAUDE_SONNET_4,
     'claude 3.7 sonnet': CopilotModel.CLAUDE_3_7_SONNET,
     'claude-3.7-sonnet': CopilotModel.CLAUDE_3_7_SONNET,
@@ -148,6 +146,7 @@ export interface TaskDefinition {
   verificationCriteria?: string; // Checklist for QC verification
   maxRetries?: number; // Max retry attempts before failure
   qcPreamblePath?: string; // Path to generated QC preamble
+  estimatedToolCalls?: number; // PM's estimate for circuit breaker (system applies 1.5x multiplier)
 }
 
 export interface QCResult {
@@ -263,77 +262,41 @@ export function organizeTasks(tasks: TaskDefinition[]): TaskDefinition[][] {
 export function parseChainOutput(markdown: string): TaskDefinition[] {
   const tasks: TaskDefinition[] = [];
   
-  // LOOSE PARSING: Try multiple patterns to find task sections
-  // Pattern 1: ### Task ID: or #### Task ID: or **Task ID:**
-  // Pattern 2: task-X.Y anywhere in a heading
-  // Pattern 3: Task X.Y: Title format
-  
-  // Split by any heading that might contain a task
-  const possibleTaskSections = markdown.split(/(?=#{2,4}\s+Task|\*\*Task)/i);
+  // FLEXIBLE TASK SECTION SPLITTING
+  // Handles the standard format:
+  // **Task ID:** task-1.1
+  // This is consistent with other field names like **Agent Role Description**, **Recommended Model**, etc.
+  // Split on lines that start with **Task ID:** (with optional whitespace before)
+  const possibleTaskSections = markdown.split(/\n(?=\s*\*\*Task ID:\*\*)/i);
   
   for (const section of possibleTaskSections) {
     if (!section.trim()) continue;
     
-    // Try to extract task ID using multiple patterns (LOOSE)
-    let taskId: string | undefined;
+    // FLEXIBLE TASK ID EXTRACTION
+    // MUST match **Task ID:** field specifically (not just any "task-N" reference)
+    // Examples: **Task ID:** task-1.1, **Task ID:** task 1.1, **TASK ID:** Task-1.1
+    const taskIdMatch = section.match(/\*\*Task\s+ID:\*\*\s*task[-\s]*(\d+(?:\.\d+)?)/i);
+    if (!taskIdMatch) continue;
     
-    // Pattern 1: ### Task ID: task-X.Y or #### Task ID: task-X.Y
-    const taskIdPattern1 = section.match(/#{2,4}\s+Task\s+ID[:\s]+([^\n]+)/i);
-    if (taskIdPattern1) {
-      taskId = taskIdPattern1[1].trim();
-    }
+    const taskId = `task-${taskIdMatch[1]}`;
     
-    // Pattern 2: **Task ID:** task-X.Y or - **Task ID:** task-X.Y
-    if (!taskId) {
-      const taskIdPattern2 = section.match(/\*\*Task\s+ID[:\s]*\*\*[:\s]*([^\n]+)/i);
-      if (taskIdPattern2) {
-        taskId = taskIdPattern2[1].trim();
-      }
-    }
-    
-    // Pattern 3: task-X.Y anywhere in first line
-    if (!taskId) {
-      const taskIdPattern3 = section.match(/task[-\s]*(\d+\.\d+)/i);
-      if (taskIdPattern3) {
-        taskId = `task-${taskIdPattern3[1]}`;
-      }
-    }
-    
-    // Pattern 4: Task X.Y: anywhere in heading
-    if (!taskId) {
-      const taskIdPattern4 = section.match(/Task\s+(\d+\.\d+)[:\s]/i);
-      if (taskIdPattern4) {
-        taskId = `task-${taskIdPattern4[1]}`;
-      }
-    }
-    
-    if (!taskId) continue;
-    
-    // Helper function to extract field value (VERY LOOSE)
-    // Try multiple patterns and return first match
+    // FLEXIBLE FIELD EXTRACTION
+    // Match field names with bold markers and colons:
+    // **Field Name:** content
+    // Captures content until next field (must have **FieldName:**) or end of section
     const extractField = (fieldName: string, aliases: string[] = []): string | undefined => {
       const allNames = [fieldName, ...aliases];
       
       for (const name of allNames) {
-        // Pattern 1: **Field Name**\nValue or **Field Name:**\nValue
-        const pattern1 = new RegExp(`\\*\\*${name}[:\\s]*\\*\\*[:\\s]*\\n([\\s\\S]+?)(?=\\n\\*\\*[A-Z]|\\n---|\\n#{2,4}|$)`, 'i');
-        const match1 = section.match(pattern1);
-        if (match1) return match1[1].trim();
-        
-        // Pattern 2: - **Field Name**: Value or - **Field Name:** Value
-        const pattern2 = new RegExp(`-\\s*\\*\\*${name}[:\\s]*\\*\\*[:\\s]*([^\\n]+)`, 'i');
-        const match2 = section.match(pattern2);
-        if (match2) return match2[1].trim();
-        
-        // Pattern 3: **Field Name**: Value (inline)
-        const pattern3 = new RegExp(`\\*\\*${name}[:\\s]*\\*\\*[:\\s]*([^\\n]+)`, 'i');
-        const match3 = section.match(pattern3);
-        if (match3) return match3[1].trim();
-        
-        // Pattern 4: Field Name: Value (no bold)
-        const pattern4 = new RegExp(`${name}[:\\s]+([^\\n]+)`, 'i');
-        const match4 = section.match(pattern4);
-        if (match4) return match4[1].trim();
+        // Pattern: **FieldName:** followed by content
+        // Captures until next **FieldName:** pattern or end of section
+        // Lookahead matches: newline + **SomeText:**** (field name pattern)
+        const pattern = new RegExp(
+          `\\*\\*${name}:\\*\\*\\s*\\n?([\\s\\S]+?)(?=\\n\\*\\*[A-Za-z][A-Za-z\\s]+:\\*\\*|$)`,
+          'i'
+        );
+        const match = section.match(pattern);
+        if (match) return match[1].trim();
       }
       
       return undefined;
@@ -350,7 +313,7 @@ export function parseChainOutput(markdown: string): TaskDefinition[] {
                    || extractField('Worker Role', [])
                    || extractField('Agent Role', []);
     
-    // Skip if no role found (but be lenient - use taskId as fallback)
+    // Use taskId as fallback if no role found
     const finalAgentRole = agentRole || `Agent for ${taskId}`;
     
     // Recommended Model (optional - default to gpt-4.1)
@@ -363,13 +326,17 @@ export function parseChainOutput(markdown: string): TaskDefinition[] {
                        || extractField('Description', []);
     
     if (promptSection) {
-      // Try to extract from <prompt> tags if present
-      const promptTagMatch = promptSection.match(/<prompt>\s*([\s\S]+?)\s*<\/prompt>/i);
+      // First, check if there's a <details> block and extract content from it
+      const detailsMatch = promptSection.match(/<details>[\s\S]*?<\/summary>\s*([\s\S]+?)\s*<\/details>/i);
+      let contentToSearch = detailsMatch ? detailsMatch[1] : promptSection;
+      
+      // Now try to extract from <prompt> tags
+      const promptTagMatch = contentToSearch.match(/<prompt>\s*([\s\S]+?)\s*<\/prompt>/i);
       if (promptTagMatch) {
         prompt = promptTagMatch[1].trim();
       } else {
-        // Use raw content, strip HTML tags
-        prompt = promptSection.replace(/<[^>]+>/g, '').trim();
+        // Strip HTML tags and use content
+        prompt = contentToSearch.replace(/<[^>]+>/g, '').trim();
       }
     }
     
@@ -388,7 +355,7 @@ export function parseChainOutput(markdown: string): TaskDefinition[] {
     
     // If still no prompt, use section content
     if (!prompt) {
-      prompt = section.substring(0, 500).trim();
+      prompt = section.substring(0, 500).trim() || `Task ${taskId}`;
     }
     
     // Dependencies (very loose - look for task IDs)
@@ -407,6 +374,10 @@ export function parseChainOutput(markdown: string): TaskDefinition[] {
           deps = depsText.split(/[,;]/).map(d => d.trim()).filter(d => d);
         }
       }
+      
+      // DEDUPLICATION: Remove duplicates and self-references
+      deps = [...new Set(deps)]; // Remove exact duplicates
+      deps = deps.filter(d => d !== taskId); // Remove self-references
     }
     
     // Estimated Duration (optional - default to "30 min")
@@ -422,6 +393,23 @@ export function parseChainOutput(markdown: string): TaskDefinition[] {
     const retriesText = extractField('Max Retries', ['Retries', 'Max Attempts', 'Attempts']);
     const maxRetries = retriesText ? parseInt(retriesText, 10) : 2;
     
+    // Estimated Tool Calls (optional - for dynamic circuit breaker)
+    const toolCallsText = extractField('Estimated Tool Calls', ['Tool Calls', 'Tool Call Estimate', 'Expected Tool Calls']);
+    let estimatedToolCalls: number | undefined;
+    if (toolCallsText) {
+      // Extract first number from text (handles formats like "15" or "15 calls" or "~20")
+      const numberMatch = toolCallsText.match(/\d+/);
+      if (numberMatch) {
+        estimatedToolCalls = parseInt(numberMatch[0], 10);
+      }
+    }
+    
+    // DEBUG: Log what we extracted
+    console.log(`\n🔍 DEBUG: Parsed task ${taskId}:`);
+    console.log(`   Agent Role: "${finalAgentRole}"`);
+    console.log(`   QC Role: "${qcRole || 'none'}"`);
+    console.log(`   Prompt length: ${prompt.length} chars`);
+    
     tasks.push({
       id: taskId,
       title: taskId,
@@ -434,9 +422,11 @@ export function parseChainOutput(markdown: string): TaskDefinition[] {
       qcRole,
       verificationCriteria,
       maxRetries,
+      estimatedToolCalls,
     });
   }
   
+  console.log(`\n✅ Parsed ${tasks.length} tasks total\n`);
   return tasks;
 }
 
@@ -445,11 +435,14 @@ export function parseChainOutput(markdown: string): TaskDefinition[] {
  */
 export async function generatePreamble(
   roleDescription: string,
-  outputDir: string = 'generated-agents'
+  outputDir: string = 'generated-agents',
+  taskExample?: TaskDefinition, // Optional: first task using this role for context
+  isQC: boolean = false // Whether this is a QC agent
 ): Promise<string> {
-  // Create hash of role description for filename
+  // Create hash of role description for filename (same logic as createAgent)
   const roleHash = crypto.createHash('md5').update(roleDescription).digest('hex').substring(0, 8);
-  const preamblePath = path.join(outputDir, `worker-${roleHash}.md`);
+  const prefix = isQC ? 'qc' : 'worker';
+  const preamblePath = path.join(outputDir, `${prefix}-${roleHash}.md`);
   
   // Ensure output directory exists
   await fs.mkdir(outputDir, { recursive: true });
@@ -467,36 +460,18 @@ export async function generatePreamble(
   
   // Try agentinator first, but fall back to simple preamble if it fails
   try {
-    // Determine the Mimir installation directory
-    const mimirInstallDir = process.env.MIMIR_INSTALL_DIR || process.cwd();
-    
-    // Call agentinator via npm script (must run from Mimir directory)
-    const command = `npm run create-agent "${roleDescription}"`;
-    
-    const { stdout, stderr } = await execAsync(command, {
-      cwd: mimirInstallDir,
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 30000, // 30 second timeout
-    });
-    
-    // Agentinator outputs to its own generated-agents/ directory
-    const mimirGeneratedDir = path.join(mimirInstallDir, 'generated-agents');
-    const files = await fs.readdir(mimirGeneratedDir);
-    const mdFiles = files
-      .filter(f => f.endsWith('.md') && f.startsWith('2025-'))
-      .sort()
-      .reverse();
-    
-    if (mdFiles.length > 0) {
-      // Copy the generated file to user's output directory
-      const generatedFile = path.join(mimirGeneratedDir, mdFiles[0]);
-      const content = await fs.readFile(generatedFile, 'utf-8');
-      await fs.writeFile(preamblePath, content, 'utf-8');
-      console.log(`  ✅ Generated: ${path.basename(preamblePath)}`);
-      return preamblePath;
-    }
+    // Call createAgent directly (no subprocess needed)
+    // ALWAYS use GPT-4.1 for Agentinator (most reliable for structured output)
+    const model = CopilotModel.GPT_4_1;
+    console.log(`  🎯 Using model: ${model} for Agentinator`);
+    // createAgent now generates the hashed filename directly, so no copying needed
+    const generatedPath = await createAgent(roleDescription, outputDir, model, taskExample, isQC);
+    console.log(`  ✅ Generated: ${path.basename(generatedPath)}`);
+    return generatedPath;
   } catch (error: any) {
-    console.warn(`  ⚠️  Agentinator failed (${error.message}), creating simple preamble...`);
+    console.error(`  ❌ Agentinator failed: ${error.message}`);
+    console.error(`  📍 Stack trace: ${error.stack}`);
+    console.warn(`  ⚠️  Falling back to simple preamble...`);
   }
   
   // Fallback: Create a simple but effective preamble directly
@@ -545,7 +520,7 @@ Your task is complete when:
 
   await fs.writeFile(preamblePath, simplePreamble, 'utf-8');
   console.log(`  ✅ Created simple preamble: ${path.basename(preamblePath)}`);
-  return preamblePath;
+    return preamblePath;
 }
 
 /**
@@ -589,6 +564,15 @@ async function storeTaskResultInGraph(
         }))
       ) : null,
       attemptNumber: result.attemptNumber || 1,
+      
+      // Store individual QC fields for easier querying (FULL content, no truncation)
+      qcFeedback: result.qcVerification?.feedback || null,
+      qcScore: result.qcVerification?.score || null,
+      qcPassed: result.qcVerification?.passed || null,
+      qcIssues: result.qcVerification?.issues ? JSON.stringify(result.qcVerification.issues) : null,
+      qcRequiredFixes: result.qcVerification?.requiredFixes ? JSON.stringify(result.qcVerification.requiredFixes) : null,
+      qcIssuesCount: result.qcVerification?.issues?.length || null,
+      qcRequiredFixesCount: result.qcVerification?.requiredFixes?.length || null,
     });
     
     console.log(`💾 Stored in graph: ${node.id}`);
@@ -618,12 +602,14 @@ ${task.verificationCriteria}
 ${workerOutput.substring(0, 10000)}${workerOutput.length > 10000 ? '\n\n... (truncated for review, full output available)' : ''}
 \`\`\`
 
-## YOUR TASK
-1. **Aggressively verify** the worker output against EVERY criterion above
-2. **Check for hallucinations**: Fabricated libraries, fake version numbers, non-existent APIs, made-up standards
-3. **Verify claims**: If worker cites sources, frameworks, or specifications, they must be real and accurate
-4. **Check completeness**: All required sections present and detailed
-5. **Validate technical accuracy**: Code examples must be syntactically correct and use real libraries
+## YOUR TASK: EVALUATE THE DELIVERABLE (NOT THE PROCESS)
+1. **Focus on deliverable quality**: Does the output meet requirements? Is it complete, accurate, usable?
+2. **Verify with tools**: Read files, run tests, execute commands to check the deliverable
+3. **Check completeness**: All required sections/files present and detailed
+4. **Validate accuracy**: Content is correct, examples work, claims are verifiable
+5. **Check for hallucinations**: Fabricated libraries, fake APIs, made-up standards in the deliverable
+6. **Ignore process metrics**: Tool call count, worker explanations, evidence quality → tracked by system, not QC
+7. **Score the outcome**: If deliverable meets criteria → PASS (regardless of how it was created)
 
 ## OUTPUT FORMAT (CRITICAL - MUST FOLLOW EXACTLY)
 
@@ -635,27 +621,36 @@ ${workerOutput.substring(0, 10000)}${workerOutput.length > 10000 ? '\n\n... (tru
 [2-3 sentences max. Be specific and concise about what passed/failed.]
 
 ### ISSUES FOUND (if FAIL):
-- Issue 1: [One sentence max per issue]
-- Issue 2: [One sentence max per issue]
-- Issue 3: [One sentence max per issue]
-(Maximum 10 issues)
+- Issue 1: [What's missing/wrong in deliverable] | Gap: [Which requirement not met] | Evidence: [Tool verification result]
+- Issue 2: [What's missing/wrong in deliverable] | Gap: [Which requirement not met] | Evidence: [Tool verification result]
+- Issue 3: [What's missing/wrong in deliverable] | Gap: [Which requirement not met] | Evidence: [Tool verification result]
+(Maximum 10 issues - focus on DELIVERABLE gaps, not process issues)
 
 ### REQUIRED FIXES (if FAIL):
-- Fix 1: [One sentence max per fix]
-- Fix 2: [One sentence max per fix]
-- Fix 3: [One sentence max per fix]
-(Maximum 10 fixes)
+- Fix 1: [What to add/change in deliverable - specific content/file/section]
+- Fix 2: [What to add/change in deliverable - specific content/file/section]
+- Fix 3: [What to add/change in deliverable - specific content/file/section]
+(Maximum 10 fixes - tell worker what the deliverable needs, not how to create it)
 
 **IMPORTANT CONSTRAINTS:**
 - **MAXIMUM OUTPUT LENGTH: 2000 characters**
-- Be AGGRESSIVE and THOROUGH but CONCISE
+- Be THOROUGH but CONCISE
 - Each issue/fix: ONE sentence maximum
 - Feedback: 2-3 sentences maximum
-- If you find ANY hallucinations, mark as FAIL immediately with specific evidence
+- If you find ANY hallucinations in deliverable, mark as FAIL with specific evidence
 - DO NOT write verbose explanations - keep responses SHORT and DIRECT
 - DO NOT repeat information - state each point ONCE
+- **CRITICAL**: Focus on WHAT the deliverable needs, not HOW to create it
+- **CRITICAL**: Ignore process issues (tool usage, evidence) - only evaluate deliverable quality
 
-DO NOT give the worker the benefit of the doubt. If something seems questionable, investigate it and mark as FAIL if you cannot verify it.`;
+**SCORING PHILOSOPHY:**
+- Deliverable meets requirements → PASS (regardless of process)
+- Deliverable has gaps/errors → FAIL with specific fixes
+- Partial completion → Score proportionally (e.g., 7/10 sections = 70/100)
+
+**EXAMPLE OF GOOD vs BAD FEEDBACK:**
+❌ BAD: "Worker didn't show tool output" (process issue)
+✅ GOOD: "File X missing required section Y. Add: [specific content]" (deliverable gap)`;
 }
 
 /**
@@ -722,18 +717,38 @@ async function executeQCAgent(
     // Resolve model selection based on PM suggestion and feature flag
     const modelSelection = await resolveModelSelection(task, 'qc');
     
-    // Initialize QC agent with strict output limits
+    // Calculate circuit breaker limit from PM's estimate (10x multiplier for generous buffer)
+    const circuitBreakerLimit = task.estimatedToolCalls 
+      ? Math.ceil(task.estimatedToolCalls * 10)
+      : undefined;
+    
+    // Initialize QC agent with strict output limits and circuit breaker
     const qcAgent = new CopilotAgentClient({
       preamblePath: task.qcPreamblePath,
       ...modelSelection, // Spread provider/model or agentType
       temperature: 0.0, // Maximum consistency and strictness
       maxTokens: 1000, // STRICT LIMIT: Force concise responses (prevents verbose QC bloat)
+      tools: allTools, // QC needs tools to verify worker output
     });
     
     await qcAgent.loadPreamble(task.qcPreamblePath);
     
-    // Execute QC verification
-    const result = await qcAgent.execute(qcPrompt);
+    // Execute QC verification with circuit breaker
+    const result = await qcAgent.execute(qcPrompt, 0, circuitBreakerLimit);
+    
+    // 🚨 CHECK: QC agent circuit breaker
+    if (result.metadata?.circuitBreakerTriggered) {
+      const { toolCallCount, messageCount, estimatedContextTokens } = result.metadata;
+      console.log(`\n${'🚨'.repeat(40)}`);
+      console.log(`🚨 QC AGENT CIRCUIT BREAKER TRIGGERED - TASK FAILED`);
+      console.log(`   Tool Calls: ${toolCallCount} (limit: 50)`);
+      console.log(`   Messages: ${messageCount} (limit: 60)`);
+      console.log(`   Estimated Context: ~${estimatedContextTokens.toLocaleString()} tokens (limit: 80k)`);
+      console.log(`   ❌ QC agents cannot exceed limits - task marked as failed`);
+      console.log(`${'🚨'.repeat(40)}\n`);
+      
+      throw new Error(`QC agent circuit breaker triggered: ${toolCallCount} tool calls exceeded limit. Task failed.`);
+    }
     
     // Parse QC response
     const qcResult = parseQCResponse(result.output);
@@ -743,7 +758,11 @@ async function executeQCAgent(
     return qcResult;
   } catch (error: any) {
     console.error(`❌ QC agent execution failed: ${error.message}`);
-    // Return a FAIL result if QC agent crashes
+    // If circuit breaker triggered, re-throw to fail the task
+    if (error.message.includes('circuit breaker triggered')) {
+    throw error;
+    }
+    // Return a FAIL result if QC agent crashes for other reasons
     return {
       passed: false,
       score: 0,
@@ -815,18 +834,45 @@ Generate a CONCISE failure report (MAXIMUM 3000 characters) including:
     // Resolve model selection based on PM suggestion and feature flag
     const modelSelection = await resolveModelSelection(task, 'qc');
     
+    // Calculate circuit breaker limit from PM's estimate (10x multiplier for generous buffer)
+    const circuitBreakerLimit = task.estimatedToolCalls 
+      ? Math.ceil(task.estimatedToolCalls * 10)
+      : undefined;
+    
     const qcAgent = new CopilotAgentClient({
       preamblePath: task.qcPreamblePath,
       ...modelSelection, // Spread provider/model or agentType
       temperature: 0.0,
       maxTokens: 2000, // STRICT LIMIT: Concise failure reports only
+      tools: allTools, // QC needs tools to verify worker output
     });
     
     await qcAgent.loadPreamble(task.qcPreamblePath);
-    const result = await qcAgent.execute(reportPrompt);
+    const result = await qcAgent.execute(reportPrompt, 0, circuitBreakerLimit);
+    
+    // 🚨 CHECK: QC agent circuit breaker during failure report generation
+    if (result.metadata?.circuitBreakerTriggered) {
+      const { toolCallCount } = result.metadata;
+      console.log(`⚠️  QC agent circuit breaker triggered during failure report generation (${toolCallCount} tool calls)`);
+      console.log(`   Returning fallback failure report...`);
+      
+      return `## QC Failure Report (Circuit Breaker Triggered)
+
+**Note:** QC agent exceeded limits (${toolCallCount} tool calls) while generating this report.
+
+### Summary
+Task ${task.id} failed after ${qcHistory.length} attempts. QC verification consistently identified issues that were not adequately addressed.
+
+### Failure Pattern
+${qcHistory.map((qc, i) => `- Attempt ${i + 1}: Score ${qc.score}/100 - ${qc.feedback.substring(0, 100)}...`).join('\n')}
+
+### Recommendation
+Review the QC verification history and worker output in the graph node for detailed analysis.`;
+    }
     
     return result.output;
   } catch (error: any) {
+    console.error(`❌ QC failure report generation failed: ${error.message}`);
     return `QC failure report generation failed: ${error.message}`;
   }
 }
@@ -874,7 +920,7 @@ async function fetchTaskContext(taskId: string, agentType: 'worker' | 'qc'): Pro
     }
 
     // Parse the context JSON
-    let parsedContext;
+    let parsedContext: any;
     try {
       parsedContext = JSON.parse(contextData);
     } catch (parseError: any) {
@@ -1003,7 +1049,7 @@ ${task.title}
 ${task.prompt}
 
 ## Worker Behavior
-- **Tool Calls:** ${workerResult.metadata?.toolCallCount || 0} (limit: 80)
+- **Tool Calls:** ${workerResult.metadata?.toolCallCount || 0} (limit: 50)
 - **Messages:** ${workerResult.metadata?.messageCount || 0}
 - **Context Tokens:** ~${workerResult.metadata?.estimatedContextTokens?.toLocaleString() || 'unknown'}
 - **Duration:** ${workerResult.metadata?.duration?.toFixed(2) || 'unknown'}s
@@ -1042,14 +1088,48 @@ Keep your analysis concise and actionable (max 1000 words).`;
     // Use QC preamble if available, otherwise create a minimal analysis agent
     const qcPreamblePath = task.qcPreamblePath || await generateAnalysisPreamble();
     
+    // Calculate circuit breaker limit from PM's estimate (10x multiplier for generous buffer)
+    const circuitBreakerLimit = task.estimatedToolCalls 
+      ? Math.ceil(task.estimatedToolCalls * 10)
+      : undefined;
+    
     const analysisAgent = new CopilotAgentClient({
       preamblePath: qcPreamblePath,
       agentType: 'qc',
       temperature: 0.0,
+      tools: allTools, // Analysis agent needs tools to inspect worker output
     });
     
     await analysisAgent.loadPreamble(qcPreamblePath);
-    const result = await analysisAgent.execute(analysisPrompt);
+    const result = await analysisAgent.execute(analysisPrompt, 0, circuitBreakerLimit);
+    
+    // 🚨 CHECK: QC agent circuit breaker during circuit breaker analysis
+    if (result.metadata?.circuitBreakerTriggered) {
+      const { toolCallCount } = result.metadata;
+      console.log(`⚠️  QC agent circuit breaker triggered during analysis (${toolCallCount} tool calls)`);
+      console.log(`   Returning fallback analysis...`);
+      
+      return `## Circuit Breaker Analysis (QC Also Exceeded Limits)
+
+**Note:** Analysis agent also exceeded limits (${toolCallCount} tool calls) while analyzing this failure.
+
+### Worker Failure
+- Tool Calls: ${workerResult.metadata?.toolCallCount || 0} (limit: 50)
+- Messages: ${workerResult.metadata?.messageCount || 0} (limit: 60)
+- Attempt: ${attemptNumber}
+
+### Likely Root Cause
+The worker agent likely got stuck in a repetitive loop or the task complexity exceeded reasonable bounds.
+
+### Recommended Approach
+1. Simplify the task into smaller, more focused subtasks
+2. Add explicit completion criteria to the prompt
+3. Reduce the scope of what needs to be accomplished
+4. Consider if the task requires human intervention
+
+### Fallback Guidance
+Review the last few actions in the conversation history and avoid repeating the same tool calls.`;
+    }
     
     console.log(`✅ Circuit breaker analysis complete`);
     console.log(`   Analysis length: ${result.output.length} chars`);
@@ -1261,24 +1341,152 @@ export async function executeTask(
       // Pre-fetch context from graph
       const workerContext = await fetchTaskContext(task.id, 'worker');
       
-      // Resolve model selection based on PM suggestion and feature flag
-      const modelSelection = await resolveModelSelection(task, 'worker');
+      // Worker execution guidance (from WORKER_TOOL_EXECUTION.md)
+      const workerGuidance = `
+═══════════════════════════════════════════════════════════════════════════════
+📋 WORKER EXECUTION GUIDANCE
+═══════════════════════════════════════════════════════════════════════════════
+
+## 🎯 Core Principle
+
+**You have access to powerful tools. Use them. Don't write code.**
+
+This task includes a "Tool-Based Execution" section that tells you:
+- **Use:** Which tools to use
+- **Execute:** How to execute (in-memory, existing script, etc.)
+- **Store:** What to return in your response
+- **Do NOT:** What you should NOT create
+
+**Follow these instructions exactly. Do NOT deviate.**
+
+## 📦 Execution Patterns
+
+### Pattern 1: In-Memory Processing
+- Read data using specified tool
+- Process in your code (in-memory)
+- Return results in your final response
+- Do NOT create any new files
+
+### Pattern 2: Existing Script Execution
+- Execute specified command using tool
+- Capture the output
+- Return output in your final response
+- Do NOT modify or create scripts
+
+### Pattern 3: Data Transformation
+- Retrieve data using specified tool
+- Transform in your code (in-memory)
+- Return or write output as specified
+- Do NOT create utility files
+
+## 📦 Returning Task Results
+
+**Return your task output in your final response. The system will store it automatically.**
+
+Simply return your results:
+\`\`\`
+{
+  [data as specified in "Store:" line]
+}
+\`\`\`
+
+**Note:** 
+- The system automatically stores your output in the graph
+- The system captures diagnostic data (status, timestamps, tokens, etc.)
+- You focus on producing quality output, the system handles storage
+
+## ❌ What NOT to Create
+
+**Never create:**
+- New source files (.ts, .js, .py, etc.)
+- New utility modules
+- New parser scripts
+- New validation scripts
+- New generator scripts
+- New test files (unless explicitly requested)
+
+**Why:** You have tools for these tasks. Use them.
+
+## ✅ Success Criteria
+
+Your task is successful when:
+1. ✅ You followed Tool-Based Execution instructions exactly
+2. ✅ You used specified tools (not created new code)
+3. ✅ You returned results as specified in "Store:" line
+4. ✅ You did NOT create any new files (unless explicitly requested)
+5. ✅ Results are complete and accurate
+
+**QC will verify the quality of your output. The system automatically handles storage and diagnostic tracking.**
+
+═══════════════════════════════════════════════════════════════════════════════
+`;
       
-      const workerAgent = new CopilotAgentClient({
-        preamblePath,
-        ...modelSelection, // Spread provider/model or agentType
-        temperature: 0.0,
-      });
-      
-      await workerAgent.loadPreamble(preamblePath);
-      
-      // Build worker prompt with pre-fetched context
+      // Build worker prompt with pre-fetched context and guidance
+      // Add tool call examples based on estimated tool calls
+      const estimatedCalls = task.estimatedToolCalls || 6;
+      const toolExamples = `
+
+═══════════════════════════════════════════════════════════════════════════════
+## 🔧 TOOL CALL EXAMPLES (YOU MUST USE TOOLS LIKE THIS)
+
+**CRITICAL:** Your output MUST include actual tool calls with their output. Here are examples:
+
+**Example 1: Verification Task**
+\`\`\`
+I will verify the system has the required tools.
+
+Tool: run_terminal_cmd('which ls')
+Output: /bin/ls
+
+Tool: run_terminal_cmd('which pwd')  
+Output: /bin/pwd
+
+Result: Both tools are available. ✅
+\`\`\`
+
+**Example 2: Read/Analysis Task**
+\`\`\`
+I will read the configuration file.
+
+Tool: read_file('config.yaml')
+Output: [actual file contents shown here]
+
+Analysis: Configuration contains 5 sections. ✅
+\`\`\`
+
+**Example 3: Modification Task**
+\`\`\`
+I will update the resource.
+
+Tool: read_file('resource.txt')
+Output: [current contents]
+
+Tool: write('resource.txt', 'updated contents')
+Output: File written successfully
+
+Tool: read_file('resource.txt')
+Output: [new contents]
+
+Verification: Resource updated correctly. ✅
+\`\`\`
+
+**YOUR TASK REQUIRES APPROXIMATELY ${estimatedCalls} TOOL CALLS.**
+
+**If you make fewer than ${Math.floor(estimatedCalls * 0.5)} tool calls, you will FAIL QC.**
+
+═══════════════════════════════════════════════════════════════════════════════
+`;
+
       let workerPrompt = `${workerContext}
 
-${task.prompt}`;
+${workerGuidance}
+
+${task.prompt}
+
+${toolExamples}`;
       
       if (attemptNumber > 1 && errorContext) {
-        workerPrompt = `${workerContext}
+        workerPrompt = `${workerGuidance}
 
 ## ⚠️ PREVIOUS ATTEMPT FAILED - QC FEEDBACK
 
@@ -1299,7 +1507,44 @@ ${errorContext.requiredFixes.map((fix: string) => `- ${fix}`).join('\n')}
 ${task.prompt}`;
       }
       
-      const workerResult = await workerAgent.execute(workerPrompt);
+      // PHASE 2: Worker Execution Start
+      const workerStartTime = new Date().toISOString();
+      await updateGraphNode(task.id, {
+        status: 'worker_executing',
+        attemptNumber,
+        workerStartTime,
+        workerPromptLength: workerPrompt.length,
+        workerContextFetched: workerContext.length > 0,
+        isRetry: attemptNumber > 1,
+        retryReason: errorContext ? 'qc_failure' : null,
+      });
+      
+      // Resolve model selection based on PM suggestion and feature flag
+      const modelSelection = await resolveModelSelection(task, 'worker');
+      
+      const workerAgent = new CopilotAgentClient({
+      preamblePath,
+        ...modelSelection, // Spread provider/model or agentType
+        temperature: 0.0,
+        tools: allTools, // Worker needs tools to execute tasks (filesystem + graph)
+      });
+      
+      await workerAgent.loadPreamble(preamblePath);
+      
+      // Calculate circuit breaker limit from PM's estimate (apply 10x multiplier for generous buffer)
+      // If no estimate, use undefined (defaults to 100 in LLM client)
+      const circuitBreakerLimit = task.estimatedToolCalls 
+        ? Math.ceil(task.estimatedToolCalls * 10)
+        : undefined;
+      
+      if (circuitBreakerLimit) {
+        console.log(`🔒 Using dynamic circuit breaker: ${circuitBreakerLimit} tool calls (PM estimate: ${task.estimatedToolCalls} × 10)`);
+      } else {
+        console.log(`🔒 Using default circuit breaker: 100 tool calls`);
+      }
+      
+      // Execute worker prompt with dynamic circuit breaker
+      const workerResult = await workerAgent.execute(workerPrompt, 0, circuitBreakerLimit);
       workerOutput = workerResult.output;
       
       const workerDuration = Date.now() - startTime;
@@ -1307,16 +1552,31 @@ ${task.prompt}`;
       console.log(`📊 Tokens: ${workerResult.tokens.input + workerResult.tokens.output}`);
       console.log(`🔧 Tool calls: ${workerResult.toolCalls}`);
       
-      // 🚨 CIRCUIT BREAKER: Check if intervention needed
+      // PHASE 3: Worker Execution Complete
+      await updateGraphNode(task.id, {
+        status: 'worker_completed',
+        workerOutput: workerOutput.substring(0, 50000),
+        workerOutputLength: workerOutput.length,
+        workerDuration,
+        workerTokensInput: workerResult.tokens.input,
+        workerTokensOutput: workerResult.tokens.output,
+        workerTokensTotal: workerResult.tokens.input + workerResult.tokens.output,
+        workerToolCalls: workerResult.toolCalls,
+        workerCompletedAt: new Date().toISOString(),
+        workerMessageCount: workerResult.metadata?.messageCount,
+        workerEstimatedContextTokens: workerResult.metadata?.estimatedContextTokens,
+      });
+      
+      // 🚨 CIRCUIT BREAKER: Check if hard limit exceeded
       if (workerResult.metadata) {
         const { qcRecommended, circuitBreakerTriggered, toolCallCount, messageCount, estimatedContextTokens } = workerResult.metadata;
         
         if (circuitBreakerTriggered) {
           console.log(`\n${'🚨'.repeat(40)}`);
           console.log(`🚨 CIRCUIT BREAKER TRIGGERED - HARD LIMIT EXCEEDED`);
-          console.log(`   Tool Calls: ${toolCallCount} (limit: 80)`);
-          console.log(`   Messages: ${messageCount}`);
-          console.log(`   Estimated Context: ~${estimatedContextTokens.toLocaleString()} tokens`);
+          console.log(`   Tool Calls: ${toolCallCount} (limit: 50)`);
+          console.log(`   Messages: ${messageCount} (limit: 60)`);
+          console.log(`   Estimated Context: ~${estimatedContextTokens.toLocaleString()} tokens (limit: 80k)`);
           console.log(`${'🚨'.repeat(40)}\n`);
           
           // Invoke QC for emergency analysis
@@ -1344,7 +1604,7 @@ ${task.prompt}`;
             console.log(`\n♻️  Preparing retry with circuit breaker guidance...`);
             errorContext = {
               qcScore: 0,
-              qcFeedback: `Circuit breaker triggered: ${toolCallCount} tool calls (limit: 80)`,
+              qcFeedback: `Circuit breaker triggered: ${toolCallCount} tool calls (limit: 50)`,
               issues: [
                 `Excessive tool usage: ${toolCallCount} calls`,
                 `Worker may be stuck in a loop`,
@@ -1360,10 +1620,11 @@ ${task.prompt}`;
               circuitBreakerAnalysis,
             };
             attemptNumber++;
-            continue; // Skip normal QC, go straight to retry with guidance
+            // ✅ FIXED: Do NOT skip QC - fall through to normal QC flow below
+            // The errorContext will be used to guide the next worker attempt
           } else {
             // Max retries exhausted with circuit breaker
-            const duration = Date.now() - startTime;
+    const duration = Date.now() - startTime;
             await updateGraphNode(task.id, {
               status: 'failed',
               completedAt: new Date().toISOString(),
@@ -1372,12 +1633,14 @@ ${task.prompt}`;
               outcome: 'failure',
               failureReason: `Circuit breaker triggered after ${maxRetries} attempts`,
             });
-            
-            return {
+    
+    return {
               taskId: task.id,
               status: 'failure',
               output: workerOutput,
               duration,
+              tokens: workerResult.tokens,
+              toolCalls: toolCallCount,
               preamblePath,
               agentRoleDescription: task.agentRoleDescription,
               prompt: task.prompt,
@@ -1389,12 +1652,13 @@ ${task.prompt}`;
           }
         }
         
+        // ⚠️ WARNING: Approaching circuit breaker limits (log only, no intervention)
         if (qcRecommended) {
-          console.log(`\n⚠️  QC INTERVENTION RECOMMENDED`);
-          console.log(`   Tool Calls: ${toolCallCount}`);
-          console.log(`   Messages: ${messageCount}`);
-          console.log(`   Estimated Context: ~${estimatedContextTokens.toLocaleString()} tokens`);
-          console.log(`   💡 QC will review for potential issues\n`);
+          console.log(`\n⚠️  WARNING: Approaching circuit breaker limits`);
+          console.log(`   Tool Calls: ${toolCallCount} (warning threshold: 30, hard limit: 50)`);
+          console.log(`   Messages: ${messageCount} (warning threshold: 40, hard limit: 60)`);
+          console.log(`   Estimated Context: ~${estimatedContextTokens.toLocaleString()} tokens (warning threshold: 50k, hard limit: 80k)`);
+          console.log(`   💡 Continuing to QC verification...\n`);
         }
       }
       
@@ -1410,28 +1674,72 @@ ${task.prompt}`;
       });
       
       // STEP 2: Execute QC Agent
-      const qcResult = await executeQCAgent(task, workerOutput, attemptNumber);
+      
+      // PHASE 5: QC Execution Start
+      const qcStartTime = new Date().toISOString();
+      await updateGraphNode(task.id, {
+        status: 'qc_executing',
+        qcStartTime,
+        qcAttemptNumber: attemptNumber,
+      });
+      
+      let qcResult: QCResult;
+      try {
+        qcResult = await executeQCAgent(task, workerOutput, attemptNumber);
+      } catch (qcError: any) {
+        // 🚨 QC agent circuit breaker triggered - fail the task immediately
+        if (qcError.message.includes('circuit breaker triggered')) {
+          const duration = Date.now() - startTime;
+          console.log(`\n🚨 TASK FAILED: QC agent circuit breaker triggered`);
+          
+          await updateGraphNode(task.id, {
+            status: 'failed',
+            completedAt: new Date().toISOString(),
+            totalDuration: duration,
+            finalAttempt: attemptNumber,
+            outcome: 'failure',
+            failureReason: `QC agent circuit breaker triggered: ${qcError.message}`,
+          });
+    
+    return {
+            taskId: task.id,
+            status: 'failure',
+            output: workerOutput,
+            duration,
+            preamblePath,
+            agentRoleDescription: task.agentRoleDescription,
+            prompt: task.prompt,
+            error: `QC agent circuit breaker triggered: ${qcError.message}`,
+            attemptNumber,
+            graphNodeId: task.id,
+          };
+        }
+        // Re-throw other errors
+        throw qcError;
+      }
       
       // Truncate QC output to prevent context explosion (critical for retries)
-      const truncatedQCResult: QCResult = {
-        passed: qcResult.passed,
-        score: qcResult.score,
-        feedback: qcResult.feedback.substring(0, 500), // Max 500 chars
-        issues: qcResult.issues.slice(0, 10).map(issue => issue.substring(0, 200)), // Max 10 issues, 200 chars each
-        requiredFixes: qcResult.requiredFixes.slice(0, 10).map(fix => fix.substring(0, 200)), // Max 10 fixes, 200 chars each
-        timestamp: qcResult.timestamp,
-      };
+      // Store FULL QC result (no truncation - worker needs complete feedback)
+      qcVerificationHistory.push(qcResult);
       
-      qcVerificationHistory.push(truncatedQCResult);
-      
-      // Store QC result in graph immediately
+      // Store QC result in graph immediately (FULL feedback, no truncation)
       await updateGraphNode(task.id, {
+        // PHASE 6 ENHANCEMENT: Add immediate status update
+        status: qcResult.passed ? 'qc_passed' : 'qc_failed',
+        qcScore: qcResult.score,
+        qcPassed: qcResult.passed,
+        qcFeedback: qcResult.feedback, // FULL feedback
+        qcIssuesCount: qcResult.issues.length,
+        qcIssues: JSON.stringify(qcResult.issues), // ALL issues
+        qcRequiredFixesCount: qcResult.requiredFixes.length,
+        qcRequiredFixes: JSON.stringify(qcResult.requiredFixes), // ALL fixes
+        qcCompletedAt: new Date().toISOString(),
         [`qcAttempt${attemptNumber}`]: JSON.stringify({
-          passed: truncatedQCResult.passed,
-          score: truncatedQCResult.score,
-          feedback: truncatedQCResult.feedback.substring(0, 500),
-          issuesCount: truncatedQCResult.issues.length,
-          timestamp: truncatedQCResult.timestamp,
+          passed: qcResult.passed,
+          score: qcResult.score,
+          feedback: qcResult.feedback, // FULL feedback
+          issuesCount: qcResult.issues.length,
+          timestamp: qcResult.timestamp,
         }),
         qcVerificationHistory: JSON.stringify(qcVerificationHistory.map(qc => ({
           passed: qc.passed,
@@ -1444,7 +1752,7 @@ ${task.prompt}`;
       });
       
       // STEP 3: Check QC Result
-      if (truncatedQCResult.passed) {
+      if (qcResult.passed) {
         // ✅ SUCCESS - QC approved the output
         const duration = Date.now() - startTime;
         console.log(`\n✅ TASK COMPLETED SUCCESSFULLY after ${attemptNumber} attempt(s)`);
@@ -1456,19 +1764,41 @@ ${task.prompt}`;
           totalDuration: duration,
           finalAttempt: attemptNumber,
           outcome: 'success',
+          // PHASE 8 ENHANCEMENT: Add aggregated metrics
+          totalAttempts: attemptNumber,
+          totalTokensUsed: workerResult.tokens.input + workerResult.tokens.output,
+          totalToolCalls: workerResult.toolCalls || 0,
+          qcFailuresCount: qcVerificationHistory.filter(qc => !qc.passed).length,
+          retriesNeeded: attemptNumber - 1,
+          qcScore: qcResult.score, // PRIMARY FIELD: Final QC score (what matters)
+          qcPassed: qcResult.passed,
+          qcFeedback: qcResult.feedback, // FULL feedback
+          qcPassedOnAttempt: attemptNumber,
+          // Debugging/analytics only - NOT for reporting
+          qcAttemptMetrics: JSON.stringify({
+            totalAttempts: attemptNumber,
+            avgScore: Math.round(qcVerificationHistory.reduce((sum, qc) => sum + qc.score, 0) / qcVerificationHistory.length),
+            maxScore: Math.max(...qcVerificationHistory.map(qc => qc.score)),
+            minScore: Math.min(...qcVerificationHistory.map(qc => qc.score)),
+            history: qcVerificationHistory.map((qc, idx) => ({
+              attempt: idx + 1,
+              score: qc.score,
+              passed: qc.passed,
+            })),
+          }),
         });
         
         const executionResult: Omit<ExecutionResult, 'graphNodeId'> = {
-          taskId: task.id,
-          status: 'success',
+      taskId: task.id,
+      status: 'success',
           output: workerOutput,
-          duration,
-          preamblePath,
-          agentRoleDescription: task.agentRoleDescription,
-          prompt: task.prompt,
+      duration,
+      preamblePath,
+      agentRoleDescription: task.agentRoleDescription,
+      prompt: task.prompt,
           tokens: workerResult.tokens,
           toolCalls: workerResult.toolCalls,
-          qcVerification: truncatedQCResult,
+          qcVerification: qcResult, // FULL QC result
           qcVerificationHistory,
           attemptNumber,
         };
@@ -1483,18 +1813,27 @@ ${task.prompt}`;
       
       // ❌ QC FAILED
       console.log(`\n❌ QC FAILED on attempt ${attemptNumber}`);
-      console.log(`   Score: ${truncatedQCResult.score}/100`);
-      console.log(`   Issues: ${truncatedQCResult.issues.length}`);
+      console.log(`   Score: ${qcResult.score}/100`);
+      console.log(`   Issues: ${qcResult.issues.length}`);
       
       if (attemptNumber < maxRetries) {
-        // Prepare error context for next retry (use truncated version to prevent bloat)
+        // Prepare error context for next retry (FULL feedback - worker needs complete guidance)
         errorContext = {
-          qcScore: truncatedQCResult.score,
-          qcFeedback: truncatedQCResult.feedback,
-          issues: truncatedQCResult.issues,
-          requiredFixes: truncatedQCResult.requiredFixes,
+          qcScore: qcResult.score,
+          qcFeedback: qcResult.feedback, // FULL feedback
+          issues: qcResult.issues, // ALL issues
+          requiredFixes: qcResult.requiredFixes, // ALL fixes
           previousAttempt: attemptNumber,
         };
+        
+        // PHASE 7: Retry Preparation
+        await updateGraphNode(task.id, {
+          status: 'preparing_retry',
+          nextAttemptNumber: attemptNumber + 1,
+          retryReason: 'qc_failure',
+          retryErrorContext: JSON.stringify(errorContext),
+          retryPreparedAt: new Date().toISOString(),
+        });
         
         console.log(`\n🔁 Retrying with QC feedback...`);
         attemptNumber++;
@@ -1502,8 +1841,8 @@ ${task.prompt}`;
         // Max retries exhausted - TASK FAILED
         break;
       }
-      
-    } catch (error: any) {
+    
+  } catch (error: any) {
       console.error(`\n❌ Worker execution failed: ${error.message}`);
       
       if (attemptNumber < maxRetries) {
@@ -1523,7 +1862,7 @@ ${task.prompt}`;
   }
   
   // STEP 4: All retries exhausted - Generate failure report
-  const duration = Date.now() - startTime;
+    const duration = Date.now() - startTime;
   console.log(`\n🚨 TASK FAILED after ${maxRetries} attempts`);
   
   const qcFailureReport = await generateQCFailureReport(task, qcVerificationHistory, workerOutput);
@@ -1537,14 +1876,41 @@ ${task.prompt}`;
     outcome: 'failure',
     failureReason: `QC verification failed after ${maxRetries} attempts`,
     qcFailureReport: qcFailureReport.substring(0, 5000), // Store first 5k chars
+    // PRIMARY FIELDS: Final QC results (what matters for reporting)
+    qcScore: qcVerificationHistory[qcVerificationHistory.length - 1]?.score || 0, // FINAL score only
+    qcPassed: false, // Explicitly mark as failed
+    qcFeedback: qcVerificationHistory[qcVerificationHistory.length - 1]?.feedback || '',
+    // PHASE 9 ENHANCEMENT: Add comprehensive failure metrics
+    totalAttempts: maxRetries,
+    totalQCFailures: qcVerificationHistory.filter(qc => !qc.passed).length,
+    qcFailureReportGenerated: true,
+    finalWorkerOutput: workerOutput.substring(0, 50000), // Store final output (truncated)
+    finalWorkerOutputLength: workerOutput.length, // Store full length
+    improvementNeeded: true,
+    failureAnalysisCompleted: true,
+    // Debugging/analytics only - NOT for reporting
+    qcAttemptMetrics: JSON.stringify({
+      totalAttempts: maxRetries,
+      lowestScore: Math.min(...qcVerificationHistory.map(qc => qc.score)),
+      highestScore: Math.max(...qcVerificationHistory.map(qc => qc.score)),
+      avgScore: Math.round(qcVerificationHistory.reduce((sum, qc) => sum + qc.score, 0) / qcVerificationHistory.length),
+      history: qcVerificationHistory.map((qc, idx) => ({
+        attempt: idx + 1,
+        score: qc.score,
+        passed: qc.passed,
+      })),
+      commonIssues: qcVerificationHistory
+        .flatMap(qc => qc.issues || [])
+        .slice(0, 10),
+    }),
   });
   
   const executionResult: Omit<ExecutionResult, 'graphNodeId'> = {
-    taskId: task.id,
-    status: 'failure',
+      taskId: task.id,
+      status: 'failure',
     output: workerOutput,
-    duration,
-    preamblePath,
+      duration,
+      preamblePath,
     agentRoleDescription: task.agentRoleDescription,
     prompt: task.prompt,
     error: `QC verification failed after ${maxRetries} attempts`,
@@ -1562,92 +1928,6 @@ ${task.prompt}`;
   };
 }
 
-/**
- * Legacy task execution (no QC verification)
- */
-async function executeTaskLegacy(
-  task: TaskDefinition,
-  preamblePath: string,
-  startTime: number
-): Promise<ExecutionResult> {
-  try {
-    const agent = new CopilotAgentClient({
-      preamblePath,
-      agentType: 'worker', // Use worker agent defaults from config
-      temperature: 0.0,
-    });
-    
-    await agent.loadPreamble(preamblePath);
-    const result = await agent.execute(task.prompt);
-    
-    const duration = Date.now() - startTime;
-    
-    console.log(`\n✅ Task completed in ${(duration / 1000).toFixed(2)}s`);
-    console.log(`📊 Tokens: ${result.tokens.input + result.tokens.output}`);
-    console.log(`🔧 Tool calls: ${result.toolCalls}`);
-    
-    // 🚨 Check for circuit breaker issues (legacy tasks without QC)
-    if (result.metadata?.qcRecommended) {
-      console.log(`\n⚠️  WARNING: Task exceeded safety thresholds`);
-      console.log(`   Tool Calls: ${result.metadata.toolCallCount}`);
-      console.log(`   Messages: ${result.metadata.messageCount}`);
-      console.log(`   Context: ~${result.metadata.estimatedContextTokens.toLocaleString()} tokens`);
-      console.log(`   💡 Consider adding QC verification to this task type\n`);
-    }
-    
-    if (result.metadata?.circuitBreakerTriggered) {
-      console.log(`\n${'🚨'.repeat(40)}`);
-      console.log(`🚨 WARNING: Circuit breaker would have triggered`);
-      console.log(`   This task completed but exceeded safety limits`);
-      console.log(`   Tool Calls: ${result.metadata.toolCallCount} (limit: 80)`);
-      console.log(`   💡 RECOMMENDATION: Add QC verification to prevent runaway execution`);
-      console.log(`${'🚨'.repeat(40)}\n`);
-    }
-    
-    const executionResult: Omit<ExecutionResult, 'graphNodeId'> = {
-      taskId: task.id,
-      status: 'success',
-      output: result.output,
-      duration,
-      preamblePath,
-      agentRoleDescription: task.agentRoleDescription,
-      prompt: task.prompt,
-      tokens: result.tokens,
-      toolCalls: result.toolCalls,
-    };
-    
-    const graphNodeId = await storeTaskResultInGraph(task, executionResult);
-    
-    return {
-      ...executionResult,
-      graphNodeId,
-    };
-    
-  } catch (error: any) {
-    const duration = Date.now() - startTime;
-    
-    console.error(`\n❌ Task failed after ${(duration / 1000).toFixed(2)}s`);
-    console.error(`Error: ${error.message}`);
-    
-    const executionResult: Omit<ExecutionResult, 'graphNodeId'> = {
-      taskId: task.id,
-      status: 'failure',
-      output: '',
-      error: error.message,
-      duration,
-      preamblePath,
-      agentRoleDescription: task.agentRoleDescription,
-      prompt: task.prompt,
-    };
-    
-    const graphNodeId = await storeTaskResultInGraph(task, executionResult);
-    
-    return {
-      ...executionResult,
-      graphNodeId,
-    };
-  }
-}
 
 /**
  * Execute all tasks from chain output
@@ -1754,8 +2034,12 @@ export async function executeChainOutput(
   // Generate worker preambles
   console.log('📝 Generating Worker Preambles...\n');
   for (const [role, roleTasks] of roleMap.entries()) {
+    console.log(`\n🔍 DEBUG: Generating preamble for role:`);
+    console.log(`   Role: "${role}"`);
+    console.log(`   Tasks using this role: ${roleTasks.map(t => t.id).join(', ')}`);
     console.log(`   Worker (${roleTasks.length} tasks): ${role.substring(0, 60)}...`);
-    const preamblePath = await generatePreamble(role, outputDir);
+    // Pass first task as example to provide concrete context
+    const preamblePath = await generatePreamble(role, outputDir, roleTasks[0], false); // false = worker agent
     rolePreambles.set(role, preamblePath);
   }
   
@@ -1785,7 +2069,8 @@ export async function executeChainOutput(
   // Generate preambles for all QC roles
   for (const [qcRole, qcTasks] of qcRoleMap.entries()) {
     console.log(`   QC (${qcTasks.length} tasks): ${qcRole.substring(0, 60)}...`);
-    const qcPreamblePath = await generatePreamble(qcRole, outputDir);
+    // Pass first task as example to provide concrete context
+    const qcPreamblePath = await generatePreamble(qcRole, outputDir, qcTasks[0], true); // true = QC agent
     qcRolePreambles.set(qcRole, qcPreamblePath);
     
     // Store QC preamble path on each task
@@ -1797,17 +2082,35 @@ export async function executeChainOutput(
   console.log(`\n✅ Generated ${rolePreambles.size} worker preambles`);
   console.log(`✅ Generated ${qcRolePreambles.size} QC preambles (${autoGeneratedCount} auto-generated)\n`);
   
-  // Organize tasks into parallel batches
+  // Feature flag for parallel execution (default: false for testing)
+  const enableParallelExecution = process.env.MIMIR_PARALLEL_EXECUTION === 'true';
+  
+  // Organize tasks into batches
   console.log('-'.repeat(80));
-  console.log('STEP 2: Organize Tasks into Parallel Batches');
+  if (enableParallelExecution) {
+    console.log('STEP 2: Organize Tasks into Parallel Batches');
+  } else {
+    console.log('STEP 2: Organize Tasks into Serial Execution Order');
+  }
   console.log('-'.repeat(80) + '\n');
   
-  const batches = organizeTasks(tasks);
-  console.log(`👥 ${batches.length} parallel execution batches identified\n`);
+  const batches = enableParallelExecution 
+    ? organizeTasks(tasks)
+    : tasks.map(t => [t]); // Serial: one task per batch
   
-  // Execute batches sequentially, tasks within batch in parallel
+  if (enableParallelExecution) {
+    console.log(`👥 ${batches.length} parallel execution batches identified\n`);
+  } else {
+    console.log(`🔄 Serial execution mode: ${tasks.length} tasks will execute one at a time\n`);
+  }
+  
+  // Execute batches
   console.log('-'.repeat(80));
-  console.log('STEP 3: Execute Tasks (Parallel Within Batches)');
+  if (enableParallelExecution) {
+    console.log('STEP 3: Execute Tasks (Parallel Within Batches)');
+  } else {
+    console.log('STEP 3: Execute Tasks (Serial Execution)');
+  }
   console.log('-'.repeat(80));
   
   const results: ExecutionResult[] = [];
@@ -1826,10 +2129,14 @@ export async function executeChainOutput(
       console.log(`   Tasks: ${batchTasks}`);
     }
     
-    // Execute all tasks in batch concurrently
-    const batchResults = await Promise.all(
-      batch.map(task => executeTask(task, rolePreambles.get(task.agentRoleDescription)!))
-    );
+    // Execute tasks in batch (parallel if enabled, otherwise serial)
+    const batchResults = enableParallelExecution
+      ? await Promise.all(
+          batch.map(task => executeTask(task, rolePreambles.get(task.agentRoleDescription)!))
+        )
+      : await Promise.all(
+          batch.map(task => executeTask(task, rolePreambles.get(task.agentRoleDescription)!))
+        ); // Same for now since batch size is 1 in serial mode
     
     results.push(...batchResults);
     
@@ -1837,7 +2144,9 @@ export async function executeChainOutput(
     const failures = batchResults.filter(r => r.status === 'failure');
     if (failures.length > 0) {
       console.error(`\n⛔ ${failures.length} task(s) failed in batch ${i + 1}`);
-      failures.forEach(f => console.error(`   ❌ ${f.taskId}: ${f.error}`));
+      failures.forEach(f => {
+        console.error(`   ❌ ${f.taskId}: ${f.error}`);
+      });
       shouldStop = true;
     }
   }
@@ -1871,16 +2180,27 @@ export async function executeChainOutput(
 export async function generateFinalReport(
   tasks: TaskDefinition[],
   results: ExecutionResult[],
-  outputPath: string
+  outputPath: string,
+  chainOutputPath: string
 ): Promise<string> {
   console.log('\n' + '='.repeat(80));
-  console.log('📝 GENERATING FINAL PM REPORT');
+  console.log('📝 GENERATING FINAL EXECUTION REPORT');
   console.log('='.repeat(80) + '\n');
   
-  // Build comprehensive context for PM
+  // Read original plan for comparison
+  const originalPlan = await fs.readFile(chainOutputPath, 'utf-8');
+  
+  // Build comprehensive context for Final Report agent
   let reportPrompt = `# Final Execution Report Request
 
-You are the PM agent reviewing the completed multi-agent execution. Generate a comprehensive final report.
+You are the Final Report agent reviewing the completed multi-agent execution. Generate a comprehensive final report comparing the original plan with actual execution results.
+
+## Original Plan
+The following was the original plan from ${path.basename(chainOutputPath)}:
+
+<original_plan>
+${originalPlan}
+</original_plan>
 
 ## Execution Overview
 
@@ -2020,45 +2340,49 @@ For each task (${results.length} total, max 3 sentences per task):
 - No verbose explanations
 
 **CRITICAL CONSTRAINTS:**
-- MAXIMUM OUTPUT LENGTH: 5000 characters
+- MAXIMUM OUTPUT LENGTH: 10000 characters
 - NO verbose prose - use bullets and short sentences
 - Each section: SHORT and DIRECT
 - If file list exceeds 20 items, show top 20 and note "... X more files"
 
-**Output Format:** Generate this as a well-structured markdown document ready to save as a file.
+**Output Format:**
+- Generate markdown content directly (DO NOT wrap in code blocks or triple backticks)
+- Start immediately with "# Final Execution Report"
+- Use proper markdown headings (##, ###) for sections
+- This output will be saved directly to a .md file
 `;
 
-  // Load PM preamble
-  // Use Mimir installation directory for PM preamble
+  // Load Final Report preamble (v2)
+  // Use Mimir installation directory for preambles
   const mimirInstallDir = process.env.MIMIR_INSTALL_DIR || process.cwd();
   const mimirAgentsDir = process.env.MIMIR_AGENTS_DIR || path.join(mimirInstallDir, 'docs', 'agents');
-  const pmPreamblePath = path.join(mimirAgentsDir, 'claudette-pm.md');
+  const reportPreamblePath = path.join(mimirAgentsDir, 'v2', '03-final-report-preamble.md');
   
   try {
-    await fs.access(pmPreamblePath);
+    await fs.access(reportPreamblePath);
   } catch {
-    console.warn(`⚠️  PM preamble not found at ${pmPreamblePath}, using default`);
+    console.warn(`⚠️  Final Report preamble not found at ${reportPreamblePath}, using default`);
   }
   
-  console.log('🤖 Initializing PM agent for final report...');
+  console.log('🤖 Initializing Final Report agent...');
   
-  // Resolve model selection based on PM suggestion and feature flag
+  // Resolve model selection based on feature flag
   // Note: For final report, we use a dummy task object since there's no specific task
   const dummyTask: Partial<TaskDefinition> = { id: 'final-report', title: 'Final Report' };
   const modelSelection = await resolveModelSelection(dummyTask as TaskDefinition, 'pm');
   
-  const pmAgent = new CopilotAgentClient({
-    preamblePath: pmPreamblePath,
+  const reportAgent = new CopilotAgentClient({
+    preamblePath: reportPreamblePath,
     ...modelSelection, // Spread provider/model or agentType
     temperature: 0.0,
-    maxTokens: 3000, // STRICT LIMIT: Concise reports only (prevents verbose PM bloat)
+    maxTokens: 3000, // STRICT LIMIT: Concise reports only (prevents verbose bloat)
   });
   
-  await pmAgent.loadPreamble(pmPreamblePath);
+  await reportAgent.loadPreamble(reportPreamblePath);
   
   console.log('📊 Generating comprehensive report...\n');
   
-  const reportResult = await pmAgent.execute(reportPrompt);
+  const reportResult = await reportAgent.execute(reportPrompt);
   
   // Save report
   await fs.writeFile(outputPath, reportResult.output, 'utf-8');
@@ -2081,19 +2405,19 @@ export async function main() {
   }
   
   try {
-    // Read and parse tasks
-    const markdown = await fs.readFile(chainOutputPath, 'utf-8');
-    const tasks = parseChainOutput(markdown);
-    
     // Determine output directory (same directory as chain output, or current working directory)
     const outputDir = path.join(path.dirname(chainOutputPath), 'generated-agents');
     
-    // Execute tasks
+    // Execute tasks (this will parse the chain output internally)
     const results = await executeChainOutput(chainOutputPath, outputDir);
     
-    // Generate final PM report
+    // Parse tasks for the final report (we need the task definitions)
+    const markdown = await fs.readFile(chainOutputPath, 'utf-8');
+    const tasks = parseChainOutput(markdown);
+    
+    // Generate final execution report
     const reportPath = path.join(path.dirname(chainOutputPath), 'execution-report.md');
-    await generateFinalReport(tasks, results, reportPath);
+    await generateFinalReport(tasks, results, reportPath, chainOutputPath);
     
     const failed = results.filter(r => r.status === 'failure').length;
     process.exit(failed > 0 ? 1 : 0);

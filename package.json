@@ -75,5 +75,8 @@
     "node-fetch": "^3.3.2",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

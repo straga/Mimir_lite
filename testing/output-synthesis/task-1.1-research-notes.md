@@ -1,0 +1,13 @@
+AGENTS.md
+docs/agents/README.md
+docs/agents/claudette-debug.md
+docs/agents/CHANGELOG.md
+docs/agents/claudette-pm.md
+docs/agents/claudette-qc.md
+docs/agents/claudette-research.md
+docs/agents/claudette-todo.md
+docs/agents/claudette-ecko.md
+docs/architecture/MULTI_AGENT_EXECUTIVE_SUMMARY.md
+docs/architecture/MULTI_AGENT_GRAPH_RAG.md
+docs/architecture/MULTI_AGENT_ROADMAP.md
+docs/architecture/AGENT_CHAINING.md

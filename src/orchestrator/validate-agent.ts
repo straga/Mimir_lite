@@ -127,8 +127,7 @@ function listModels(): void {
 //   console.log('\nGemini:');
 //   console.log(`  - ${CopilotModel.GEMINI_2_5_PRO}`);
 //   console.log(`  - ${CopilotModel.GEMINI_2_0_FLASH}`);
-  console.log('\n💡 Set model: export COPILOT_MODEL=gpt-4.1');
-  console.log('💡 Example: export COPILOT_MODEL=claude-sonnet-4\n');
+  console.log('\n💡 Set model: `export COPILOT_MODEL=gpt-4.1');
 }
 
 // CLI usage

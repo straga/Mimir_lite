@@ -1,6 +1,6 @@
 #!/bin/bash
 # Remote setup script for Mimir
-# Usage: curl -fsSL https://raw.githubusercontent.com/orneryd/GRAPH-RAG-TODO/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/main/install.sh | bash
 
 set -e
 
@@ -50,7 +50,7 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 
 log_info "Cloning Mimir repository to '$INSTALL_DIR'..."
-git clone https://github.com/orneryd/GRAPH-RAG-TODO.git "$INSTALL_DIR"
+git clone https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO.git "$INSTALL_DIR"
 
 log_info "Changing to project directory..."
 cd "$INSTALL_DIR"

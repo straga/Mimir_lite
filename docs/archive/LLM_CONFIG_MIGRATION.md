@@ -28,7 +28,6 @@
   1. **QC Agent (executeQCAgent)**: `agentType: 'qc'`
   2. **QC Failure Report**: `agentType: 'qc'`
   3. **Worker Agent (executeTask)**: `agentType: 'worker'`
-  4. **Legacy Worker (executeTaskLegacy)**: `agentType: 'worker'`
   5. **PM Agent (generateFinalReport)**: `agentType: 'pm'`
 
 ### 3. Test Updates

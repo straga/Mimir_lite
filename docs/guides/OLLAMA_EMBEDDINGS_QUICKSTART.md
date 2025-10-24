@@ -341,4 +341,4 @@ ollama:
 
 ---
 
-**Questions?** Check [GitHub Issues](https://github.com/orneryd/GRAPH-RAG-TODO/issues) or open a discussion.
+**Questions?** Check [GitHub Issues](https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/issues) or open a discussion.

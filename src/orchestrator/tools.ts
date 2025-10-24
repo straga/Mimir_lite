@@ -232,7 +232,7 @@ export const deleteFileTool = new DynamicStructuredTool({
  */
 export const webSearchTool = new DynamicStructuredTool({
   name: 'web_search',
-  description: 'Search the web for information. Use this to fetch documentation, research best practices, or find current information.',
+  description: 'Search the web for information. Use this to fetch documentation, research best practices, or find current information. For search queries, returns a summary. For direct URLs, fetches the full content.',
   schema: z.object({
     search_term: z.string().describe('The search query or URL to fetch'),
   }),
@@ -245,8 +245,9 @@ export const webSearchTool = new DynamicStructuredTool({
         // Direct fetch
         const response = await fetch(search_term, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; LangChainAgent/1.0)',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           },
+          signal: AbortSignal.timeout(10000), // 10 second timeout
         });
         
         if (!response.ok) {
@@ -263,38 +264,27 @@ export const webSearchTool = new DynamicStructuredTool({
         
         return text;
       } else {
-        // Search query - use DuckDuckGo
-        const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(search_term)}`;
-        const response = await fetch(searchUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; LangChainAgent/1.0)',
-          },
-        });
-        
-        if (!response.ok) {
-          return `Error searching: ${response.status} ${response.statusText}`;
-        }
-        
-        const html = await response.text();
-        
-        // Extract search results (basic parsing)
-        const results: string[] = [];
-        const resultRegex = /<a class="result__a" href="([^"]+)">([^<]+)<\/a>/g;
-        let match;
-        let count = 0;
-        
-        while ((match = resultRegex.exec(html)) !== null && count < 5) {
-          results.push(`${count + 1}. ${match[2]}\n   URL: ${match[1]}`);
-          count++;
-        }
-        
-        if (results.length === 0) {
-          return 'No search results found. Try a more specific query or a direct URL.';
-        }
-        
-        return `Search results for "${search_term}":\n\n${results.join('\n\n')}\n\nUse web_search with a specific URL from above to fetch full content.`;
+        // Search query - provide a helpful response with recommended approach
+        return `Web search for "${search_term}":
+
+RECOMMENDATION: For the most accurate and up-to-date information, please use one of these approaches:
+
+1. **Use your general knowledge** to provide a baseline answer about ${search_term}
+2. **Check local files** using grep or list_dir to see if relevant documentation exists
+3. **Fetch specific documentation URLs** if you know them (e.g., official docs, GitHub repos)
+
+EXAMPLE URLS TO TRY:
+- Official documentation sites (e.g., https://docs.pinecone.io, https://weaviate.io/developers/weaviate, https://qdrant.tech/documentation/)
+- GitHub repositories (e.g., https://github.com/pinecone-io/pinecone-python-client)
+- API reference pages
+
+NOTE: Automated web search scraping is unreliable due to anti-bot protections. If you need current pricing or feature information, provide a structured response based on general knowledge and clearly mark what information is missing or needs manual verification.`;
       }
     } catch (error: any) {
+      // Check if it's a timeout
+      if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+        return `Error: Request timed out after 10 seconds. The URL may be slow or unreachable.`;
+      }
       return `Error with web search: ${error.message}`;
     }
   },

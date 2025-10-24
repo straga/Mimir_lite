@@ -37,13 +37,13 @@ Before starting, ensure Docker has enough memory allocated:
 **Complete setup in one command:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/orneryd/GRAPH-RAG-TODO/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/main/install.sh | bash
 ```
 
 ### Alternative: Clone & Setup
 
 ```bash
-git clone https://github.com/orneryd/GRAPH-RAG-TODO.git
+git clone https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO.git
 cd GRAPH-RAG-TODO
 
 # Check Docker resources first
@@ -74,7 +74,7 @@ If you prefer step-by-step setup or need to troubleshoot:
 
 #### 1. Clone and Install Dependencies
 ```bash
-git clone https://github.com/orneryd/GRAPH-RAG-TODO.git
+git clone https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO.git
 cd GRAPH-RAG-TODO
 npm run setup:complete  # Runs automated setup script
 ```
@@ -443,7 +443,7 @@ curl http://localhost:4141/v1/models  # Copilot API health
 **Resources:**
 - **Documentation**: Check `AGENTS.md` for usage patterns
 - **Examples**: See usage examples in sections below
-- **Issues**: Report problems at https://github.com/orneryd/GRAPH-RAG-TODO/issues
+- **Issues**: Report problems at https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/issues
 
 ### LLM Connection Test Failures
 If the Node.js test fails:

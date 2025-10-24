@@ -32,6 +32,17 @@ services:
       - "11434:11434"  # Ollama API
     volumes:
       - ./data/ollama:/root/.ollama  # Persist models
+    environment:
+      # Proxy settings (if needed in corporate environments)
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
+      # Certificate settings (if you have custom CA certs)
+      - SSL_CERT_FILE=${SSL_CERT_FILE:-}
+      - CURL_CA_BUNDLE=${CURL_CA_BUNDLE:-}
+      # Ollama-specific settings
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_ORIGINS=*
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -83,8 +94,9 @@ services:
       
       # Embeddings Configuration (only used if VECTOR_EMBEDDINGS=true)
       - MIMIR_EMBEDDINGS_ENABLED=${MIMIR_EMBEDDINGS_ENABLED:-false}
-      - MIMIR_EMBEDDINGS_MODEL=${MIMIR_EMBEDDINGS_MODEL:-nomic-embed-text}
-      - MIMIR_EMBEDDINGS_DIMENSIONS=${MIMIR_EMBEDDINGS_DIMENSIONS:-768}
+      - MIMIR_EMBEDDINGS_PROVIDER=${MIMIR_EMBEDDINGS_PROVIDER:-copilot}
+      - MIMIR_EMBEDDINGS_MODEL=${MIMIR_EMBEDDINGS_MODEL:-text-embedding-3-small}
+      - MIMIR_EMBEDDINGS_DIMENSIONS=${MIMIR_EMBEDDINGS_DIMENSIONS:-1536}
       - MIMIR_EMBEDDINGS_CHUNK_SIZE=${MIMIR_EMBEDDINGS_CHUNK_SIZE:-512}
       - MIMIR_EMBEDDINGS_CHUNK_OVERLAP=${MIMIR_EMBEDDINGS_CHUNK_OVERLAP:-50}
     volumes:
@@ -103,8 +115,9 @@ services:
       neo4j:
         condition: service_healthy
       # Ollama is optional - only required if embeddings enabled
-      # Start with: docker-compose --profile ollama up -d
-      # Or set MIMIR_FEATURE_VECTOR_EMBEDDINGS=true in .env
+      # Uncomment below if MIMIR_EMBEDDINGS_ENABLED=true
+      # ollama:
+      #   condition: service_healthy
     networks:
       - mcp_network
 

@@ -69,13 +69,15 @@ export class AgentChain {
   private eckoAgent: CopilotAgentClient;
   private agentsDir: string;
   private graphManager: GraphManager | null = null;
+  private enableEcko: boolean;
 
-  constructor(agentsDir: string = 'docs/agents') {
+  constructor(agentsDir: string = 'docs/agents', enableEcko: boolean = false) {
     this.agentsDir = agentsDir;
+    this.enableEcko = enableEcko;
     
     // Initialize PM Agent with limited tools (prevents OpenAI 128 tool limit)
     this.pmAgent = new CopilotAgentClient({
-      preamblePath: path.join(agentsDir, 'claudette-pm.md'),
+      preamblePath: path.join(agentsDir, 'v2', '01-pm-preamble.md'),
       provider: 'copilot', // Explicitly set provider
       model: 'gpt-4.1', // Explicitly set model
       copilotBaseUrl: 'http://localhost:4141/v1', // Explicitly set base URL
@@ -86,7 +88,7 @@ export class AgentChain {
 
     // Initialize Ecko Agent (Prompt Architect) WITHOUT tools - it only optimizes prompts
     this.eckoAgent = new CopilotAgentClient({
-      preamblePath: path.join(agentsDir, 'claudette-ecko.md'),
+      preamblePath: path.join(agentsDir, 'v2', '00-ecko-preamble.md'),
       provider: 'copilot', // Explicitly set provider
       model: 'gpt-4.1', // Explicitly set model
       copilotBaseUrl: 'http://localhost:4141/v1', // Explicitly set base URL
@@ -110,10 +112,10 @@ export class AgentChain {
       console.warn('   Continuing without graph context...\n');
     }
     
-    await this.pmAgent.loadPreamble(path.join(this.agentsDir, 'claudette-pm.md'));
+    await this.pmAgent.loadPreamble(path.join(this.agentsDir, 'v2', '01-pm-preamble.md'));
     console.log('✅ PM Agent loaded\n');
     
-    await this.eckoAgent.loadPreamble(path.join(this.agentsDir, 'claudette-ecko.md'));
+    await this.eckoAgent.loadPreamble(path.join(this.agentsDir, 'v2', '00-ecko-preamble.md'));
     console.log('✅ Ecko Agent loaded\n');
   }
 
@@ -369,10 +371,11 @@ export class AgentChain {
     const executionId = `exec-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
     console.log('\n' + '='.repeat(80));
-    console.log('🚀 AGENT CHAIN EXECUTION (Ecko → PM)');
+    console.log(`🚀 AGENT CHAIN EXECUTION ${this.enableEcko ? '(Ecko → PM)' : '(PM Direct)'}`);
     console.log('='.repeat(80));
     console.log(`📝 User Request: ${userRequest}`);
-    console.log(`🆔 Execution ID: ${executionId}\n`);
+    console.log(`🆔 Execution ID: ${executionId}`);
+    console.log(`🎛️  Ecko Enabled: ${this.enableEcko}\n`);
 
     // Store execution start in graph
     await this.storeExecutionInGraph(executionId, userRequest, 'running');
@@ -383,13 +386,16 @@ export class AgentChain {
     // Find similar past failures
     const pastFailures = await this.findSimilarFailures(userRequest);
 
-    // STEP 1: Ecko Agent - Request Analysis & Optimization
-    console.log('\n' + '-'.repeat(80));
-    console.log('STEP 1: Ecko Agent - Request Optimization');
-    console.log('-'.repeat(80) + '\n');
+    // STEP 1: Ecko Agent - Request Analysis & Optimization (OPTIONAL - Feature Flag)
+    let eckoStep1Result: { output: string; toolCalls: number; tokens: { input: number; output: number } } | undefined;
+    
+    if (this.enableEcko) {
+      console.log('\n' + '-'.repeat(80));
+      console.log('STEP 1: Ecko Agent - Request Optimization');
+      console.log('-'.repeat(80) + '\n');
 
-    const eckoStep1Start = Date.now();
-    const eckoStep1Input = `${graphContext}${pastFailures}
+      const eckoStep1Start = Date.now();
+      const eckoStep1Input = `${graphContext}${pastFailures}
 
 ---
 
@@ -413,55 +419,60 @@ Provide an optimized specification that:
 
 Keep it concise and actionable.`;
 
-    let eckoStep1Result;
-    try {
-      eckoStep1Result = await this.eckoAgent.execute(eckoStep1Input);
-      
-      const eckoStep1 = {
-        agentName: 'Ecko Agent',
-        agentRole: 'Request Optimization',
-        input: eckoStep1Input,
-        output: eckoStep1Result.output,
-        toolCalls: eckoStep1Result.toolCalls,
-        tokens: eckoStep1Result.tokens,
-        duration: Date.now() - eckoStep1Start,
-      };
-      
-      steps.push(eckoStep1);
-      await this.storeStepInGraph(executionId, eckoStep1, 0, 'completed');
+      try {
+        eckoStep1Result = await this.eckoAgent.execute(eckoStep1Input);
+        
+        const eckoStep1 = {
+          agentName: 'Ecko Agent',
+          agentRole: 'Request Optimization',
+          input: eckoStep1Input,
+          output: eckoStep1Result.output,
+          toolCalls: eckoStep1Result.toolCalls,
+          tokens: eckoStep1Result.tokens,
+          duration: Date.now() - eckoStep1Start,
+        };
+        
+        steps.push(eckoStep1);
+        await this.storeStepInGraph(executionId, eckoStep1, 0, 'completed');
 
-      console.log(`\n✅ Ecko completed optimization in ${((Date.now() - eckoStep1Start) / 1000).toFixed(2)}s`);
-      console.log(`📊 Tool calls: ${eckoStep1Result.toolCalls}`);
-      console.log(`🎯 Output preview:\n${eckoStep1Result.output.substring(0, 300)}...\n`);
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      console.error(`\n❌ Ecko step failed: ${err.message}`);
-      
-      const failedStep = {
-        agentName: 'Ecko Agent',
-        agentRole: 'Request Optimization',
-        input: eckoStep1Input,
-        output: `ERROR: ${err.message}`,
-        toolCalls: 0,
-        tokens: { input: 0, output: 0 },
-        duration: Date.now() - eckoStep1Start,
-      };
-      
-      steps.push(failedStep);
-      await this.storeStepInGraph(executionId, failedStep, 0, 'failed', err);
-      await this.storeFailurePattern(executionId, 0, 'Ecko Agent', userRequest, err, graphContext);
-      await this.storeExecutionInGraph(executionId, userRequest, 'failed', undefined, err);
-      
-      throw error;
+        console.log(`\n✅ Ecko completed optimization in ${((Date.now() - eckoStep1Start) / 1000).toFixed(2)}s`);
+        console.log(`📊 Tool calls: ${eckoStep1Result.toolCalls}`);
+        console.log(`🎯 Output preview:\n${eckoStep1Result.output.substring(0, 300)}...\n`);
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        console.error(`\n❌ Ecko step failed: ${err.message}`);
+        
+        const failedStep = {
+          agentName: 'Ecko Agent',
+          agentRole: 'Request Optimization',
+          input: eckoStep1Input,
+          output: `ERROR: ${err.message}`,
+          toolCalls: 0,
+          tokens: { input: 0, output: 0 },
+          duration: Date.now() - eckoStep1Start,
+        };
+        
+        steps.push(failedStep);
+        await this.storeStepInGraph(executionId, failedStep, 0, 'failed', err);
+        await this.storeFailurePattern(executionId, 0, 'Ecko Agent', userRequest, err, graphContext);
+        await this.storeExecutionInGraph(executionId, userRequest, 'failed', undefined, err);
+        
+        throw error;
+      }
+    } else {
+      console.log('\n' + '-'.repeat(80));
+      console.log('STEP 1: Ecko Agent - SKIPPED (Feature Flag Disabled)');
+      console.log('-'.repeat(80) + '\n');
     }
 
-    // STEP 2: PM Agent - Task Breakdown based on Ecko's optimized spec
+    // STEP 2: PM Agent - Task Breakdown (with or without Ecko optimization)
     console.log('\n' + '-'.repeat(80));
-    console.log('STEP 2: PM Agent - Task Breakdown');
+    console.log(`STEP ${this.enableEcko ? '2' : '1'}: PM Agent - Task Breakdown`);
     console.log('-'.repeat(80) + '\n');
 
     const pmStep2Start = Date.now();
-    const pmStep2Input = `${graphContext}${pastFailures}
+    const pmStep2Input = this.enableEcko && eckoStep1Result
+      ? `${graphContext}${pastFailures}
 
 ---
 
@@ -479,7 +490,20 @@ ${userRequest}
 
 ## YOUR TASK
 
-Create a complete task breakdown and execution plan based on Ecko's optimized specification.
+Create a complete task breakdown and execution plan based on Ecko's optimized specification.`
+      : `${graphContext}${pastFailures}
+
+---
+
+## USER REQUEST
+
+${userRequest}
+
+---
+
+## YOUR TASK
+
+Create a complete task breakdown and execution plan based on the user request above.
 
 Provide:
 1. Analysis of what needs to be done
@@ -489,15 +513,41 @@ Provide:
    - Task ID (task-x.y format)
    - Title
    - Worker role description
-   - Complete self-contained prompt
+   - Complete self-contained prompt (see specificity requirements below)
    - Dependencies
    - Estimated duration
    - Verification criteria
 5. If past failures are shown, include avoidance strategies
 
+**CRITICAL: Task Prompt Specificity Requirements**
+
+For EACH task prompt, ensure it includes (when applicable):
+
+1. **Data Sources**: Exact field/column names, not generic references
+   - ❌ BAD: "Extract IDs from CSV"
+   - ✅ GOOD: "Extract 'userId' column (string) from users.csv"
+
+2. **Function Calls**: Import statements and signatures
+   - ❌ BAD: "Use validation library"
+   - ✅ GOOD: "Call validateEmail(email) from lib/validators.js, returns boolean"
+
+3. **Time Estimates**: Use multipliers (network 3x, file I/O 2x, rate limits 4x, errors 1.5x)
+   - ❌ BAD: "10 min" (for 1000 API calls)
+   - ✅ GOOD: "50 min" (1000 calls × 3x network = 3000 units / 60 = 50 min)
+
+4. **Configuration**: Explicit paths and load methods
+   - ❌ BAD: "Use database config"
+   - ✅ GOOD: "Load DATABASE_URL from .env using dotenv.config()"
+
+5. **Tool-Based Execution**: Which tools to use, what NOT to create
+   - ❌ BAD: "Parse [data]" or "Create [utility]" (implies implementation)
+   - ✅ GOOD: "Use read_file to read [data], parse in-memory, store with graph_add_node. Do NOT create new source files."
+
+Use the templates from your preamble (v2/01-pm-preamble.md) for each category.
+
 Output in markdown format ready for worker execution.`;
 
-    let pmStep2Result;
+    let pmStep2Result: any;
     try {
       pmStep2Result = await this.pmAgent.execute(pmStep2Input);
       
@@ -533,7 +583,7 @@ Output in markdown format ready for worker execution.`;
       
       steps.push(failedStep);
       await this.storeStepInGraph(executionId, failedStep, 1, 'failed', err);
-      await this.storeFailurePattern(executionId, 1, 'PM Agent', userRequest, err, eckoStep1Result.output);
+      await this.storeFailurePattern(executionId, 1, 'PM Agent', userRequest, err, eckoStep1Result?.output || '');
       await this.storeExecutionInGraph(executionId, userRequest, 'failed', undefined, err);
       
       throw error;
@@ -590,6 +640,7 @@ export async function main() {
   // Parse command line arguments
   const args = process.argv.slice(2);
   let agentsDir = 'docs/agents'; // Default
+  let enableEcko = false; // Default: Ecko disabled
   let userRequest = '';
   
   // Check for --agents-dir flag
@@ -600,9 +651,22 @@ export async function main() {
     args.splice(agentsDirIndex, 2);
   }
   
+  // Check for --enable-ecko flag
+  const enableEckoIndex = args.indexOf('--enable-ecko');
+  if (enableEckoIndex !== -1) {
+    enableEcko = true;
+    // Remove --enable-ecko from args
+    args.splice(enableEckoIndex, 1);
+  }
+  
   // Also check environment variable as fallback
   if (process.env.MIMIR_AGENTS_DIR) {
     agentsDir = process.env.MIMIR_AGENTS_DIR;
+  }
+  
+  // Check environment variable for Ecko
+  if (process.env.MIMIR_ENABLE_ECKO === 'true') {
+    enableEcko = true;
   }
   
   userRequest = args.join(' ');
@@ -611,11 +675,12 @@ export async function main() {
     console.error('❌ Error: No user request provided');
     console.error('\nUsage: npm run chain "Your request here"');
     console.error('       mimir-chain "Your request here"');
+    console.error('       mimir-chain --enable-ecko "Your request here"  (Enable Ecko optimization)');
     console.error('Example: npm run chain "Draft migration plan for Docker containerization"');
     process.exit(1);
   }
 
-  const chain = new AgentChain(agentsDir);
+  const chain = new AgentChain(agentsDir, enableEcko);
   
   try {
     await chain.initialize();

@@ -98,8 +98,31 @@ echo ""
 # Pull each model
 for model in "${MODELS[@]}"; do
   echo "📥 Pulling model: $model"
-  docker exec $OLLAMA_CONTAINER ollama pull $model
-  echo "✅ Successfully pulled $model"
+  
+  # Try normal pull first
+  if docker exec $OLLAMA_CONTAINER ollama pull $model 2>&1 | tee /tmp/ollama_pull_$$.log | grep -q "success"; then
+    echo "✅ Successfully pulled $model"
+  else
+    # Check if it's a TLS certificate error
+    if grep -q "certificate" /tmp/ollama_pull_$$.log 2>/dev/null; then
+      echo "⚠️  TLS certificate error detected. Retrying with insecure mode..."
+      if docker exec -e OLLAMA_INSECURE=true $OLLAMA_CONTAINER ollama pull $model 2>&1 | grep -q "success"; then
+        echo "✅ Successfully pulled $model (used insecure mode)"
+      else
+        echo "❌ Failed to pull $model even with insecure mode"
+        echo "   Manual fix: docker exec -e OLLAMA_INSECURE=true $OLLAMA_CONTAINER ollama pull $model"
+        rm -f /tmp/ollama_pull_$$.log
+        exit 1
+      fi
+    else
+      echo "❌ Failed to pull $model"
+      cat /tmp/ollama_pull_$$.log
+      rm -f /tmp/ollama_pull_$$.log
+      exit 1
+    fi
+  fi
+  
+  rm -f /tmp/ollama_pull_$$.log
   echo ""
 done
 

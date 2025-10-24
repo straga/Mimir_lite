@@ -101,10 +101,20 @@ This repository contains **Mimir** - a production-ready MCP (Model Context Proto
 - **[CONFIGURATION.md](docs/configuration/CONFIGURATION.md)** - Setup for VSCode, Cursor, Claude Desktop
 
 ### 🤖 Agent Configurations (`docs/agents/`)
+
+**Active v2 Preambles:**
+- **[00-ecko-preamble.md](docs/agents/v2/00-ecko-preamble.md)** - Prompt architect (v2.0)
+- **[01-pm-preamble.md](docs/agents/v2/01-pm-preamble.md)** - PM agent for planning (v2.0)
+- **[02-agentinator-preamble.md](docs/agents/v2/02-agentinator-preamble.md)** - Agent preamble generator (v2.1)
+- **[03-final-report-preamble.md](docs/agents/v2/03-final-report-preamble.md)** - Final report synthesizer (v2.0)
+- **[worker-template.md](docs/agents/v2/templates/worker-template.md)** - Worker agent template
+- **[qc-template.md](docs/agents/v2/templates/qc-template.md)** - QC agent template
+
+**Legacy v1 (Archived):**
 - **[claudette-auto.md](docs/agents/claudette-auto.md)** - Autonomous execution mode (v5.2.1)
-- **[claudette-pm.md](docs/agents/claudette-pm.md)** - PM agent for planning
-- **[claudette-ecko.md](docs/agents/claudette-ecko.md)** - Prompt architect (v3.0)
-- **[claudette-agentinator.md](docs/agents/claudette-agentinator.md)** - Agent preamble generator
+- **[claudette-pm.md](docs/agents/claudette-pm.md)** - Old PM agent (superseded by v2)
+- **[claudette-ecko.md](docs/agents/claudette-ecko.md)** - Old Ecko (superseded by v2)
+- **[claudette-agentinator.md](docs/agents/claudette-agentinator.md)** - Old Agentinator (superseded by v2)
 - **[AGENTIC_PROMPTING_FRAMEWORK.md](docs/agents/AGENTIC_PROMPTING_FRAMEWORK.md)** - Core framework (v1.2)
 
 ### 📊 Benchmarks & Results (`docs/results/`)

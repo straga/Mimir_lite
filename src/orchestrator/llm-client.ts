@@ -223,15 +223,15 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
     console.log(`🔍 Tools count: ${this.tools.length}`);
     console.log(`🔍 System prompt length: ${enhancedSystemPrompt.length} chars`);
     
-    // Test if LLM is actually functional before creating agent
-    console.log(`🔍 Testing LLM with simple ping...`);
-    try {
-      const testResult = await this.llm.invoke([new HumanMessage('ping')]);
-      console.log(`✅ LLM test successful: ${testResult.content.toString().substring(0, 50)}`);
-    } catch (error: any) {
-      console.error(`❌ LLM test FAILED:`, error?.message || error);
-      throw error;
-    }
+    // // Test if LLM is actually functional before creating agent
+    // console.log(`🔍 Testing LLM with simple ping...`);
+    // try {
+    //   const testResult = await this.llm.invoke([new HumanMessage('ping')]);
+    //   console.log(`✅ LLM test successful: ${testResult.content.toString().substring(0, 50)}`);
+    // } catch (error: any) {
+    //   console.error(`❌ LLM test FAILED:`, error?.message || error);
+    //   throw error;
+    // }
     
     // Create React agent using the LangGraph API
     // NOTE: Message trimming must be handled at the invoke() level, not here
@@ -244,8 +244,7 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
 
     const ctxWindow = await this.getContextWindow();
     console.log('✅ Agent initialized with tool-calling enabled using LangGraph');
-    console.log(`📊 Context: ${ctxWindow.toLocaleString()} tokens, Recursion limit: 250`);
-    console.log(`⚠️  WARNING: No message trimming - tasks >50 tool calls may hit context limits`);
+    console.log(`📊 Context: ${ctxWindow.toLocaleString()} tokens, Recursion limit: dynamic (10x tool calls)`);
   }
   
   private async initializeLLM(): Promise<void> {
@@ -477,7 +476,11 @@ CONCISE SUMMARY:`;
     }
   }
 
-  async execute(task: string, retryCount: number = 0): Promise<{
+  async execute(
+    task: string, 
+    retryCount: number = 0,
+    circuitBreakerLimit?: number // Optional: PM's estimate × 1.5
+  ): Promise<{
     output: string;
     conversationHistory: Array<{ role: string; content: string }>;
     tokens: { input: number; output: number };
@@ -508,7 +511,7 @@ CONCISE SUMMARY:`;
     // Wrap execution with rate limiter
     return this.rateLimiter.enqueue(
       async () => {
-        const result = await this.executeInternal(task, retryCount);
+        const result = await this.executeInternal(task, retryCount, circuitBreakerLimit);
         
         // Record actual API usage after execution
         this.recordAPIUsageMetrics(result);
@@ -522,7 +525,11 @@ CONCISE SUMMARY:`;
   /**
    * Internal execution method (rate-limited by enqueue wrapper)
    */
-  private async executeInternal(task: string, retryCount: number = 0): Promise<{
+  private async executeInternal(
+    task: string, 
+    retryCount: number = 0,
+    circuitBreakerLimit?: number // Optional: PM's estimate × 1.5, defaults to 50
+  ): Promise<{
     output: string;
     conversationHistory: Array<{ role: string; content: string }>;
     tokens: { input: number; output: number };
@@ -552,10 +559,13 @@ CONCISE SUMMARY:`;
       console.log('📤 Invoking agent with LangGraph...');
       
       // Circuit breaker: Stop execution if tool calls exceed threshold
-      const MAX_TOOL_CALLS = 60; // Stop before context explosion
-      const MAX_MESSAGES = 180; // ~60 tool calls × 3 messages per call
+      // Use PM's estimate (×10) if provided, otherwise default to 100
+      const MAX_TOOL_CALLS = circuitBreakerLimit || 100;
+      const MAX_MESSAGES = MAX_TOOL_CALLS * 10; // ~10 messages per tool call (generous buffer)
       let toolCallsSoFar = 0;
       let lastMessageCount = 0;
+      
+      console.log(`🔒 Circuit breaker limit: ${MAX_TOOL_CALLS} tool calls (${circuitBreakerLimit ? 'from PM estimate' : 'default'})`);
       
       // LangGraph agents use messages format
       const result = await this.agent.invoke(
@@ -563,7 +573,7 @@ CONCISE SUMMARY:`;
           messages: [new HumanMessage(task)],
         },
         {
-          recursionLimit: MAX_MESSAGES, // Prevent context explosion (was 250)
+          recursionLimit: MAX_MESSAGES, // Generous limit to prevent premature cutoff
         }
       );
       console.log('📥 Agent invocation complete');
@@ -595,8 +605,8 @@ CONCISE SUMMARY:`;
         const role = (message as any)._getType() === 'human' ? 'user' : 
                     (message as any)._getType() === 'ai' ? 'assistant' : 
                     (message as any)._getType() === 'system' ? 'system' : 'tool';
-        
-        conversationHistory.push({
+          
+          conversationHistory.push({
           role,
           content: (message as any).content,
         });
@@ -620,23 +630,26 @@ CONCISE SUMMARY:`;
         console.warn(`⚠️  HIGH TOOL USAGE: ${toolCalls} tool calls - agent may be stuck in a loop`);
         console.warn(`💡 Consider: QC review, task simplification, or circuit breaker intervention`);
       }
-      if (messageCount > 200) {
-        console.warn(`⚠️  High message count (${messageCount}) - approaching recursion limit of 250`);
-      }
-      
+      // Note: Recursion limit is now dynamic (10x tool calls), no need for hardcoded warning
+
       // Calculate estimated context size
       const estimatedContext = messages.reduce((sum: number, msg: any) => {
         const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
         return sum + Math.ceil(content.length / 4);
       }, 0);
-      if (estimatedContext > 100000) {
+      if (estimatedContext > 80000) {
         console.warn(`⚠️  HIGH CONTEXT: ~${estimatedContext.toLocaleString()} tokens - approaching limits`);
       }
 
-      // Determine if QC intervention is recommended
-      const qcRecommended = toolCalls > 50 || messageCount > 150 || estimatedContext > 100000;
-      const circuitBreakerTriggered = toolCalls > 80; // Hard limit
+      // Determine if QC intervention is recommended (soft thresholds)
+      const qcRecommended = toolCalls > 30 || messageCount > 40 || estimatedContext > 50000;
       
+      // Circuit breaker triggers on hard limits
+      // Use dynamic limit if provided (PM estimate × 1.5), otherwise default to 50
+      const toolCallLimit = MAX_TOOL_CALLS;
+      const messageLimit = MAX_MESSAGES;
+      const circuitBreakerTriggered = toolCalls > toolCallLimit || messageCount > messageLimit || estimatedContext > 80000;
+
       return {
         output,
         conversationHistory,
@@ -686,10 +699,10 @@ CONCISE SUMMARY:`;
         console.error('   - For Ollama: Try qwen2.5-coder, deepseek-coder, or llama3.1 instead of gpt-oss');
         console.error(`\n   Original error: ${error.message}\n`);
       } else if (isRecursionError) {
-        console.error('\n❌ Agent execution failed: Recursion limit reached (250 steps)');
-        console.error('💡 This task is too complex or the agent is stuck in a loop.');
+        console.error('\n❌ Agent execution failed: Recursion limit reached');
+        console.error('💡 This task is extremely complex or the agent is stuck in a loop.');
         console.error('   Possible causes:');
-        console.error('   - Task requires too many tool calls (current: >100)');
+        console.error('   - Task requires an excessive number of tool calls');
         console.error('   - Agent is repeating the same actions');
         console.error('   - Task description is ambiguous, causing confusion');
         console.error('\n   Suggestions:');
@@ -697,8 +710,8 @@ CONCISE SUMMARY:`;
         console.error('   - Make task requirements more specific and clear');
         console.error('   - Review the agent preamble for better guidance\n');
       } else {
-        console.error('\n❌ Agent execution failed:', error.message);
-        console.error('Stack trace:', error.stack);
+      console.error('\n❌ Agent execution failed:', error.message);
+      console.error('Stack trace:', error.stack);
       }
       
       throw error;

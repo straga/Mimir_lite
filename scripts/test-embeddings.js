@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 /**
  * @file scripts/test-embeddings.js
- * @description Quick test to verify Ollama embeddings are functional
+ * @description Quick test to verify embeddings are functional (Copilot or Ollama)
  * 
  * Usage: node scripts/test-embeddings.js
  */
 
 import fetch from 'node-fetch';
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const MODEL = process.env.MIMIR_EMBEDDINGS_MODEL || 'nomic-embed-text';
+const PROVIDER = process.env.MIMIR_EMBEDDINGS_PROVIDER || 'copilot';
+const BASE_URL = PROVIDER === 'copilot' 
+  ? (process.env.COPILOT_API_URL || 'http://localhost:4141/v1')
+  : (process.env.OLLAMA_BASE_URL || 'http://localhost:11434');
+const MODEL = process.env.MIMIR_EMBEDDINGS_MODEL || 
+  (PROVIDER === 'copilot' ? 'text-embedding-3-small' : 'nomic-embed-text');
 
-console.log('🧪 Testing Ollama Embeddings Functionality');
+console.log('🧪 Testing Embeddings Functionality');
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 console.log('');
 console.log(`Configuration:`);
-console.log(`  Ollama URL: ${OLLAMA_BASE_URL}`);
+console.log(`  Provider: ${PROVIDER}`);
+console.log(`  Base URL: ${BASE_URL}`);
 console.log(`  Model: ${MODEL}`);
 console.log('');
 
@@ -41,25 +46,50 @@ function cosineSimilarity(a, b) {
   return dot / (magA * magB);
 }
 
-// Generate embedding via Ollama API
+// Generate embedding via Copilot or Ollama API
 async function generateEmbedding(text) {
   try {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: MODEL,
-        prompt: text
-      })
-    });
+    if (PROVIDER === 'copilot' || PROVIDER === 'openai') {
+      // OpenAI/Copilot API format
+      const response = await fetch(`${BASE_URL}/embeddings`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer dummy-key-not-used'
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          input: text,
+          encoding_format: 'float'
+        })
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Ollama API error: ${response.status} - ${error}`);
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`${PROVIDER} API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      return data.data[0].embedding;
+    } else {
+      // Ollama API format
+      const response = await fetch(`${BASE_URL}/api/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: MODEL,
+          prompt: text
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Ollama API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      return data.embedding;
     }
-
-    const data = await response.json();
-    return data.embedding;
   } catch (error) {
     throw new Error(`Failed to generate embedding: ${error.message}`);
   }
@@ -170,7 +200,7 @@ async function runTests() {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('');
     console.log('Summary:');
-    console.log(`  ✅ Ollama is accessible at ${OLLAMA_BASE_URL}`);
+    console.log(`  ✅ ${PROVIDER} is accessible at ${BASE_URL}`);
     console.log(`  ✅ Model "${MODEL}" is working`);
     console.log(`  ✅ Embeddings have ${testEmbedding.length} dimensions`);
     console.log(`  ✅ Semantic search is functional`);
@@ -179,6 +209,7 @@ async function runTests() {
     console.log('Next steps:');
     console.log('  1. Enable embeddings in .env:');
     console.log('     MIMIR_EMBEDDINGS_ENABLED=true');
+    console.log(`     MIMIR_EMBEDDINGS_PROVIDER=${PROVIDER}`);
     console.log('  2. Index your files:');
     console.log('     node setup-watch.js');
     console.log('  3. Use vector search:');
@@ -191,14 +222,27 @@ async function runTests() {
     console.error('Error:', error.message);
     console.error('');
     console.error('Troubleshooting:');
-    console.error('  1. Check Ollama is running:');
-    console.error('     docker ps | grep ollama');
-    console.error('  2. Verify model is installed:');
-    console.error('     docker exec ollama_server ollama list');
-    console.error('  3. Pull the model if missing:');
-    console.error(`     docker exec ollama_server ollama pull ${MODEL}`);
-    console.error('  4. Check Ollama URL is correct:');
-    console.error(`     Current: ${OLLAMA_BASE_URL}`);
+    
+    if (PROVIDER === 'copilot' || PROVIDER === 'openai') {
+      console.error('  1. Check copilot-api is running:');
+      console.error('     curl http://localhost:4141/v1/models');
+      console.error('  2. Start copilot-api if needed:');
+      console.error('     copilot-api start');
+      console.error('  3. Check GitHub Copilot authentication:');
+      console.error('     gh auth status');
+      console.error(`  4. Verify URL is correct: ${BASE_URL}`);
+    } else {
+      console.error('  1. Check Ollama is running:');
+      console.error('     docker ps | grep ollama');
+      console.error('  2. Verify model is installed:');
+      console.error('     docker exec ollama_server ollama list');
+      console.error('  3. Pull the model if missing:');
+      console.error(`     docker exec ollama_server ollama pull ${MODEL}`);
+      console.error(`  4. Check URL is correct: ${BASE_URL}`);
+      console.error('');
+      console.error('  Or switch to Copilot (no TLS issues):');
+      console.error('     export MIMIR_EMBEDDINGS_PROVIDER=copilot');
+    }
     console.error('');
     process.exit(1);
   }

@@ -1,8 +1,11 @@
 /**
  * @file src/indexing/EmbeddingsService.ts
- * @description Vector embeddings service for Ollama
+ * @description Vector embeddings service supporting multiple providers
  * 
- * Supports generating embeddings for text content and semantic search.
+ * Supports:
+ * - Ollama (local models like nomic-embed-text)
+ * - OpenAI/Copilot (text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large)
+ * 
  * Feature flag controlled via LLM configuration.
  */
 
@@ -23,8 +26,10 @@ export interface TextChunk {
 export class EmbeddingsService {
   private configLoader: LLMConfigLoader;
   private enabled: boolean = false;
+  private provider: string = 'ollama';
   private baseUrl: string = 'http://localhost:11434';
   private model: string = 'nomic-embed-text';
+  private apiKey: string = 'dummy-key-not-used';
 
   constructor() {
     this.configLoader = LLMConfigLoader.getInstance();
@@ -43,6 +48,7 @@ export class EmbeddingsService {
     }
 
     this.enabled = true;
+    this.provider = config.provider;
     this.model = config.model;
     
     // Get provider base URL
@@ -50,6 +56,11 @@ export class EmbeddingsService {
     const providerConfig = llmConfig.providers[config.provider];
     if (providerConfig?.baseUrl) {
       this.baseUrl = providerConfig.baseUrl;
+    }
+    
+    // For OpenAI/Copilot, use dummy key (copilot-api handles auth)
+    if (this.provider === 'copilot' || this.provider === 'openai') {
+      this.apiKey = 'dummy-key-not-used';
     }
 
     console.log(`✅ Vector embeddings enabled: ${config.provider}/${config.model}`);
@@ -76,6 +87,17 @@ export class EmbeddingsService {
       throw new Error('Cannot generate embedding for empty text');
     }
 
+    if (this.provider === 'copilot' || this.provider === 'openai') {
+      return this.generateOpenAIEmbedding(text);
+    } else {
+      return this.generateOllamaEmbedding(text);
+    }
+  }
+
+  /**
+   * Generate embedding using Ollama
+   */
+  private async generateOllamaEmbedding(text: string): Promise<EmbeddingResult> {
     try {
       const response = await fetch(`${this.baseUrl}/api/embeddings`, {
         method: 'POST',
@@ -108,6 +130,55 @@ export class EmbeddingsService {
     } catch (error: any) {
       if (error.code === 'ECONNREFUSED') {
         throw new Error(`Cannot connect to Ollama at ${this.baseUrl}. Make sure Ollama is running.`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Generate embedding using OpenAI/Copilot API
+   */
+  private async generateOpenAIEmbedding(text: string): Promise<EmbeddingResult> {
+    try {
+      const response = await fetch(`${this.baseUrl}/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          input: text,
+          encoding_format: 'float',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenAI API error (${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
+        throw new Error('Invalid response from OpenAI: missing data array');
+      }
+
+      const embedding = data.data[0].embedding;
+      
+      if (!Array.isArray(embedding)) {
+        throw new Error('Invalid response from OpenAI: embedding is not an array');
+      }
+
+      return {
+        embedding: embedding,
+        dimensions: embedding.length,
+        model: this.model,
+      };
+
+    } catch (error: any) {
+      if (error.code === 'ECONNREFUSED') {
+        throw new Error(`Cannot connect to OpenAI API at ${this.baseUrl}. Make sure copilot-api is running.`);
       }
       throw error;
     }
@@ -228,13 +299,24 @@ export class EmbeddingsService {
   }
 
   /**
-   * Verify Ollama model is available
+   * Verify embedding model is available
    */
   async verifyModel(): Promise<boolean> {
     if (!this.enabled) {
       return false;
     }
 
+    if (this.provider === 'copilot' || this.provider === 'openai') {
+      return this.verifyOpenAIModel();
+    } else {
+      return this.verifyOllamaModel();
+    }
+  }
+
+  /**
+   * Verify Ollama model is available
+   */
+  private async verifyOllamaModel(): Promise<boolean> {
     try {
       const response = await fetch(`${this.baseUrl}/api/tags`);
       
@@ -256,6 +338,44 @@ export class EmbeddingsService {
 
     } catch (error) {
       console.error('Error verifying Ollama model:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Verify OpenAI/Copilot model is available
+   */
+  private async verifyOpenAIModel(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseUrl}/models`, {
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+      });
+      
+      if (!response.ok) {
+        console.warn(`⚠️  Cannot verify OpenAI model availability (${response.status})`);
+        console.warn(`   Make sure copilot-api is running: copilot-api start`);
+        return false;
+      }
+
+      const data = await response.json();
+      const models = data.data || [];
+      
+      // Check if model exists in available models
+      const modelExists = models.some((m: any) => 
+        m.id === this.model || m.id.includes(this.model)
+      );
+      
+      if (!modelExists) {
+        console.warn(`⚠️  Embeddings model '${this.model}' not found in available models`);
+        console.warn(`   Available embedding models: text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large`);
+      }
+
+      return modelExists;
+
+    } catch (error) {
+      console.error('Error verifying OpenAI model:', error);
       return false;
     }
   }

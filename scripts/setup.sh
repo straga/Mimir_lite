@@ -332,6 +332,61 @@ test_llm_connection() {
     fi
 }
 
+# Check if embeddings are enabled
+check_embeddings_config() {
+    # Check environment variables
+    if [[ "${MIMIR_EMBEDDINGS_ENABLED}" == "true" ]] || [[ "${MIMIR_FEATURE_VECTOR_EMBEDDINGS}" == "true" ]]; then
+        return 0
+    fi
+    
+    # Check .env file
+    if [[ -f ".env" ]]; then
+        if grep -q "^MIMIR_EMBEDDINGS_ENABLED=true" .env || grep -q "^MIMIR_FEATURE_VECTOR_EMBEDDINGS=true" .env; then
+            return 0
+        fi
+    fi
+    
+    # Check .mimir/llm-config.json
+    if [[ -f ".mimir/llm-config.json" ]]; then
+        if grep -q '"embeddings"[[:space:]]*:[[:space:]]*true' .mimir/llm-config.json || \
+           grep -q '"vectorEmbeddings"[[:space:]]*:[[:space:]]*true' .mimir/llm-config.json; then
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
+# Check if Ollama is needed (embeddings enabled AND provider is ollama)
+check_ollama_needed() {
+    # First check if embeddings are enabled
+    if ! check_embeddings_config; then
+        return 1
+    fi
+    
+    # Check embeddings provider
+    local provider="${MIMIR_EMBEDDINGS_PROVIDER:-copilot}"
+    
+    # Check .env file for provider
+    if [[ -f ".env" ]]; then
+        local env_provider=$(grep "^MIMIR_EMBEDDINGS_PROVIDER=" .env | cut -d= -f2)
+        if [[ -n "$env_provider" ]]; then
+            provider="$env_provider"
+        fi
+    fi
+    
+    # Check .mimir/llm-config.json for provider
+    if [[ -f ".mimir/llm-config.json" ]]; then
+        local json_provider=$(grep -o '"provider"[[:space:]]*:[[:space:]]*"[^"]*"' .mimir/llm-config.json | grep -o '"[^"]*"$' | tr -d '"' | head -1)
+        if [[ -n "$json_provider" ]]; then
+            provider="$json_provider"
+        fi
+    fi
+    
+    # Return 0 (true) if provider is ollama
+    [[ "$provider" == "ollama" ]]
+}
+
 # Start Docker services
 start_docker_services() {
     log_info "Starting Docker services..."
@@ -348,8 +403,19 @@ start_docker_services() {
         docker-compose down 2>/dev/null || true
     fi
     
+    # Check if Ollama is needed
+    local compose_args=""
+    if check_ollama_needed; then
+        log_info "Embeddings enabled with Ollama provider - starting Ollama service..."
+        compose_args="--profile ollama"
+    elif check_embeddings_config; then
+        log_info "Embeddings enabled with Copilot provider - skipping Ollama service"
+    else
+        log_info "Embeddings disabled - skipping Ollama service"
+    fi
+    
     # Start services
-    docker-compose up -d
+    docker-compose $compose_args up -d
     
     # Wait for Neo4j to be ready
     log_info "Waiting for Neo4j to be ready..."
@@ -367,6 +433,43 @@ start_docker_services() {
     
     if [[ $attempt -eq $max_attempts ]]; then
         log_warning "Neo4j may not be ready yet. Check with: curl http://localhost:7474"
+    fi
+    
+    # If Ollama is needed, wait for it and pull the embedding model
+    if check_ollama_needed; then
+        log_info "Waiting for Ollama to be ready..."
+        attempt=0
+        while [[ $attempt -lt $max_attempts ]]; do
+            if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+                log_success "Ollama is ready"
+                
+                # Pull the embedding model
+                local model="${MIMIR_EMBEDDINGS_MODEL:-nomic-embed-text}"
+                log_info "Pulling embedding model: $model..."
+                
+                # Try to pull the model
+                if docker exec ollama_server ollama pull "$model" > /tmp/ollama_pull.log 2>&1; then
+                    log_success "Embedding model '$model' ready"
+                else
+                    log_warning "Failed to pull model '$model'. You may need to pull it manually:"
+                    echo "  docker exec ollama_server ollama pull $model"
+                    echo ""
+                    echo "  If you have TLS certificate issues, consider using Copilot instead:"
+                    echo "  Set MIMIR_EMBEDDINGS_PROVIDER=copilot in .env"
+                    cat /tmp/ollama_pull.log 2>/dev/null || true
+                fi
+                rm -f /tmp/ollama_pull.log 2>/dev/null || true
+                break
+            fi
+            ((attempt++))
+            sleep 2
+        done
+        
+        if [[ $attempt -eq $max_attempts ]]; then
+            log_warning "Ollama may not be ready yet. Check with: curl http://localhost:11434/api/tags"
+        fi
+    elif check_embeddings_config; then
+        log_success "Using Copilot for embeddings - no Ollama setup needed"
     fi
     
     log_success "Docker services started"
@@ -455,7 +558,7 @@ main() {
     echo "║ Troubleshooting:                                             ║"
     echo "║ - Run 'npm run setup:verify' to check installation          ║"
     echo "║ - Check 'docker-compose logs' for service issues            ║"
-    echo "║ - Visit https://github.com/orneryd/GRAPH-RAG-TODO/docs      ║"
+    echo "║ - Visit https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/docs      ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }

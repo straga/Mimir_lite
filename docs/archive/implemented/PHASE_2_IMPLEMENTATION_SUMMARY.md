@@ -74,16 +74,6 @@ Worker retries with augmented context:
 - Focused remediation plan
 - Trimmed context (not full 762K token history)
 
-### 4. Legacy Task Support (NEW)
-
-**Location**: `src/orchestrator/task-executor.ts` - `executeTaskLegacy()`
-
-Tasks without QC verification now:
-- Log warnings when thresholds exceeded
-- Recommend adding QC for future runs
-- Continue execution (backward compatible)
-- Store metadata for analysis
-
 ### 5. Graph Storage (NEW)
 
 **Circuit breaker data stored**:
@@ -124,11 +114,6 @@ Tasks without QC verification now:
    - Triggers QC analysis on hard limit
    - Retries with remediation guidance
    - Skips normal QC if circuit breaker triggered
-
-2. **`executeTaskLegacy()` - Legacy execution**
-   - Added warning logging
-   - Recommends QC for future runs
-   - Backward compatible
 
 ### Updated Interfaces
 

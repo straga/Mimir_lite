@@ -124,7 +124,8 @@ export class GraphManager implements IGraphManager {
   async addNode(type: NodeType, properties: Record<string, any>): Promise<Node> {
     const session = this.driver.session();
     try {
-      const id = `${type}-${++this.nodeCounter}-${Date.now()}`;
+      // Use provided ID if present, otherwise generate one
+      const id = properties.id || `${type}-${++this.nodeCounter}-${Date.now()}`;
       const now = new Date().toISOString();
 
       // Flatten properties into the node (Neo4j doesn't support nested objects)

@@ -18,7 +18,7 @@ tools: ['edit', 'search', 'new', 'runCommands', 'fetch', 'mcp_Mimir-RAG-TODO-MCP
 **RULE #1: YOU RESEARCH FIRST, THEN WRITE CONTEXT-AWARE PROMPT**
 
 YOU do research BEFORE creating the prompt (not the user, not the execution agent):
-1. Read local files (`read_file`): README, package.json, docs/
+1. Read local files (`read_file`): README, dependency manifests, docs/
 2. Search web (`web_search`): Official docs, best practices, examples
 3. Document findings + assumptions in output
 4. Incorporate into the prompt you create
@@ -27,13 +27,13 @@ Priority: Local files > Official docs > Best practices > Examples
 
 **Example CORRECT**:
 ```
-[YOU read package.json → React 18.2.0]
-[YOU create prompt: "For React 18+, use Zustand..."]
+[YOU read dependency manifest → {Framework} v{X.Y.Z}]
+[YOU create prompt: "For {Framework} v{X}+, use {recommended-pattern}..."]
 ```
 
 **Example WRONG**:
 ```
-[YOU tell user: "Check package.json for React version"]
+[YOU tell user: "Check dependency manifest for {framework} version"]
 ```
 
 **RULE #2: NO PERMISSION-SEEKING**
@@ -57,7 +57,7 @@ Every prompt MUST include:
 
 **RULE #5: USE CONCRETE VALUES, NOT PLACEHOLDERS**
 ❌ WRONG: "Create file [NAME]"
-✅ CORRECT: "Create file api.ts at src/services/api.ts"
+✅ CORRECT: "Create file {concrete-name}.{ext} at {concrete-path}/{concrete-name}.{ext}"
 
 Research to find conventions, patterns, examples. Fill template tables with at least one real example.
 
@@ -238,15 +238,15 @@ Maintain consistent [CONSISTENCY_ASPECT] patterns
 - Document: "Queried graph for X, found Y (status: Z)"
 
 **Step 1: Check Local Files** (`read_file` tool)
-- README.md → Project overview, conventions
-- package.json / requirements.txt → Dependencies, versions
-- CONTRIBUTING.md, .github/, docs/ → Standards, architecture
+- README → Project overview, conventions
+- Dependency manifests → Dependencies, versions
+- Contributing guides, docs/ → Standards, architecture
 - Document: "Checked X, found Y"
 
 **Step 2: Research External** (`web_search` tool)
 - Official documentation for frameworks/libraries
-- Best practices (2024-2025 sources)
-- Examples (GitHub, Stack Overflow)
+- Best practices (current year sources)
+- Examples (code repositories, community forums)
 - Document: "Searched X, found Y"
 
 **Step 3: State Assumptions**
@@ -326,7 +326,7 @@ Optional (only if user asks): What Changed, Patterns Applied
 [Concrete code examples]
 
 ## COMMON PITFALLS
-[From Stack Overflow/research]
+[From community research/documentation]
 
 ## VERIFICATION
 [Commands to verify success]
@@ -417,10 +417,10 @@ Before delivering, verify:
 ✅ **Correct**: Research and infer, include by default
 
 ❌ **Placeholders**: "[NAME]", "[PATH]", "[COMMAND]"
-✅ **Correct**: "api.ts", "src/services/", "npm test"
+✅ **Correct**: "{concrete-file}.{ext}", "{concrete-path}/", "{concrete-test-command}"
 
 ❌ **Vague**: "Add validation", "Follow best practices"
-✅ **Correct**: "Use Zod schema validation on request body", "Follow Express best practice: [specific pattern]"
+✅ **Correct**: "Use {validation-library} schema validation on {input-type}", "Follow {framework} best practice: {specific-pattern}"
 
 ❌ **Incomplete**: Only prompt without research or criteria
 ✅ **Correct**: 4 core sections (Prompt + Summary + Research + Criteria)

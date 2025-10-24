@@ -4,15 +4,15 @@ import { parseChainOutput, type TaskDefinition } from '../src/orchestrator/task-
 describe('parseChainOutput', () => {
   it('should parse a single task with <details> block', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend engineer with expertise in Node.js and TypeScript.
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <details>
 <summary>Click to expand</summary>
 
@@ -28,10 +28,10 @@ Deliver working code.
 </prompt>
 </details>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 2-3 hours
 `;
 
@@ -53,25 +53,25 @@ None
 
   it('should parse a task without <details> block', () => {
     const markdown = `
-### Task ID: task-2.1
+**Task ID:** task-2.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Frontend developer with React expertise.
 
-#### **Recommended Model**
+**Recommended Model:**
 Claude Sonnet 4
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 # Build Login Component
 
 Create a login form with email and password fields.
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 task-1.1
 
-#### **Estimated Duration**
+**Estimated Duration:**
 1-2 hours
 `;
 
@@ -89,44 +89,44 @@ task-1.1
 
   it('should parse multiple tasks', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend architect.
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Design the system.
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 3 hours
 
 ---
 
-### Task ID: task-1.2
+**Task ID:** task-1.2
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Database engineer.
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Create schema.
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 task-1.1
 
-#### **Estimated Duration**
+**Estimated Duration:**
 2 hours
 `;
 
@@ -140,23 +140,23 @@ task-1.1
 
   it('should parse tasks with multiple dependencies', () => {
     const markdown = `
-### Task ID: task-3.1
+**Task ID:** task-3.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Integration specialist.
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Integrate components.
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 task-1.1, task-2.1, task-2.2
 
-#### **Estimated Duration**
+**Estimated Duration:**
 4 hours
 `;
 
@@ -168,50 +168,50 @@ task-1.1, task-2.1, task-2.2
 
   it('should parse tasks with parallel groups', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Parallel Group**
+**Parallel Group:**
 1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend developer A.
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Implement feature A.
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 2 hours
 
 ---
 
-### Task ID: task-1.2
+**Task ID:** task-1.2
 
-#### **Parallel Group**
+**Parallel Group:**
 1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend developer B.
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Implement feature B.
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 2 hours
 `;
 
@@ -224,23 +224,23 @@ None
 
   it('should handle "none" dependencies case-insensitively', () => {
     const markdownLower = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Developer.
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Task
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 none
 
-#### **Estimated Duration**
+**Estimated Duration:**
 1 hour
 `;
 
@@ -267,15 +267,15 @@ This doesn't match the expected format at all.
 
   it('should handle tasks with complex multi-line prompts', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Full-stack developer.
 
-#### **Recommended Model**
+**Recommended Model:**
 Claude Sonnet 4
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <details>
 <summary>Click to expand</summary>
 
@@ -304,10 +304,10 @@ Before starting, verify these:
 </prompt>
 </details>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 4-6 hours
 `;
 
@@ -321,23 +321,23 @@ None
 
   it('should trim whitespace from all fields', () => {
     const markdown = `
-### Task ID:    task-1.1   
+**Task ID:**    task-1.1   
 
-#### **Agent Role Description**
+**Agent Role Description:**
    Backend developer with lots of spaces.   
 
-#### **Recommended Model**
+**Recommended Model:**
    GPT-4.1   
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Task with spaces
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
    task-0.1  ,  task-0.2  
 
-#### **Estimated Duration**
+**Estimated Duration:**
    2 hours   
 `;
 
@@ -353,33 +353,33 @@ Task with spaces
 
   it('should extract QC Agent Role', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend developer with Node.js expertise
 
-#### **Recommended Model**
+**Recommended Model:**
 Claude Sonnet 4
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Build a REST API
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 2 hours
 
-#### **QC Agent Role**
+**QC Agent Role:**
 Senior QA engineer with API testing expertise and security auditing experience
 
-#### **Verification Criteria**
+**Verification Criteria:**
 Security:
 - [ ] No hardcoded credentials
 
-#### **Max Retries**
+**Max Retries:**
 2
 `;
 
@@ -394,29 +394,29 @@ Security:
 
   it('should extract Verification Criteria with multiple sections', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend developer
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Build API
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 1 hour
 
-#### **QC Agent Role**
+**QC Agent Role:**
 QA Engineer
 
-#### **Verification Criteria**
+**Verification Criteria:**
 Security:
 - [ ] No hardcoded credentials
 - [ ] All endpoints authenticated
@@ -424,7 +424,7 @@ Security:
 Functionality:
 - [ ] All CRUD operations implemented
 
-#### **Max Retries**
+**Max Retries:**
 3
 `;
 
@@ -440,32 +440,32 @@ Functionality:
 
   it('should extract Max Retries as number', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend developer
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Build API
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 1 hour
 
-#### **QC Agent Role**
+**QC Agent Role:**
 QA Engineer
 
-#### **Verification Criteria**
+**Verification Criteria:**
 - [ ] Test 1
 
-#### **Max Retries**
+**Max Retries:**
 3
 `;
 
@@ -479,23 +479,23 @@ QA Engineer
 
   it('should default maxRetries to 2 when not specified', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend developer
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Build API
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 1 hour
 `;
 
@@ -508,23 +508,23 @@ None
 
   it('should handle tasks without QC fields (legacy format)', () => {
     const markdown = `
-### Task ID: task-1.1
+**Task ID:** task-1.1
 
-#### **Agent Role Description**
+**Agent Role Description:**
 Backend developer
 
-#### **Recommended Model**
+**Recommended Model:**
 GPT-4.1
 
-#### **Optimized Prompt**
+**Optimized Prompt:**
 <prompt>
 Build API
 </prompt>
 
-#### **Dependencies**
+**Dependencies:**
 None
 
-#### **Estimated Duration**
+**Estimated Duration:**
 1 hour
 `;
 
