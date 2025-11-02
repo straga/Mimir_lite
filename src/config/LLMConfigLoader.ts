@@ -20,6 +20,7 @@ export interface ModelConfig {
     output: number;
   };
   warnings?: string[];
+  supportsTools?: boolean; // NEW: Does this model support function/tool calling?
 }
 
 export interface ProviderConfig {

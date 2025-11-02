@@ -32,3 +32,5 @@ applyTo: '**'
 - **LangChain Migration**: Use @langchain/langgraph for agent creation (not langchain/agents)
 - **Docker Issues**: Remove version field from docker-compose.yml (deprecated)
 - **Global CLIs**: Use npm link for global command installation
+- **Factorial Implementation**: Recursive function with error handling for negative inputs
+- **Test Coverage**: Vitest tests for edge cases (n=0, n=1, n=5, negative input)

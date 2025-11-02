@@ -17,27 +17,247 @@
       }
     },
     "ollama": {
-      "baseUrl": "http://localhost:11434",
-      "defaultModel": "gpt-oss",
+      "baseUrl": "http://192.168.1.167:11434",
+      "defaultModel": "deepseek-r1:14b",
       "models": {
-        "gpt-oss": {
-          "name": "gpt-oss",
-          "contextWindow": 32768,
-          "description": "Open-source GPT model (13B params), good balance of quality and speed",
+        "mistral-nemo:12b": {
+          "name": "mistral-nemo:12b",
+          "contextWindow": 128000,
+          "description": "Mistral Nemo 12B - high quality model with large context",
           "recommendedFor": ["pm", "worker", "qc"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 128000,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "deepseek-r1:14b": {
+          "name": "deepseek-r1:14b",
+          "contextWindow": 32768,
+          "description": "DeepSeek R1 14B - reasoning-focused model",
+          "recommendedFor": ["pm", "qc"],
+          "supportsTools": true,
           "config": {
             "numCtx": 32768,
             "temperature": 0.0,
             "numPredict": -1
           }
         },
-        "tinyllama": {
-          "name": "tinyllama",
+        "deepseek-r1:8b": {
+          "name": "deepseek-r1:8b",
+          "contextWindow": 32768,
+          "description": "DeepSeek R1 8B - faster reasoning model",
+          "recommendedFor": ["worker", "qc"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 32768,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "qwen2.5-coder:14b": {
+          "name": "qwen2.5-coder:14b",
+          "contextWindow": 32768,
+          "description": "Qwen 2.5 Coder 14B - specialized coding model",
+          "recommendedFor": ["worker"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 32768,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "deepcoder:14b": {
+          "name": "deepcoder:14b",
+          "contextWindow": 32768,
+          "description": "DeepCoder 14B - coding-focused model",
+          "recommendedFor": ["worker"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 32768,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "deepseek-coder:6.7b": {
+          "name": "deepseek-coder:6.7b",
+          "contextWindow": 16384,
+          "description": "DeepSeek Coder 6.7B - compact coding model (NO TOOL SUPPORT)",
+          "recommendedFor": ["worker", "testing"],
+          "supportsTools": false,
+          "config": {
+            "numCtx": 16384,
+            "temperature": 0.0,
+            "numPredict": -1
+          },
+          "warnings": ["This model does not support tool calling"]
+        },
+        "deepseek-coder-v2:16b": {
+          "name": "deepseek-coder-v2:16b",
+          "contextWindow": 16384,
+          "description": "DeepSeek Coder V2 16B - advanced coding model (NO TOOL SUPPORT)",
+          "recommendedFor": ["worker"],
+          "supportsTools": false,
+          "config": {
+            "numCtx": 16384,
+            "temperature": 0.0,
+            "numPredict": -1
+          },
+          "warnings": ["This model does not support tool calling"]
+        },
+        "qwen2.5-coder:1.5b-base": {
+          "name": "qwen2.5-coder:1.5b-base",
           "contextWindow": 8192,
-          "description": "1.1B params, very fast inference (backup/testing only)",
+          "description": "Qwen 2.5 Coder 1.5B Base - tiny coding model for testing",
           "recommendedFor": ["testing"],
+          "supportsTools": true,
           "config": {
             "numCtx": 8192,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "qwen3-coder:latest": {
+          "name": "qwen3-coder:latest",
+          "contextWindow": 32768,
+          "description": "Qwen 3 Coder (30.5B MoE) - large coding model",
+          "recommendedFor": ["pm", "worker"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 32768,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "exaone-deep:7.8b": {
+          "name": "exaone-deep:7.8b",
+          "contextWindow": 16384,
+          "description": "Exaone Deep 7.8B - specialized model",
+          "recommendedFor": ["worker"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 16384,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "sskostyaev/virtuoso-small:q6_k_l": {
+          "name": "sskostyaev/virtuoso-small:q6_k_l",
+          "contextWindow": 32768,
+          "description": "Virtuoso Small 14.8B Q6_K - high quality quantization",
+          "recommendedFor": ["worker"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 32768,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "phi4:14b": {
+          "name": "phi4:14b",
+          "contextWindow": 16384,
+          "description": "Phi-4 14B - Microsoft's efficient model",
+          "recommendedFor": ["worker", "qc"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 16384,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "phi4-reasoning:14b": {
+          "name": "phi4-reasoning:14b",
+          "contextWindow": 16384,
+          "description": "Phi-4 Reasoning 14B - reasoning variant",
+          "recommendedFor": ["pm", "qc"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 16384,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "qwen3:14b": {
+          "name": "qwen3:14b",
+          "contextWindow": 32768,
+          "description": "Qwen 3 14B - general purpose model",
+          "recommendedFor": ["pm", "worker"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 32768,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "qwen3:8b": {
+          "name": "qwen3:8b",
+          "contextWindow": 32768,
+          "description": "Qwen 3 8B - balanced speed/quality",
+          "recommendedFor": ["worker"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 32768,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "gemma3:12b": {
+          "name": "gemma3:12b",
+          "contextWindow": 8192,
+          "description": "Gemma 3 12B - Google's efficient model",
+          "recommendedFor": ["worker"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 8192,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "gemma3:4b": {
+          "name": "gemma3:4b",
+          "contextWindow": 8192,
+          "description": "Gemma 3 4B - fast lightweight model",
+          "recommendedFor": ["testing"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 8192,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "phi4-mini:3.8b": {
+          "name": "phi4-mini:3.8b",
+          "contextWindow": 8192,
+          "description": "Phi-4 Mini 3.8B - compact efficient model",
+          "recommendedFor": ["testing"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 8192,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "deepcoder:1.5b": {
+          "name": "deepcoder:1.5b",
+          "contextWindow": 8192,
+          "description": "DeepCoder 1.5B - tiny coding model for testing",
+          "recommendedFor": ["testing"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 8192,
+            "temperature": 0.0,
+            "numPredict": -1
+          }
+        },
+        "gpt-oss:20b": {
+          "name": "gpt-oss:20b",
+          "contextWindow": 32768,
+          "description": "GPT-OSS 20B - large open-source model",
+          "recommendedFor": ["pm"],
+          "supportsTools": true,
+          "config": {
+            "numCtx": 32768,
             "temperature": 0.0,
             "numPredict": -1
           }

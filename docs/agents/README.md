@@ -4,7 +4,145 @@ This directory contains AI agent configuration files for specialized workflows i
 
 ---
 
+## 📁 Agent Selection Guide
+
+### By Model Size
+
+**For 2-4B Parameter Models (Quantized):**
+- **[claudette-quantized.md](./claudette-quantized.md)** (v1.0.0) - Optimized for Qwen-1.8B/7B-Int4, Phi-3-mini, Gemma 2B-7B
+  - 33% token reduction from full version
+  - All instructions preserved
+  - See [CLAUDETTE_QUANTIZED_OPTIMIZATION.md](./CLAUDETTE_QUANTIZED_OPTIMIZATION.md) for details
+
+**For 7B+ Parameter Models:**
+- **[claudette-auto.md](./claudette-auto.md)** (v5.2.1) - Full autonomous execution mode
+- **[claudette-condensed.md](./claudette-condensed.md)** - Token-efficient version
+- **[claudette.md](./claudette.md)** - Universal abstract version (domain-agnostic)
+
+**For Multi-Agent Orchestration:**
+- **[v2/01-pm-preamble.md](./v2/01-pm-preamble.md)** (v2.0) - PM agent for planning
+- **[v2/00-ecko-preamble.md](./v2/00-ecko-preamble.md)** (v2.0) - Prompt architect
+- **[v2/templates/worker-template.md](./v2/templates/worker-template.md)** - Worker agent template
+- **[v2/templates/qc-template.md](./v2/templates/qc-template.md)** - QC agent template
+
+### By Task Type
+
+**Autonomous Coding (End-to-End):**
+- [claudette-auto.md](./claudette-auto.md) - Full autonomy, memory management, TODO tracking
+- [claudette-quantized.md](./claudette-quantized.md) - Same as above, optimized for small models
+
+**Debugging (Root Cause Analysis):**
+- [claudette-debug.md](./claudette-debug.md) (v1.3.1) - Find bugs with evidence, don't fix them
+
+**Project Planning:**
+- [v2/01-pm-preamble.md](./v2/01-pm-preamble.md) - Research, task breakdown, dependency mapping
+
+**Prompt Design:**
+- [v2/00-ecko-preamble.md](./v2/00-ecko-preamble.md) - Create optimized agent preambles
+- [v2/02-agentinator-preamble.md](./v2/02-agentinator-preamble.md) - Generate new agent preambles
+
+**Universal/Abstract:**
+- [claudette.md](./claudette.md) - Domain-agnostic version for any task type
+
+---
+
+## 🆕 Quantized Model Support (NEW)
+
+### Claudette Quantized v1.0.0
+
+**Optimized for 2-4B parameter quantized models** without losing any instructions from the full version.
+
+**Target Models:**
+- Qwen-1.8B / Qwen-7B-Chat-Int4 / Qwen-7B-Chat-Int8
+- Phi-3-mini (3.8B)
+- Gemma 2B / Gemma 7B (quantized)
+
+**Key Improvements:**
+- 33% token reduction (4,500 → 3,000 tokens)
+- Shorter sentences (15-20 words vs 25+)
+- Front-loaded critical instructions
+- Consistent formatting throughout
+- Flattened logic hierarchy
+- Zero instruction loss
+
+**Documentation:**
+- **[claudette-quantized.md](./claudette-quantized.md)** - Optimized preamble
+- **[CLAUDETTE_QUANTIZED_OPTIMIZATION.md](./CLAUDETTE_QUANTIZED_OPTIMIZATION.md)** - Optimization strategies
+- **[CLAUDETTE_QUANTIZED_COMPARISON.md](./CLAUDETTE_QUANTIZED_COMPARISON.md)** - Side-by-side examples
+- **[CLAUDETTE_QUANTIZED_RESEARCH_SUMMARY.md](./CLAUDETTE_QUANTIZED_RESEARCH_SUMMARY.md)** - Research findings
+
+**When to Use:**
+- Local inference on consumer hardware
+- Edge deployments with limited memory
+- Faster inference needs
+- Budget-constrained deployments
+
+**When NOT to Use:**
+- 14B+ models (use original claudette-auto.md)
+- Cloud API deployments with large context windows
+- When maximum verbosity helpful for complex tasks
+
+---
+
 ## 📁 Available Agents
+
+### 🚀 [claudette-quantized.md](./claudette-quantized.md) (v1.0.0) ⚡ NEW
+
+**Autonomous Coding Agent (Optimized for Small Models)** - All features of claudette-auto.md with 33% fewer tokens.
+
+**When to Use**:
+- Qwen-1.8B, Qwen-7B-Int4/Int8
+- Phi-3-mini (3.8B parameters)
+- Gemma 2B-7B (quantized)
+- Local inference on limited hardware
+
+**Key Features**:
+- All claudette-auto.md behaviors preserved
+- Shorter sentences (15-20 words)
+- Front-loaded critical instructions
+- Consistent formatting
+- Memory management (.agents/memory.instruction.md)
+- TODO tracking & context maintenance
+- Autonomous execution
+
+**Performance**: Expected >95% parity with claudette-auto.md on 7B-Int4 models
+
+**Quick Start**:
+```
+Prompt: "Fix the login bug in src/auth.ts"
+[Agent creates memory, analyzes repo, implements fix autonomously]
+```
+
+---
+
+### 🤖 [claudette-auto.md](./claudette-auto.md) (v5.2.1)
+
+**Enterprise Autonomous Coding Agent** - Full-featured version for 7B+ models.
+
+**When to Use**:
+- Qwen-14B+, GPT-4, Claude Sonnet
+- Full-precision models (FP16, BF16)
+- Complex multi-file projects
+- When maximum context helpful
+
+**Key Features**:
+- Memory management protocol
+- 3-phase execution (analysis, planning, implementation)
+- Repository conservation rules
+- TODO tracking & segue management
+- Error debugging protocols
+- Failure recovery & cleanup
+- Autonomous operation principles
+
+**Performance**: Proven in production use
+
+**Quick Start**:
+```
+Prompt: "Implement OAuth authentication with Google"
+[Agent researches, plans, implements, tests autonomously]
+```
+
+---
 
 ### 🔍 [claudette-debug.md](./claudette-debug.md) (v1.3.1)
 

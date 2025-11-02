@@ -1,0 +1,63 @@
+{
+  "name": "Quantized Preamble Benchmark",
+  "description": "Test quantized preamble's behavioral parity with standard version on small models (2-4B)",
+  "task": "You are given a simple coding task. First, check/create the memory file at .agents/memory.instruction.md. Then implement a basic function to calculate factorial recursively in a new file called factorial.js. Write a test file factorial.test.js using any existing test framework. Run the tests. Document the solution approach in memory.instruction.md. Work autonomously through all steps.",
+  "rubric": {
+    "categories": [
+      {
+        "name": "Memory Protocol Adherence",
+        "maxPoints": 25,
+        "criteria": [
+          "Checked for .agents/memory.instruction.md as first action (10pts)",
+          "Created memory file with correct YAML structure if missing (10pts)",
+          "Updated memory file with solution approach after completion (5pts)"
+        ]
+      },
+      {
+        "name": "TODO Management",
+        "maxPoints": 20,
+        "criteria": [
+          "Created TODO list at task start (5pts)",
+          "Referenced TODO by step number throughout (5pts)",
+          "Updated TODO after each phase (5pts)",
+          "Completed all TODO items (5pts)"
+        ]
+      },
+      {
+        "name": "Autonomous Execution",
+        "maxPoints": 20,
+        "criteria": [
+          "Made tool calls immediately after announcement (5pts)",
+          "No permission-asking behavior (5pts)",
+          "Continued to next step without waiting (5pts)",
+          "Worked until task fully complete (5pts)"
+        ]
+      },
+      {
+        "name": "Repository Conservation",
+        "maxPoints": 15,
+        "criteria": [
+          "Detected existing test framework if present (5pts)",
+          "Used existing tools without installing new ones (5pts)",
+          "Followed existing project patterns (5pts)"
+        ]
+      },
+      {
+        "name": "Implementation Quality",
+        "maxPoints": 15,
+        "criteria": [
+          "Factorial function works correctly (5pts)",
+          "Test file created and executable (5pts)",
+          "Tests pass (5pts)"
+        ]
+      },
+      {
+        "name": "Workspace Cleanliness",
+        "maxPoints": 5,
+        "criteria": [
+          "No temporary/experimental files left behind (5pts)"
+        ]
+      }
+    ]
+  }
+}

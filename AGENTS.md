@@ -110,8 +110,17 @@ This repository contains **Mimir** - a production-ready MCP (Model Context Proto
 - **[worker-template.md](docs/agents/v2/templates/worker-template.md)** - Worker agent template
 - **[qc-template.md](docs/agents/v2/templates/qc-template.md)** - QC agent template
 
+**Quantized Model Optimizations (2-4B parameters):**
+- **[claudette-quantized.md](docs/agents/claudette-quantized.md)** - ⚡ **NEW:** Optimized for Qwen-1.8B/7B-Int4, Phi-3-mini, Gemma 2B-7B (v1.0.0)
+- **[CLAUDETTE_QUANTIZED_OPTIMIZATION.md](docs/agents/CLAUDETTE_QUANTIZED_OPTIMIZATION.md)** - Optimization strategies & token reduction analysis
+- **[CLAUDETTE_QUANTIZED_COMPARISON.md](docs/agents/CLAUDETTE_QUANTIZED_COMPARISON.md)** - Side-by-side examples of optimizations
+
+**Standard Preambles (7B+ models):**
+- **[claudette-auto.md](docs/agents/claudette-auto.md)** - Autonomous execution mode (v5.2.1) - Use for 7B+ models
+- **[claudette.md](docs/agents/claudette.md)** - Universal abstract version (domain-agnostic)
+- **[claudette-condensed.md](docs/agents/claudette-condensed.md)** - Token-efficient version
+
 **Legacy v1 (Archived):**
-- **[claudette-auto.md](docs/agents/claudette-auto.md)** - Autonomous execution mode (v5.2.1)
 - **[claudette-pm.md](docs/agents/claudette-pm.md)** - Old PM agent (superseded by v2)
 - **[claudette-ecko.md](docs/agents/claudette-ecko.md)** - Old Ecko (superseded by v2)
 - **[claudette-agentinator.md](docs/agents/claudette-agentinator.md)** - Old Agentinator (superseded by v2)

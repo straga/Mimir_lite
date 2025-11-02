@@ -223,15 +223,15 @@ Start by using read_file to read AGENTS.md, then use run_terminal_cmd to run tes
     console.log(`🔍 Tools count: ${this.tools.length}`);
     console.log(`🔍 System prompt length: ${enhancedSystemPrompt.length} chars`);
     
-    // // Test if LLM is actually functional before creating agent
-    // console.log(`🔍 Testing LLM with simple ping...`);
-    // try {
-    //   const testResult = await this.llm.invoke([new HumanMessage('ping')]);
-    //   console.log(`✅ LLM test successful: ${testResult.content.toString().substring(0, 50)}`);
-    // } catch (error: any) {
-    //   console.error(`❌ LLM test FAILED:`, error?.message || error);
-    //   throw error;
-    // }
+    // Check if tools are disabled (empty array = no agent mode)
+    if (this.tools.length === 0) {
+      console.log('⚠️  No tools provided - agent mode disabled, using direct LLM invocation');
+      this.agent = null; // Will use direct LLM.invoke() in execute()
+      const ctxWindow = await this.getContextWindow();
+      console.log('✅ Direct LLM mode initialized (no tool calling)');
+      console.log(`📊 Context: ${ctxWindow.toLocaleString()} tokens`);
+      return;
+    }
     
     // Create React agent using the LangGraph API
     // NOTE: Message trimming must be handled at the invoke() level, not here
@@ -544,15 +544,61 @@ CONCISE SUMMARY:`;
       duration: number;
     };
   }> {
-    if (!this.agent) {
-      throw new Error('Agent not initialized. Call loadPreamble() first.');
+    if (!this.llm) {
+      throw new Error('LLM not initialized. Call loadPreamble() first.');
     }
 
-    console.log('\n🚀 Starting agent execution...\n');
+    console.log('\n🚀 Starting execution...\n');
     console.log(`🔍 Provider: ${this.provider}, Model: ${this.modelName}, BaseURL: ${this.baseURL}`);
     console.log(`🔍 Task length: ${task.length} chars\n`);
 
     const startTime = Date.now();
+    
+    // Direct LLM mode (no agent/tools)
+    if (!this.agent) {
+      console.log('📤 Invoking LLM directly (no tool calling)...');
+      
+      const messages = [
+        new SystemMessage(this.systemPrompt),
+        new HumanMessage(task),
+      ];
+      
+      const response = await this.llm.invoke(messages);
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      
+      console.log(`\n✅ LLM completed in ${duration}s\n`);
+      
+      const output = response.content.toString();
+      
+      // Count tokens (approximate)
+      const inputTokens = Math.ceil((this.systemPrompt.length + task.length) / 4);
+      const outputTokens = Math.ceil(output.length / 4);
+      
+      return {
+        output,
+        toolCalls: 0,
+        tokens: {
+          input: inputTokens,
+          output: outputTokens,
+        },
+        conversationHistory: [
+          { role: 'system', content: this.systemPrompt },
+          { role: 'user', content: task },
+          { role: 'assistant', content: output },
+        ],
+        intermediateSteps: [],
+        metadata: {
+          toolCallCount: 0,
+          messageCount: 3, // system + user + assistant
+          estimatedContextTokens: inputTokens + outputTokens,
+          qcRecommended: false,
+          circuitBreakerTriggered: false,
+          duration: parseFloat(duration),
+        },
+      };
+    }
+    
+    // Agent mode (with tools)
     const maxRetries = 2; // Allow 2 retries for malformed tool calls
     
     try {
