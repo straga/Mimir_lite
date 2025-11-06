@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:docker": "npm run build && VERSION=$(node -p \"require('./package.json').version\") docker-compose build mcp-server",
+    "build:docker": "npm run build && node ./scripts/build-docker.js",
     "docker:up": "VERSION=$(node -p \"require('./package.json').version\") HOST_WORKSPACE_ROOT=$(cd ~/src && pwd) docker-compose up -d",
     "docker:down": "docker-compose down",
     "docker:restart": "npm run docker:down && npm run docker:up",

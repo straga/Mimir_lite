@@ -8,12 +8,13 @@
 import { Driver } from 'neo4j-driver';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { EmbeddingsService } from './EmbeddingsService.js';
+import { EmbeddingsService, ChunkEmbeddingResult } from './EmbeddingsService.js';
 
 export interface IndexResult {
   file_node_id: string;
   path: string;
   size_bytes: number;
+  chunks_created?: number;
 }
 
 export class FileIndexer {
@@ -35,7 +36,8 @@ export class FileIndexer {
   }
 
   /**
-   * Index a single file with optional embeddings
+   * Index a single file with optional embeddings (Industry Standard: Separate Chunks)
+   * Creates File node + FileChunk nodes with individual embeddings
    */
   async indexFile(filePath: string, rootPath: string, generateEmbeddings: boolean = false): Promise<IndexResult> {
     const session = this.driver.session();
@@ -48,129 +50,123 @@ export class FileIndexer {
       const extension = path.extname(filePath);
       const language = this.detectLanguage(filePath);
       
-      // Check if file already has embeddings
-      let hasExistingEmbedding = false;
+      // Check if file already has chunks
+      let hasExistingChunks = false;
       if (generateEmbeddings) {
         const checkResult = await session.run(
-          'MATCH (f:File {path: $path}) RETURN f.has_embedding AS has_embedding, f.last_modified AS last_modified',
+          `MATCH (f:File {path: $path})-[:HAS_CHUNK]->(c:FileChunk)
+           RETURN count(c) AS chunk_count, f.last_modified AS last_modified`,
           { path: relativePath }
         );
         
         if (checkResult.records.length > 0) {
-          hasExistingEmbedding = checkResult.records[0].get('has_embedding') === true;
+          const chunkCount = checkResult.records[0].get('chunk_count').toNumber();
+          hasExistingChunks = chunkCount > 0;
           const existingModified = checkResult.records[0].get('last_modified');
           
           // Re-generate if file was modified
-          if (hasExistingEmbedding && existingModified) {
+          if (hasExistingChunks && existingModified) {
             const existingModifiedDate = new Date(existingModified);
             if (stats.mtime > existingModifiedDate) {
-              console.log(`📝 File modified, regenerating embedding: ${relativePath}`);
-              hasExistingEmbedding = false;
+              console.log(`📝 File modified, regenerating chunks: ${relativePath}`);
+              hasExistingChunks = false;
+              
+              // Delete old chunks
+              await session.run(
+                `MATCH (f:File {path: $path})-[:HAS_CHUNK]->(c:FileChunk)
+                 DETACH DELETE c`,
+                { path: relativePath }
+              );
             }
           }
         }
       }
       
-      // Generate embeddings if enabled and not already present
-      let embeddingData: any = null;
-      if (generateEmbeddings && !hasExistingEmbedding) {
-        await this.initEmbeddings();
-        if (this.embeddingsService.isEnabled()) {
-          try {
-            // Generate embedding for entire file content
-            const embedding = await this.embeddingsService.generateEmbedding(content);
-            embeddingData = {
-              embedding: embedding.embedding,
-              dimensions: embedding.dimensions,
-              model: embedding.model,
-            };
-          } catch (error: any) {
-            console.warn(`⚠️  Failed to generate embedding for ${relativePath}: ${error.message}`);
-          }
-        }
-      } else if (generateEmbeddings && hasExistingEmbedding) {
-        console.log(`⏭️  Skipping embedding (already exists): ${relativePath}`);
-      }
-
-      // Create File node in Neo4j with optional embedding
-      const cypher = embeddingData 
-        ? `
-          MERGE (f:File:Node {path: $path})
-          SET 
-            f.absolute_path = $absolute_path,
-            f.name = $name,
-            f.extension = $extension,
-            f.content = $content,
-            f.language = $language,
-            f.size_bytes = $size_bytes,
-            f.line_count = $line_count,
-            f.last_modified = $last_modified,
-            f.indexed_date = datetime(),
-            f.type = 'file',
-            f.embedding = $embedding,
-            f.embedding_dimensions = $embedding_dimensions,
-            f.embedding_model = $embedding_model,
-            f.has_embedding = true
-          RETURN f.path AS path, f.size_bytes AS size_bytes, id(f) AS node_id
-        `
-        : hasExistingEmbedding
-        ? `
-          MERGE (f:File:Node {path: $path})
-          SET 
-            f.absolute_path = $absolute_path,
-            f.name = $name,
-            f.extension = $extension,
-            f.content = $content,
-            f.language = $language,
-            f.size_bytes = $size_bytes,
-            f.line_count = $line_count,
-            f.last_modified = $last_modified,
-            f.indexed_date = datetime(),
-            f.type = 'file'
-          RETURN f.path AS path, f.size_bytes AS size_bytes, id(f) AS node_id
-        `
-        : `
-          MERGE (f:File:Node {path: $path})
-          SET 
-            f.absolute_path = $absolute_path,
-            f.name = $name,
-            f.extension = $extension,
-            f.content = $content,
-            f.language = $language,
-            f.size_bytes = $size_bytes,
-            f.line_count = $line_count,
-            f.last_modified = $last_modified,
-            f.indexed_date = datetime(),
-            f.type = 'file',
-            f.has_embedding = false
-          RETURN f.path AS path, f.size_bytes AS size_bytes, id(f) AS node_id
-        `;
-
-      const params: any = {
+      // Create File node (without embedding, content stored in chunks)
+      // Note: We don't store full content in File node to avoid Neo4j size limits
+      // Content is preserved in FileChunk nodes for retrieval
+      const fileResult = await session.run(`
+        MERGE (f:File:Node {path: $path})
+        SET 
+          f.absolute_path = $absolute_path,
+          f.name = $name,
+          f.extension = $extension,
+          f.language = $language,
+          f.size_bytes = $size_bytes,
+          f.line_count = $line_count,
+          f.last_modified = $last_modified,
+          f.indexed_date = datetime(),
+          f.type = 'file',
+          f.has_chunks = $has_chunks
+        RETURN f.path AS path, f.size_bytes AS size_bytes, id(f) AS node_id
+      `, {
         path: relativePath,
         absolute_path: filePath,
         name: path.basename(filePath),
         extension: extension,
-        content: content,
         language: language,
         size_bytes: stats.size,
         line_count: content.split('\n').length,
         last_modified: stats.mtime.toISOString(),
-      };
+        has_chunks: generateEmbeddings && !hasExistingChunks
+      });
 
-      if (embeddingData) {
-        params.embedding = embeddingData.embedding;
-        params.embedding_dimensions = embeddingData.dimensions;
-        params.embedding_model = embeddingData.model;
+      const fileNodeId = fileResult.records[0].get('node_id');
+      let chunksCreated = 0;
+
+      // Generate and store chunk embeddings if enabled and not already present
+      if (generateEmbeddings && !hasExistingChunks) {
+        await this.initEmbeddings();
+        if (this.embeddingsService.isEnabled()) {
+          try {
+            // Generate separate chunk embeddings (industry standard)
+            const chunkEmbeddings = await this.embeddingsService.generateChunkEmbeddings(content);
+            
+            // Create FileChunk nodes with embeddings
+            for (const chunk of chunkEmbeddings) {
+              await session.run(`
+                MATCH (f:File) WHERE id(f) = $fileNodeId
+                CREATE (c:FileChunk:Node {
+                  chunk_index: $chunkIndex,
+                  text: $text,
+                  start_offset: $startOffset,
+                  end_offset: $endOffset,
+                  embedding: $embedding,
+                  embedding_dimensions: $dimensions,
+                  embedding_model: $model,
+                  type: 'file_chunk',
+                  indexed_date: datetime()
+                })
+                CREATE (f)-[:HAS_CHUNK {index: $chunkIndex}]->(c)
+                RETURN id(c) AS chunk_id
+              `, {
+                fileNodeId,
+                chunkIndex: chunk.chunkIndex,
+                text: chunk.text,
+                startOffset: chunk.startOffset,
+                endOffset: chunk.endOffset,
+                embedding: chunk.embedding,
+                dimensions: chunk.dimensions,
+                model: chunk.model
+              });
+              
+              chunksCreated++;
+            }
+            
+            console.log(`✅ Created ${chunksCreated} chunk embeddings for ${relativePath}`);
+          } catch (error: any) {
+            console.warn(`⚠️  Failed to generate chunk embeddings for ${relativePath}: ${error.message}`);
+          }
+        }
+      } else if (generateEmbeddings && hasExistingChunks) {
+        console.log(`⏭️  Skipping chunk embeddings (already exist): ${relativePath}`);
       }
-
-      const result = await session.run(cypher, params);
-      const record = result.records[0];
       
       return {
-        file_node_id: `file-${record.get('node_id')}`,
-        path: record.get('path'),
-        size_bytes: record.get('size_bytes')
+        file_node_id: `file-${fileNodeId}`,
+        path: relativePath,
+        size_bytes: stats.size,
+        chunks_created: chunksCreated
       };
       
     } catch (error: any) {
@@ -218,15 +214,17 @@ export class FileIndexer {
   }
 
   /**
-   * Delete file node from Neo4j
+   * Delete file node and associated chunks from Neo4j
    */
   async deleteFile(relativePath: string): Promise<void> {
     const session = this.driver.session();
     
     try {
+      // DETACH DELETE automatically removes relationships and connected chunks
       await session.run(`
         MATCH (f:File {path: $path})
-        DETACH DELETE f
+        OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+        DETACH DELETE f, c
       `, { path: relativePath });
       
     } finally {

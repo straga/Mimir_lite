@@ -17,6 +17,16 @@ export interface EmbeddingResult {
   model: string;
 }
 
+export interface ChunkEmbeddingResult {
+  text: string;
+  embedding: number[];
+  dimensions: number;
+  model: string;
+  startOffset: number;
+  endOffset: number;
+  chunkIndex: number;
+}
+
 export interface TextChunk {
   text: string;
   startOffset: number;
@@ -131,6 +141,7 @@ export class EmbeddingsService {
   /**
    * Generate embedding for a single text
    * Automatically chunks large texts and averages embeddings
+   * @deprecated Use generateChunkEmbeddings for industry-standard chunking
    */
   async generateEmbedding(text: string): Promise<EmbeddingResult> {
     if (!this.enabled) {
@@ -200,6 +211,103 @@ export class EmbeddingsService {
       dimensions: dimensions,
       model: this.model,
     };
+  }
+
+  /**
+   * Generate separate embeddings for each chunk (Industry Standard)
+   * Returns array of chunk embeddings with text, offsets, and metadata
+   * Each chunk becomes a separate searchable unit
+   */
+  async generateChunkEmbeddings(text: string): Promise<ChunkEmbeddingResult[]> {
+    if (!this.enabled) {
+      throw new Error('Embeddings not enabled. Set features.vectorEmbeddings=true in config');
+    }
+
+    if (!text || text.trim().length === 0) {
+      throw new Error('Cannot generate embeddings for empty text');
+    }
+
+    const chunkSize = getChunkSize();
+    const chunkOverlap = getChunkOverlap();
+    const chunks: ChunkEmbeddingResult[] = [];
+    
+    let start = 0;
+    let chunkIndex = 0;
+
+    while (start < text.length) {
+      let end = start + chunkSize;
+      
+      // If this isn't the last chunk, try to break at a natural boundary
+      if (end < text.length) {
+        // Try to break at paragraph boundary
+        const paragraphBreak = text.lastIndexOf('\n\n', end);
+        if (paragraphBreak > start + chunkSize / 2) {
+          end = paragraphBreak + 2;
+        } else {
+          // Try to break at sentence boundary
+          const sentenceBreak = text.lastIndexOf('. ', end);
+          if (sentenceBreak > start + chunkSize / 2) {
+            end = sentenceBreak + 2;
+          } else {
+            // Try to break at word boundary
+            const wordBreak = text.lastIndexOf(' ', end);
+            if (wordBreak > start + chunkSize / 2) {
+              end = wordBreak + 1;
+            }
+          }
+        }
+      }
+
+      const chunkText = text.substring(start, end).trim();
+      
+      if (chunkText.length > 0) {
+        try {
+          // Generate embedding for this chunk
+          let result: EmbeddingResult;
+          if (this.provider === 'copilot' || this.provider === 'openai') {
+            result = await this.generateOpenAIEmbedding(chunkText);
+          } else {
+            result = await this.generateOllamaEmbedding(chunkText);
+          }
+
+          chunks.push({
+            text: chunkText,
+            embedding: result.embedding,
+            dimensions: result.dimensions,
+            model: result.model,
+            startOffset: start,
+            endOffset: end,
+            chunkIndex: chunkIndex
+          });
+
+          chunkIndex++;
+
+          // Small delay between chunks to avoid overwhelming the API
+          if (start + chunkSize < text.length) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        } catch (error: any) {
+          console.warn(`⚠️  Failed to generate embedding for chunk ${chunkIndex}: ${error.message}`);
+          // Continue with other chunks
+        }
+      }
+      
+      // Move start position with overlap for context continuity
+      start = end - chunkOverlap;
+      if (start < 0) start = 0;
+      
+      // Prevent infinite loop
+      if (start >= end) {
+        start = end;
+      }
+    }
+
+    if (chunks.length === 0) {
+      throw new Error('Failed to generate embeddings for any chunks');
+    }
+
+    console.log(`📄 Generated ${chunks.length} chunk embeddings for text (${text.length} chars)`);
+    return chunks;
   }
 
   /**

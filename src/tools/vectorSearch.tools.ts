@@ -17,7 +17,7 @@ export function createVectorSearchTools(driver: Driver): Tool[] {
     // ========================================================================
     {
       name: 'vector_search_nodes',
-      description: 'Semantic search across all nodes using vector embeddings. Returns nodes most similar to the query by MEANING (not exact text match). Use this to find related concepts, similar problems, or relevant context when you don\'t know exact keywords. Works with todos, memories, files, and all other node types. Complements memory_node search (which finds exact text matches).',
+      description: 'Semantic search across all nodes using vector embeddings. Returns nodes most similar to the query by MEANING (not exact text match). For files, searches individual chunks and returns parent file context. Use this to find related concepts, similar problems, or relevant context when you don\'t know exact keywords. Works with todos, memories, file chunks, and all other node types. Complements memory_node search (which finds exact text matches).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -28,7 +28,7 @@ export function createVectorSearchTools(driver: Driver): Tool[] {
           types: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Optional: Filter by node types (e.g., ["todo", "memory", "file"]). If not provided, searches all types.'
+            description: 'Optional: Filter by node types (e.g., ["todo", "memory", "file", "file_chunk"]). If not provided, searches all types.'
           },
           limit: {
             type: 'number',
@@ -104,6 +104,10 @@ export async function handleVectorSearchNodes(
       CALL db.index.vector.queryNodes('node_embedding_index', toInteger($limit), $queryVector)
       YIELD node, score
       WHERE score >= $minSimilarity ${typeFilter}
+      
+      // For FileChunk nodes, get parent File information
+      OPTIONAL MATCH (node)<-[:HAS_CHUNK]-(parentFile:File)
+      
       RETURN COALESCE(node.id, node.path) AS id,
              node.type AS type,
              COALESCE(node.title, node.name) AS title,
@@ -111,6 +115,11 @@ export async function handleVectorSearchNodes(
              node.description AS description,
              node.content AS content,
              node.path AS path,
+             node.text AS chunk_text,
+             node.chunk_index AS chunk_index,
+             parentFile.path AS parent_file_path,
+             parentFile.name AS parent_file_name,
+             parentFile.language AS parent_file_language,
              score AS similarity
       ORDER BY score DESC
       LIMIT toInteger($finalLimit)
@@ -134,22 +143,39 @@ export async function handleVectorSearchNodes(
       const title = record.get('title');
       const name = record.get('name');
       const path = record.get('path');
+      const chunkText = record.get('chunk_text');
+      const chunkIndex = record.get('chunk_index');
+      const parentFilePath = record.get('parent_file_path');
+      const parentFileName = record.get('parent_file_name');
+      const parentFileLanguage = record.get('parent_file_language');
+      const nodeType = record.get('type');
       
       // Create a preview from available text fields
       let preview = '';
-      if (title) preview = title;
+      if (chunkText) preview = chunkText.substring(0, 200);
+      else if (title) preview = title;
       else if (name) preview = name;
       else if (description) preview = description;
       else if (content && typeof content === 'string') preview = content.substring(0, 200);
       
       const resultObj: any = {
         id: record.get('id'),
-        type: record.get('type'),
+        type: nodeType,
         title: title || name || null,
         description: description || null,
         similarity: record.get('similarity'),
         content_preview: preview
       };
+      
+      // Add chunk-specific information
+      if (nodeType === 'file_chunk') {
+        resultObj.chunk_index = chunkIndex;
+        resultObj.parent_file = {
+          path: parentFilePath,
+          name: parentFileName,
+          language: parentFileLanguage
+        };
+      }
       
       // Add path for file nodes
       if (path) {
@@ -187,10 +213,10 @@ export async function handleGetEmbeddingStats(
   const session = driver.session();
   
   try {
-    // Get total count and breakdown by type
+    // Get total count and breakdown by type (including FileChunk)
     const result = await session.run(`
-      MATCH (n:Node)
-      WHERE n.has_embedding = true
+      MATCH (n)
+      WHERE n.embedding IS NOT NULL
       RETURN n.type AS type, count(*) AS count
       ORDER BY count DESC
     `);

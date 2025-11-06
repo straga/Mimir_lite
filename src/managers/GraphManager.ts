@@ -96,10 +96,23 @@ export class GraphManager implements IGraphManager {
         FOR (f:File) ON (f.path)
       `);
 
-      // Full-text search on file content (Phase 1 - Required)
+      // Full-text search on file metadata and chunks
+      // Drop old index if it exists (migration from v1 architecture)
+      try {
+        await session.run(`DROP INDEX file_content_search IF EXISTS`);
+      } catch (error) {
+        // Ignore if index doesn't exist
+      }
+      
       await session.run(`
-        CREATE FULLTEXT INDEX file_content_search IF NOT EXISTS
-        FOR (f:File) ON EACH [f.content, f.path, f.name]
+        CREATE FULLTEXT INDEX file_metadata_search IF NOT EXISTS
+        FOR (f:File) ON EACH [f.path, f.name, f.language]
+      `);
+      
+      // Full-text search on file chunk content
+      await session.run(`
+        CREATE FULLTEXT INDEX file_chunk_content_search IF NOT EXISTS
+        FOR (c:FileChunk) ON EACH [c.text]
       `);
 
       // Vector index for semantic search (1024 dimensions for mxbai-embed-large)

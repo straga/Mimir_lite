@@ -148,8 +148,7 @@ export function createFileIndexingTools(
           },
           generate_embeddings: {
             type: 'boolean',
-            description: 'Generate vector embeddings (default: auto-detected from global config)',
-            default: undefined
+            description: 'Generate vector embeddings (default: auto-detected from global config)'
           }
         },
         required: ['path']
@@ -190,6 +189,7 @@ export function createFileIndexingTools(
 
 /**
  * Handle index_folder tool call - now combines watch and index
+ * Returns immediately while indexing happens in the background
  */
 export async function handleIndexFolder(
   params: any,
@@ -247,17 +247,31 @@ export async function handleIndexFolder(
     await watchManager.startWatch(config);
   }
 
-  // Index all files (using container path)
-  const filesIndexed = await watchManager.indexFolder(containerPath, config);
+  // Start indexing in the background (don't await)
+  // Use Promise to ensure it runs asynchronously without blocking the response
+  Promise.resolve().then(async () => {
+    try {
+      console.log(`🚀 Starting background indexing for ${containerPath}`);
+      const filesIndexed = await watchManager.indexFolder(containerPath, config!);
+      const elapsed = Date.now() - startTime;
+      console.log(`✅ Background indexing complete: ${filesIndexed} files indexed in ${elapsed}ms`);
+    } catch (error) {
+      console.error(`❌ Background indexing failed for ${containerPath}:`, error);
+    }
+  }).catch(error => {
+    console.error(`❌ Unhandled error in background indexing:`, error);
+  });
 
+  // Return immediately
   const elapsed = Date.now() - startTime;
 
   return {
     status: 'success',
     path: userProvidedPath,  // Return original path to user
     containerPath: containerPath,  // Also include container path for transparency
-    files_indexed: filesIndexed,
-    elapsed_ms: elapsed
+    files_indexed: 0,  // Will be updated in background
+    elapsed_ms: elapsed,
+    message: 'Indexing started in background. Check logs for progress.'
   };
 }
 
@@ -291,24 +305,30 @@ export async function handleRemoveFolder(
   // Mark inactive in Neo4j
   await configManager.markInactive(config.id);
 
-  // Remove all indexed files from this folder (using container path)
+  // Remove all indexed files and chunks from this folder (using container path)
   const session = driver.session();
   try {
     const result = await session.run(`
       MATCH (f:File)
       WHERE f.path STARTS WITH $pathPrefix OR f.absolute_path STARTS WITH $pathPrefix
+      OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+      WITH f, collect(c) AS chunks, count(c) AS chunk_count
       DETACH DELETE f
-      RETURN count(f) AS deleted
+      FOREACH (chunk IN chunks | DETACH DELETE chunk)
+      RETURN count(f) AS files_deleted, sum(chunk_count) AS chunks_deleted
     `, { pathPrefix: containerPath });
     
-    const deleted = result.records[0]?.get('deleted')?.toNumber() || 0;
+    const record = result.records[0];
+    const filesDeleted = record?.get('files_deleted')?.toNumber() || 0;
+    const chunksDeleted = record?.get('chunks_deleted')?.toNumber() || 0;
     
     return {
       status: 'success',
       path: userProvidedPath,  // Return original path to user
       containerPath: containerPath,  // Also include container path for transparency
-      files_removed: deleted,
-      message: `Folder watch stopped and ${deleted} indexed files removed from database.`
+      files_removed: filesDeleted,
+      chunks_removed: chunksDeleted,
+      message: `Folder watch stopped. Removed ${filesDeleted} files and ${chunksDeleted} chunks from database.`
     };
   } finally {
     await session.close();
