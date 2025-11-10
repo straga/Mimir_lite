@@ -24,10 +24,16 @@ class Pipe:
     class Valves(BaseModel):
         """Pipeline configuration"""
 
+        # LLM Backend Selection
+        LLM_BACKEND: str = Field(
+            default="copilot",
+            description="LLM backend to use: 'copilot' or 'ollama'",
+        )
+
         # Copilot API Configuration
         COPILOT_API_URL: str = Field(
             default="http://copilot-api:4141/v1",
-            description="Copilot API base URL",
+            description="Copilot API base URL (used when LLM_BACKEND='copilot')",
         )
 
         COPILOT_API_KEY: str = Field(
@@ -35,9 +41,16 @@ class Pipe:
             description="Copilot API key (dummy for local server)",
         )
 
+        # Ollama Configuration (for LLM)
+        OLLAMA_API_URL: str = Field(
+            default="http://host.docker.internal:11434",
+            description="Ollama API URL (used for embeddings and when LLM_BACKEND='ollama')",
+        )
+
         # Model Configuration
         DEFAULT_MODEL: str = Field(
-            default="gpt-4.1", description="Default model if none selected"
+            default="gpt-4.1", 
+            description="Default model if none selected (use Copilot model names for 'copilot' backend, Ollama model names for 'ollama' backend)",
         )
 
         # Semantic Search Configuration
@@ -50,15 +63,10 @@ class Pipe:
             default=10, description="Number of relevant context items to retrieve"
         )
 
-        # Ollama Configuration
-        OLLAMA_API_URL: str = Field(
-            default="http://host.docker.internal:11434",
-            description="Ollama API URL for embeddings",
-        )
-
+        # Embedding Configuration
         EMBEDDING_MODEL: str = Field(
             default="mxbai-embed-large",
-            description="Ollama embedding model to use",
+            description="Ollama embedding model to use for semantic search",
         )
 
     def __init__(self):
@@ -500,27 +508,66 @@ When stuck or when solutions introduce new problems:
 
         # Fetch relevant context using semantic search
         relevant_context = ""
+        context_count = 0
         if self.valves.SEMANTIC_SEARCH_ENABLED:
             try:
                 relevant_context = await self._get_relevant_context(user_message)
                 
                 if relevant_context:
-                    context_count = relevant_context.count("**Title:**")
+                    # Count files by counting "**File:**" or "**Memory:**" labels
+                    context_count = relevant_context.count("**File:**") + relevant_context.count("**Memory:**")
                     print(f"✅ Retrieved {context_count} relevant documents")
+                    
+                    # Update status with results
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": f"✅ Found {context_count} relevant document(s)",
+                                    "done": False,
+                                },
+                            }
+                        )
                 else:
                     print("ℹ️ No relevant context found")
                     
+                    # Update status - no results
+                    if __event_emitter__:
+                        await __event_emitter__(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "ℹ️ No relevant context found",
+                                    "done": False,
+                                },
+                            }
+                        )
+                    
             except Exception as e:
                 print(f"⚠️ Semantic search failed: {e}")
+                
+                # Update status - error
+                if __event_emitter__:
+                    await __event_emitter__(
+                        {
+                            "type": "status",
+                            "data": {
+                                "description": f"⚠️ Semantic search failed: {str(e)[:50]}",
+                                "done": False,
+                            },
+                        }
+                    )
                 # Continue without context
 
         # Construct enriched prompt with context and preamble
+        backend_name = "Ollama" if self.valves.LLM_BACKEND.lower() == "ollama" else "Copilot API"
         if __event_emitter__:
             await __event_emitter__(
                 {
                     "type": "status",
                     "data": {
-                        "description": f"🤖 Processing with {selected_model}...",
+                        "description": f"🤖 Processing with {selected_model} ({backend_name})...",
                         "done": False,
                     },
                 }
@@ -588,56 +635,90 @@ Please address the user's request using the provided context and your capabiliti
             if not embedding:
                 print("⚠️ Failed to generate embedding")
                 return ""
+            
+            print(f"✅ Generated embedding with {len(embedding)} dimensions")
 
             # Connect to Neo4j and run vector search
             async with AsyncGraphDatabase.driver(
                 uri, auth=(username, password)
             ) as driver:
                 async with driver.session() as session:
-                    # Query for file chunks with embeddings (manual cosine similarity for Neo4j Community Edition)
+                    # Query for file chunks AND memory nodes with embeddings (manual cosine similarity for Neo4j Community Edition)
                     cypher = """
-                    MATCH (file:File)-[:HAS_CHUNK]->(chunk:FileChunk)
-                    WHERE chunk.embedding IS NOT NULL
-                    WITH file, chunk,
-                         reduce(dot = 0.0, i IN range(0, size(chunk.embedding)-1) | 
-                            dot + chunk.embedding[i] * $embedding[i]) AS dotProduct,
-                         sqrt(reduce(sum = 0.0, x IN chunk.embedding | sum + x * x)) AS normA,
-                         sqrt(reduce(sum = 0.0, x IN $embedding | sum + x * x)) AS normB
-                    WITH file, chunk, dotProduct / (normA * normB) AS similarity
-                    WHERE similarity > 0.4
-                    
-                    RETURN chunk.content AS content,
-                           chunk.start_offset AS start_offset,
-                           file.path AS file_path,
-                           file.name AS file_name,
-                           similarity
+                    CALL {
+                        // Search file chunks
+                        MATCH (file:File)-[:HAS_CHUNK]->(chunk:FileChunk)
+                        WHERE chunk.embedding IS NOT NULL
+                        WITH file, chunk,
+                             reduce(dot = 0.0, i IN range(0, size(chunk.embedding)-1) | 
+                                dot + chunk.embedding[i] * $embedding[i]) AS dotProduct,
+                             sqrt(reduce(sum = 0.0, x IN chunk.embedding | sum + x * x)) AS normA,
+                             sqrt(reduce(sum = 0.0, x IN $embedding | sum + x * x)) AS normB
+                        WITH file.path AS source_path, file.name AS source_name, chunk.text AS content, 
+                             chunk.start_offset AS start_offset, dotProduct / (normA * normB) AS similarity, 
+                             'file_chunk' AS source_type
+                        WHERE similarity > 0.3
+                        RETURN content, start_offset, source_path, source_name, similarity, source_type
+                        
+                        UNION ALL
+                        
+                        // Search memory nodes
+                        MATCH (memory:memory)
+                        WHERE memory.embedding IS NOT NULL AND memory.has_embedding = true
+                        WITH memory,
+                             reduce(dot = 0.0, i IN range(0, size(memory.embedding)-1) | 
+                                dot + memory.embedding[i] * $embedding[i]) AS dotProduct,
+                             sqrt(reduce(sum = 0.0, x IN memory.embedding | sum + x * x)) AS normA,
+                             sqrt(reduce(sum = 0.0, x IN $embedding | sum + x * x)) AS normB
+                        WITH memory.title AS source_path, memory.title AS source_name, memory.content AS content,
+                             0 AS start_offset, dotProduct / (normA * normB) AS similarity,
+                             'memory' AS source_type
+                        WHERE similarity > 0.3
+                        RETURN content, start_offset, source_path, source_name, similarity, source_type
+                    }
+                    RETURN content, start_offset, source_path AS file_path, 
+                           source_name AS file_name, similarity, source_type
                     ORDER BY similarity DESC
                     LIMIT 20
                     """
 
                     result = await session.run(cypher, embedding=embedding)
                     records = await result.data()
+                    
+                    print(f"📊 Neo4j returned {len(records)} records")
 
                     if not records:
+                        print("⚠️ No records matched similarity threshold")
                         return ""
 
-                    # Aggregate chunks by file to avoid duplicates
+                    # Aggregate chunks by source (file or memory) to avoid duplicates
                     file_aggregates = {}
+                    
+                    # Debug: print first few similarity scores
+                    if records:
+                        sample_scores = [r["similarity"] for r in records[:3]]
+                        print(f"🎯 Top 3 similarity scores: {sample_scores}")
                     
                     for record in records:
                         file_path = record.get("file_path") or record.get("file_name", "Unknown")
                         similarity = record["similarity"]
                         content = record.get("content", "")
                         start_offset = record.get("start_offset", 0)
+                        source_type = record.get("source_type", "file_chunk")
                         
+                        # Debug: check why content might be None
                         if not content:
+                            print(f"⚠️ Skipping record with no content: {file_path} (similarity: {similarity:.3f})")
                             continue
+                        
+                        print(f"✅ Adding chunk from {file_path[:50]}... (similarity: {similarity:.3f}, content length: {len(content)})")
                         
                         if file_path not in file_aggregates:
                             file_aggregates[file_path] = {
                                 "chunks": [],
                                 "max_similarity": similarity,
-                                "chunk_count": 0
+                                "chunk_count": 0,
+                                "source_type": source_type
                             }
                         
                         agg = file_aggregates[file_path]
@@ -664,18 +745,22 @@ Please address the user's request using the provided context and your capabiliti
                         reverse=True
                     )[:self.valves.SEMANTIC_SEARCH_LIMIT]
                     
+                    print(f"📚 Aggregated into {len(file_aggregates)} files, returning top {len(sorted_files)}")
+                    
                     # Format context output
                     context_parts = []
                     for file_path, agg in sorted_files:
-                        # Take top 2 chunks per file
+                        # Take top 2 chunks per file/memory
                         top_chunks = agg["chunks"][:2]
                         
                         if not top_chunks:
                             continue
                         
+                        source_label = "Memory" if agg.get("source_type") == "memory" else "File"
+                        
                         context_parts.append(
-                            f"**Title:** {file_path}\n"
-                            f"**Relevance:** {agg['boosted_similarity']:.3f} ({agg['chunk_count']} matching chunks)\n"
+                            f"**{source_label}:** {file_path}\n"
+                            f"**Relevance:** {agg['boosted_similarity']:.3f} ({agg['chunk_count']} matching {'entry' if source_label == 'Memory' else 'chunks'})\n"
                             f"**Content:**\n```\n"
                         )
                         
@@ -742,23 +827,38 @@ Please address the user's request using the provided context and your capabiliti
         return 128000
 
     async def _call_llm(self, prompt: str, model: str) -> AsyncGenerator[str, None]:
-        """Call copilot-api with streaming"""
+        """Call LLM API with streaming (supports Copilot API or Ollama)"""
 
-        url = f"{self.valves.COPILOT_API_URL}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.valves.COPILOT_API_KEY}",
-            "Content-Type": "application/json",
-        }
-
-        max_tokens = self._get_max_tokens(model)
-
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": True,
-            "temperature": 0.7,
-            "max_tokens": max_tokens,
-        }
+        backend = self.valves.LLM_BACKEND.lower()
+        
+        if backend == "ollama":
+            # Use Ollama API
+            url = f"{self.valves.OLLAMA_API_URL}/api/chat"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "options": {
+                    "temperature": 0.7,
+                    "num_predict": self._get_max_tokens(model),
+                }
+            }
+        else:
+            # Use Copilot API (default)
+            url = f"{self.valves.COPILOT_API_URL}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.valves.COPILOT_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            max_tokens = self._get_max_tokens(model)
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "temperature": 0.7,
+                "max_tokens": max_tokens,
+            }
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -770,33 +870,54 @@ Please address the user's request using the provided context and your capabiliti
                         yield f"\n\n**Error:** Failed to call LLM API (status {response.status}): {error_text}\n"
                         return
 
-                    # Use readline() for proper SSE line-by-line parsing
-                    # Fixes TransferEncodingError by ensuring complete lines before parsing
-                    while True:
-                        line = await response.content.readline()
-                        if not line:  # EOF
-                            break
-                        
-                        line = line.decode("utf-8").strip()
-                        if line.startswith("data: "):
-                            data = line[6:]
-                            if data == "[DONE]":
+                    # Parse streaming response based on backend
+                    if backend == "ollama":
+                        # Ollama returns JSONL (one JSON object per line)
+                        while True:
+                            line = await response.content.readline()
+                            if not line:  # EOF
                                 break
-
+                            
                             try:
                                 import json
-
-                                chunk = json.loads(data)
-                                choices = chunk.get("choices", [])
-                                if not choices:
-                                    continue
-                                    
-                                delta = choices[0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    yield content
+                                chunk = json.loads(line.decode("utf-8").strip())
+                                
+                                # Ollama format: {"message": {"content": "text"}, "done": false}
+                                if "message" in chunk and "content" in chunk["message"]:
+                                    content = chunk["message"]["content"]
+                                    if content:
+                                        yield content
+                                
+                                if chunk.get("done", False):
+                                    break
                             except json.JSONDecodeError:
                                 continue
+                    else:
+                        # Copilot API uses SSE format
+                        while True:
+                            line = await response.content.readline()
+                            if not line:  # EOF
+                                break
+                            
+                            line = line.decode("utf-8").strip()
+                            if line.startswith("data: "):
+                                data = line[6:]
+                                if data == "[DONE]":
+                                    break
+
+                                try:
+                                    import json
+                                    chunk = json.loads(data)
+                                    choices = chunk.get("choices", [])
+                                    if not choices:
+                                        continue
+                                        
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        yield content
+                                except json.JSONDecodeError:
+                                    continue
 
         except Exception as e:
             yield f"\n\n**Error:** {str(e)}\n"
