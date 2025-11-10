@@ -558,7 +558,7 @@ main() {
     echo "║ Troubleshooting:                                             ║"
     echo "║ - Run 'npm run setup:verify' to check installation          ║"
     echo "║ - Check 'docker-compose logs' for service issues            ║"
-    echo "║ - Visit https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/docs      ║"
+    echo "║ - Visit https://github.com/orneryd/Mimir/docs      ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }

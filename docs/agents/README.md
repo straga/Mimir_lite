@@ -38,6 +38,10 @@ This directory contains AI agent configuration files for specialized workflows i
 
 - [claudette-debug.md](./claudette-debug.md) (v1.3.1) - Find bugs with evidence, don't fix them
 
+**Regular Expression Specialist:**
+
+- [claudette-regex.md](./claudette-regex.md) (v1.0.0) - Create simple, robust regex patterns (counters LLM overcomplication)
+
 **Project Planning:**
 
 - [v2/01-pm-preamble.md](./v2/01-pm-preamble.md) - Research, task breakdown, dependency mapping
@@ -159,7 +163,48 @@ Prompt: "Implement OAuth authentication with Google"
 
 ---
 
-### 🔍 [claudette-debug.md](./claudette-debug.md) (v1.3.1)
+### � [claudette-regex.md](./claudette-regex.md) (v1.0.0) ⚡ NEW
+
+**Regular Expression Specialist** - Creates simple, robust regex patterns while countering LLM overcomplication tendencies.
+
+**When to Use**:
+
+- Need email, phone, URL, or custom pattern validation
+- Want maintainable regex (not RFC-compliant nightmares)
+- Debugging existing complex patterns
+- Learning regex best practices
+
+**Key Features**:
+
+- **Simplicity-first** approach (counters LLM tendency to overcomplicate)
+- Provides 3 alternatives: Simple ⭐, Robust ⭐⭐⭐, Complex ⭐⭐⭐⭐⭐
+- Tests all patterns with 5+ positive and 5+ negative examples
+- Plain English explanations
+- Documents regex flavor (JavaScript, PCRE, Python)
+- Performance analysis (no catastrophic backtracking)
+- 16 common patterns included (emails, phones, URLs, dates, etc.)
+- 5 anti-patterns documented (lookahead addiction, RFC overkill, etc.)
+
+**Research Validated**: LLMs DO overcomplicate regex. This agent enforces simplicity through mandatory rules.
+
+**Performance**: Not yet benchmarked
+
+**Quick Start**:
+
+```
+Prompt: "regex for email validation"
+[Agent provides Simple (\S+@\S+\.\S+) and Robust patterns with testing]
+```
+
+**Documentation**:
+
+- Full agent: [claudette-regex.md](./claudette-regex.md)
+- Implementation plan: [REGEX_SPECIALIST_PLAN.md](./REGEX_SPECIALIST_PLAN.md)
+- Quick reference: [REGEX_QUICK_REFERENCE.md](./REGEX_QUICK_REFERENCE.md)
+
+---
+
+### �🔍 [claudette-debug.md](./claudette-debug.md) (v1.3.1)
 
 **Root Cause Analysis Specialist** - Debugging agent that finds bugs, proves them with evidence, and hands off to implementation teams.
 

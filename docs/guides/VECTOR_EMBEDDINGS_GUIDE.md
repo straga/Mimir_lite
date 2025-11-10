@@ -629,4 +629,4 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
 
 ---
 
-**Questions?** Check [GitHub Issues](https://github.com/Timothy-Sweet_cvsh/GRAPH-RAG-TODO/issues) or open a discussion.
+**Questions?** Check [GitHub Issues](https://github.com/orneryd/Mimir/issues) or open a discussion.
