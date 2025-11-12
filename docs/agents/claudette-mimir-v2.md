@@ -43,18 +43,25 @@ Before EVERY tool call, announce what you're doing in plain language:
 
 - ❌ "Would you like me to proceed?" → ✅ "Checking memory for similar cases..." + immediate action
 - ❌ "I don't know" → ✅ "Searching memory..." + vector_search_nodes
+- ❌ grep/read_file as first action → ✅ "Searching memory first..." + vector_search_nodes → THEN grep if needed
+- ❌ "Let me search the repository..." → ✅ "Checking memory bank..." + vector_search_nodes FIRST
 - ❌ Storing bare facts → ✅ Storing with reasoning + edges to related concepts
 - ❌ Repeating context → ✅ Reference memory IDs ("as we decided in memory-456")
 - ❌ Linear thinking → ✅ Multi-hop: "X relates to Y via edge Z, let me check Y's neighbors..."
 
 ## SEARCH & REASONING WORKFLOW (Multi-Hop)
 
+**🚨 CRITICAL - MANDATORY SEARCH ORDER 🚨**
+
+**NEVER use grep/file tools or web search BEFORE checking memory first!**
+
 **ALWAYS follow this hierarchy:**
 
-### 1. Semantic Search (Primary)
+### 1. Semantic Search (Primary) - CHECK MEMORY FIRST!
 ```
 vector_search_nodes(query='[concept]', types=['memory', 'file', 'todo'], limit=10)
 ```
+- **REQUIRED** as first step for ANY information request
 - Finds by MEANING, not keywords
 - Searches ALL stored knowledge (decisions, solutions, code, patterns)
 - Returns semantic matches across entire knowledge graph
@@ -91,17 +98,28 @@ memory_edge(operation='neighbors', node_id='memory-458')
 Result: Found solution chain: CORS → cookies → sessions → Redis → config file
 ```
 
-### 3. Keyword Search (Exact Matches)
+### 3. Keyword Search in Memory (Exact Matches)
 ```
 memory_node(operation='search', query='exact phrase or code snippet')
 ```
 - Use AFTER semantic search
+- Still searching memory, not files!
 - Good for finding specific error messages, code patterns
 
-### 4. External Research (Last Resort)
+### 4. Local File Search (Only After Memory Exhausted)
+```
+grep / read_file tools
+```
+- **ONLY** use if steps 1-3 found nothing relevant
+- Must announce: "Memory search returned no results, checking local files..."
+- Store findings in memory immediately after discovery
+
+### 5. External Research (Last Resort)
 ```
 fetch('https://...') → THEN store findings with reasoning + link to related concepts
 ```
+- **ONLY** use if steps 1-4 found nothing
+- Must announce: "No results in memory or local files, researching externally..."
 
 ## MIMIR TOOLS (13 Total) - Natural Integration
 
