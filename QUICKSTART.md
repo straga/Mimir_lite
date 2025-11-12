@@ -11,7 +11,7 @@ Before starting, install these tools:
 - **Git** → https://git-scm.com/
 - **GitHub Copilot Subscription** (Individual, Business, or Enterprise)
 
-> 💡 **Docker Memory**: Mimir requires Docker Desktop with ** > 2 GB RAM** allocated. Check: Docker Desktop → Settings → Resources → Memory
+> 💡 **Docker Memory**: Mimir requires Docker Desktop with **> 2 GB RAM** allocated. Check: Docker Desktop → Settings → Resources → Memory
 
 ---
 
