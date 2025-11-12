@@ -112,12 +112,12 @@ HOST_WORKSPACE_ROOT=~/src        # Your main workspace area
 MIMIR_EMBEDDINGS_ENABLED=true
 MIMIR_FEATURE_VECTOR_EMBEDDINGS=true
 
-# Embeddings Provider: "copilot" (recommended) or "ollama" (local)
-MIMIR_EMBEDDINGS_PROVIDER=copilot
+# Embeddings Provider: "ollama" (recommended) or "copilot" (experimental)
+MIMIR_EMBEDDINGS_PROVIDER=ollama
 
 # Model Selection
-MIMIR_EMBEDDINGS_MODEL=text-embedding-3-small  # For copilot
-# MIMIR_EMBEDDINGS_MODEL=nomic-embed-text       # For ollama
+# MIMIR_EMBEDDINGS_MODEL=text-embedding-3-small  # For copilot
+MIMIR_EMBEDDINGS_MODEL=nomic-embed-text       # For ollama
 ```
 
 **Copilot provider** (recommended):
