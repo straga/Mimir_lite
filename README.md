@@ -473,13 +473,15 @@ When you run `docker compose up -d`, you get these services:
 | Service | Port | Purpose | URL |
 |---------|------|---------|-----|
 | **Neo4j** | 7474, 7687 | Graph database storage | http://localhost:7474 |
-| **Copilot API** (optional) | 4141 | AI model access | http://localhost:4141 |
 | **MCP Server** | 9042 | Main API server | http://localhost:9042 |
+| **Copilot API** (optional*) | 4141 | AI model access | http://localhost:4141 |
 | **Ollama** (optional*) | 11434 | Local embeddings | http://localhost:11434 |
 | **Open-WebUI** (optional*) | 3000 | AI model access | http://localhost:3000 |
 
 > 🔔 Ollama is optional but you wont get semantic search unless you provide embeddings. you can point the indexing at any compatible embeddings endpoint. Or, youll have to fall back to basic text search
+
 > 🔔 copliot-api is NOT required for the menory bank. But, it is required if you want to do agent orchestration with it. 
+
 > 🔔 Open-WebUI is also NOT required for the memory bank. It is useful for testing model access and you can use ollama models with it locally
 
 ### How It Works
