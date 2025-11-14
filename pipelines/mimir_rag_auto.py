@@ -60,12 +60,38 @@ class Pipe:
         )
 
         SEMANTIC_SEARCH_LIMIT: int = Field(
-            default=10, description="Number of relevant context items to retrieve"
+            default=10, description="Maximum number of relevant context items to retrieve"
+        )
+
+        MIN_SIMILARITY_THRESHOLD: float = Field(
+            default=0.55,
+            description="Minimum cosine similarity score (0.0-1.0) for results. Higher = more relevant. Recommended: 0.55 for balanced, 0.75 for high quality, 0.3 for broad results",
+        )
+
+        ENABLE_ADAPTIVE_THRESHOLD: bool = Field(
+            default=True,
+            description="Automatically lower threshold if no results found (tries 0.55 → 0.4 → 0.3)",
+        )
+
+        # Graph-RAG Configuration
+        ENABLE_GRAPH_TRAVERSAL: bool = Field(
+            default=True,
+            description="Enable multi-hop graph traversal to find related documents and cross-project relationships",
+        )
+
+        GRAPH_TRAVERSAL_DEPTH: int = Field(
+            default=2,
+            description="How many hops to traverse in the knowledge graph (1-3). Higher finds more connections but slower.",
+        )
+
+        ENABLE_HYBRID_SEARCH: bool = Field(
+            default=True,
+            description="Combine semantic search with keyword matching for better cross-project queries",
         )
 
         # Embedding Configuration
         EMBEDDING_MODEL: str = Field(
-            default="nomic-embed-text",
+            default="mxbai-embed-large",
             description="Ollama embedding model to use for semantic search",
         )
 
@@ -643,22 +669,47 @@ Please address the user's request using the provided context and your capabiliti
                 uri, auth=(username, password)
             ) as driver:
                 async with driver.session() as session:
-                    # Query for file chunks, small files, AND memory nodes with embeddings (manual cosine similarity for Neo4j Community Edition)
+                    # Graph-RAG Query with configurable threshold, multi-hop traversal, and hybrid search
+                    # Uses manual cosine similarity for Neo4j Community Edition
+                    
+                    # Adaptive thresholding: try multiple thresholds if enabled
+                    threshold_attempts = [self.valves.MIN_SIMILARITY_THRESHOLD]
+                    if self.valves.ENABLE_ADAPTIVE_THRESHOLD:
+                        # Add fallback thresholds (only lower ones)
+                        if self.valves.MIN_SIMILARITY_THRESHOLD > 0.4:
+                            threshold_attempts.append(0.4)
+                        if self.valves.MIN_SIMILARITY_THRESHOLD > 0.3:
+                            threshold_attempts.append(0.3)
+                    
+                    records = []
+                    min_threshold = threshold_attempts[0]
+                    
+                    # Extract keywords for hybrid search (simple tokenization)
+                    query_lower = query.lower()
+                    keywords = [w.strip() for w in query_lower.split() if len(w.strip()) > 3]
+                    print(f"🔑 Extracted keywords: {keywords[:5]}")  # Show first 5 keywords
+                    
                     cypher = """
                     CALL {
-                        // Search file chunks (large files)
+                        // Search file chunks (large files) with path-based metadata
                         MATCH (file:File)-[:HAS_CHUNK]->(chunk:FileChunk)
                         WHERE chunk.embedding IS NOT NULL
                         WITH file, chunk,
                              reduce(dot = 0.0, i IN range(0, size(chunk.embedding)-1) | 
                                 dot + chunk.embedding[i] * $embedding[i]) AS dotProduct,
                              sqrt(reduce(sum = 0.0, x IN chunk.embedding | sum + x * x)) AS normA,
-                             sqrt(reduce(sum = 0.0, x IN $embedding | sum + x * x)) AS normB
-                        WITH file.path AS source_path, file.name AS source_name, chunk.text AS content, 
+                             sqrt(reduce(sum = 0.0, x IN $embedding | sum + x * x)) AS normB,
+                             split(coalesce(file.absolute_path, file.path), '/') AS pathParts
+                        WITH coalesce(file.absolute_path, file.path) AS source_path, file.name AS source_name, chunk.text AS content, 
                              chunk.start_offset AS start_offset, dotProduct / (normA * normB) AS similarity, 
-                             'file_chunk' AS source_type
-                        WHERE similarity > 0.3
-                        RETURN content, start_offset, source_path, source_name, similarity, source_type
+                             'file_chunk' AS source_type, pathParts,
+                             // Extract project name from absolute path (e.g., /workspace/project-name/...)
+                             CASE 
+                                WHEN size(pathParts) > 2 THEN pathParts[2]  // Index 2 is project name after /workspace/
+                                ELSE 'unknown'
+                             END AS project_name
+                        WHERE similarity >= $minThreshold
+                        RETURN content, start_offset, source_path, source_name, similarity, source_type, project_name, pathParts
                         
                         UNION ALL
                         
@@ -669,12 +720,17 @@ Please address the user's request using the provided context and your capabiliti
                              reduce(dot = 0.0, i IN range(0, size(file.embedding)-1) | 
                                 dot + file.embedding[i] * $embedding[i]) AS dotProduct,
                              sqrt(reduce(sum = 0.0, x IN file.embedding | sum + x * x)) AS normA,
-                             sqrt(reduce(sum = 0.0, x IN $embedding | sum + x * x)) AS normB
-                        WITH file.path AS source_path, file.name AS source_name, file.content AS content,
+                             sqrt(reduce(sum = 0.0, x IN $embedding | sum + x * x)) AS normB,
+                             split(coalesce(file.absolute_path, file.path), '/') AS pathParts
+                        WITH coalesce(file.absolute_path, file.path) AS source_path, file.name AS source_name, file.content AS content,
                              0 AS start_offset, dotProduct / (normA * normB) AS similarity,
-                             'file' AS source_type
-                        WHERE similarity > 0.3
-                        RETURN content, start_offset, source_path, source_name, similarity, source_type
+                             'file' AS source_type, pathParts,
+                             CASE 
+                                WHEN size(pathParts) > 2 THEN pathParts[2]  // Index 2 is project name from /workspace/{project}/
+                                ELSE 'unknown'
+                             END AS project_name
+                        WHERE similarity >= $minThreshold
+                        RETURN content, start_offset, source_path, source_name, similarity, source_type, project_name, pathParts
                         
                         UNION ALL
                         
@@ -688,82 +744,246 @@ Please address the user's request using the provided context and your capabiliti
                              sqrt(reduce(sum = 0.0, x IN $embedding | sum + x * x)) AS normB
                         WITH memory.title AS source_path, memory.title AS source_name, memory.content AS content,
                              0 AS start_offset, dotProduct / (normA * normB) AS similarity,
-                             'memory' AS source_type
-                        WHERE similarity > 0.3
-                        RETURN content, start_offset, source_path, source_name, similarity, source_type
+                             'memory' AS source_type, [] AS pathParts, 'memory' AS project_name
+                        WHERE similarity >= $minThreshold
+                        RETURN content, start_offset, source_path, source_name, similarity, source_type, project_name, pathParts
                     }
+                    WITH content, start_offset, source_path, source_name, similarity, source_type, project_name, pathParts
+                    
+                    // Hybrid search: boost results that match keywords in content or path
+                    WITH content, start_offset, source_path, source_name, similarity, source_type, project_name,
+                         CASE 
+                            WHEN $enableHybrid AND size($keywords) > 0 THEN
+                                // Count keyword matches in content and path
+                                reduce(matches = 0, kw IN $keywords | 
+                                    matches + 
+                                    CASE WHEN toLower(coalesce(content, '')) CONTAINS kw THEN 1 ELSE 0 END +
+                                    CASE WHEN toLower(source_path) CONTAINS kw THEN 1 ELSE 0 END
+                                ) * 0.02  // Add 2% boost per keyword match
+                            ELSE 0.0
+                         END AS keyword_boost
+                    WITH content, start_offset, source_path, source_name, 
+                         (similarity + keyword_boost) AS boosted_similarity,
+                         similarity AS original_similarity,
+                         source_type, project_name
+                    
+                    // Order by boosted similarity and limit initial results
+                    ORDER BY boosted_similarity DESC
+                    LIMIT $initialLimit
+                    
                     RETURN content, start_offset, source_path AS file_path, 
-                           source_name AS file_name, similarity, source_type
-                    ORDER BY similarity DESC
-                    LIMIT 20
+                           source_name AS file_name, original_similarity AS similarity, 
+                           boosted_similarity, source_type, project_name
                     """
 
-                    result = await session.run(cypher, embedding=embedding)
-                    records = await result.data()
-                    
-                    print(f"📊 Neo4j returned {len(records)} records")
+                    # Adaptive threshold retry loop
+                    for attempt_idx, threshold in enumerate(threshold_attempts):
+                        min_threshold = threshold
+                        
+                        result = await session.run(
+                            cypher, 
+                            embedding=embedding,
+                            minThreshold=min_threshold,
+                            enableHybrid=self.valves.ENABLE_HYBRID_SEARCH,
+                            keywords=keywords,
+                            initialLimit=max(20, self.valves.SEMANTIC_SEARCH_LIMIT * 2)
+                        )
+                        records = await result.data()
+                        
+                        print(f"📊 Neo4j returned {len(records)} records (threshold: {min_threshold})")
+                        
+                        if records:
+                            if attempt_idx > 0:
+                                print(f"✅ Found results with lowered threshold {min_threshold} (originally {threshold_attempts[0]})")
+                            break  # Got results, stop trying
+                        else:
+                            if attempt_idx < len(threshold_attempts) - 1:
+                                print(f"⚠️ No results at threshold {min_threshold}, trying lower threshold...")
+                            else:
+                                print(f"❌ No results found even at threshold {min_threshold}")
+                                print(f"💡 Query: {user_message[:100]}")
+                                print(f"🔑 Keywords: {keywords}")
+                                print(f"📝 Try broader terms or check if projects are indexed")
 
                     if not records:
-                        print("⚠️ No records matched similarity threshold")
                         return ""
 
                     # Aggregate chunks by source (file or memory) to avoid duplicates
                     file_aggregates = {}
+                    project_matches = set()  # Track which projects were matched
                     
-                    # Debug: print first few similarity scores
+                    # Debug: print similarity score distribution
                     if records:
-                        sample_scores = [r["similarity"] for r in records[:3]]
-                        print(f"🎯 Top 3 similarity scores: {sample_scores}")
+                        sample_scores = [r["similarity"] for r in records[:5]]
+                        boosted_scores = [r.get("boosted_similarity", r["similarity"]) for r in records[:5]]
+                        print(f"🎯 Top 5 similarity scores: {[f'{s:.3f}' for s in sample_scores]}")
+                        if self.valves.ENABLE_HYBRID_SEARCH:
+                            print(f"⚡ Top 5 boosted scores: {[f'{s:.3f}' for s in boosted_scores]}")
                     
                     for record in records:
                         file_path = record.get("file_path") or record.get("file_name", "Unknown")
                         similarity = record["similarity"]
+                        boosted_similarity = record.get("boosted_similarity", similarity)
                         content = record.get("content", "")
                         start_offset = record.get("start_offset", 0)
                         source_type = record.get("source_type", "file_chunk")
+                        project_name = record.get("project_name", "unknown")
+                        
+                        # Track projects for cross-project detection
+                        if project_name != "unknown":
+                            project_matches.add(project_name)
                         
                         # Debug: check why content might be None
                         if not content:
                             print(f"⚠️ Skipping record with no content: {file_path} (similarity: {similarity:.3f})")
                             continue
                         
-                        print(f"✅ Adding chunk from {file_path[:50]}... (similarity: {similarity:.3f}, content length: {len(content)})")
+                        print(f"✅ Adding chunk from {file_path[:60]}... (sim: {similarity:.3f}, boosted: {boosted_similarity:.3f}, project: {project_name})")
                         
                         if file_path not in file_aggregates:
                             file_aggregates[file_path] = {
                                 "chunks": [],
                                 "max_similarity": similarity,
+                                "max_boosted_similarity": boosted_similarity,
                                 "chunk_count": 0,
-                                "source_type": source_type
+                                "source_type": source_type,
+                                "project_name": project_name
                             }
                         
                         agg = file_aggregates[file_path]
                         agg["chunk_count"] += 1
                         agg["max_similarity"] = max(agg["max_similarity"], similarity)
+                        agg["max_boosted_similarity"] = max(agg["max_boosted_similarity"], boosted_similarity)
                         agg["chunks"].append({
                             "content": content,
                             "start_offset": start_offset,
-                            "similarity": similarity
+                            "similarity": similarity,
+                            "boosted_similarity": boosted_similarity
                         })
                     
-                    # Calculate boosted similarity and sort
-                    for file_path, agg in file_aggregates.items():
-                        # Boost: base similarity + 0.05 per additional chunk
-                        agg["boosted_similarity"] = agg["max_similarity"] + (agg["chunk_count"] - 1) * 0.05
-                        
-                        # Sort chunks by similarity within each file
-                        agg["chunks"].sort(key=lambda x: x["similarity"], reverse=True)
+                    # Show cross-project detection
+                    if len(project_matches) > 1:
+                        print(f"🔗 Cross-project query detected: {', '.join(sorted(project_matches))}")
+                    elif len(project_matches) == 1:
+                        print(f"📁 Single project query: {list(project_matches)[0]}")
                     
-                    # Sort files by boosted similarity
+                    # Multi-hop graph traversal for cross-project enrichment
+                    if self.valves.ENABLE_GRAPH_TRAVERSAL and len(project_matches) > 1 and len(file_aggregates) < self.valves.SEMANTIC_SEARCH_LIMIT:
+                        print(f"🕸️ Performing {self.valves.GRAPH_TRAVERSAL_DEPTH}-hop graph traversal for cross-project context...")
+                        
+                        # Get top files for graph expansion
+                        top_file_paths = [fp for fp, agg in sorted(
+                            file_aggregates.items(),
+                            key=lambda x: x[1]["max_boosted_similarity"],
+                            reverse=True
+                        )[:3]]  # Expand from top 3 results
+                        
+                        if top_file_paths:
+                            # Graph traversal query to find related files through shared concepts/imports
+                            graph_query = """
+                            UNWIND $startPaths as startPath
+                            MATCH (startFile:File)
+                            WHERE coalesce(startFile.absolute_path, startFile.path) = startPath
+                            
+                            // Multi-hop traversal through file relationships
+                            MATCH path = (startFile)-[*1..$depth]-(relatedFile:File)
+                            WHERE coalesce(relatedFile.absolute_path, relatedFile.path) <> startPath
+                              AND relatedFile.embedding IS NOT NULL
+                              AND (relatedFile.has_chunks = false OR exists((relatedFile)-[:HAS_CHUNK]->()))
+                            
+                            WITH DISTINCT relatedFile, length(path) as hops, startPath
+                            WHERE hops <= $depth
+                            
+                            // Return file content or chunks
+                            OPTIONAL MATCH (relatedFile)-[:HAS_CHUNK]->(chunk:FileChunk)
+                            WHERE chunk.embedding IS NOT NULL
+                            
+                            WITH relatedFile, hops, startPath,
+                                 CASE 
+                                    WHEN chunk IS NOT NULL THEN collect(chunk.text)[..2]  // Top 2 chunks
+                                    ELSE [relatedFile.content]
+                                 END as contents,
+                                 split(coalesce(relatedFile.absolute_path, relatedFile.path), '/') AS pathParts
+                            
+                            WITH coalesce(relatedFile.absolute_path, relatedFile.path) as file_path, 
+                                 relatedFile.name as file_name,
+                                 contents,
+                                 hops,
+                                 startPath,
+                                 CASE 
+                                    WHEN size(pathParts) > 2 THEN pathParts[2]  // Index 2 is project name from /workspace/{project}/
+                                    ELSE 'unknown'
+                                 END AS project_name
+                            
+                            RETURN file_path, file_name, contents, hops, startPath, project_name
+                            LIMIT 5
+                            """
+                            
+                            try:
+                                graph_result = await session.run(
+                                    graph_query,
+                                    startPaths=top_file_paths,
+                                    depth=self.valves.GRAPH_TRAVERSAL_DEPTH
+                                )
+                                graph_records = await graph_result.data()
+                                
+                                print(f"🔍 Graph traversal found {len(graph_records)} related documents")
+                                
+                                for grec in graph_records:
+                                    gfile_path = grec["file_path"]
+                                    if gfile_path in file_aggregates:
+                                        continue  # Skip if already in results
+                                    
+                                    gproject_name = grec.get("project_name", "unknown")
+                                    ghops = grec.get("hops", 1)
+                                    gcontents = grec.get("contents", [])
+                                    
+                                    # Score penalty for graph distance (0.1 per hop)
+                                    graph_penalty = ghops * 0.1
+                                    graph_score = max(0.5, min_threshold - graph_penalty)  # Start from threshold
+                                    
+                                    print(f"  🔗 Related: {gfile_path[:60]} [{gproject_name}] ({ghops} hops, score: {graph_score:.3f})")
+                                    
+                                    if gcontents:
+                                        file_aggregates[gfile_path] = {
+                                            "chunks": [{
+                                                "content": content,
+                                                "start_offset": 0,
+                                                "similarity": graph_score,
+                                                "boosted_similarity": graph_score
+                                            } for content in gcontents if content],
+                                            "max_similarity": graph_score,
+                                            "max_boosted_similarity": graph_score,
+                                            "chunk_count": len([c for c in gcontents if c]),
+                                            "source_type": "file",
+                                            "project_name": gproject_name,
+                                            "graph_related": True,
+                                            "hops": ghops
+                                        }
+                            except Exception as graph_err:
+                                print(f"⚠️ Graph traversal error: {graph_err}")
+                    
+                    # Sort chunks within each file by boosted similarity
+                    for file_path, agg in file_aggregates.items():
+                        # Additional boost: +0.03 per extra chunk (rewards docs with multiple relevant sections)
+                        chunk_diversity_boost = (agg["chunk_count"] - 1) * 0.03
+                        agg["final_score"] = agg["max_boosted_similarity"] + chunk_diversity_boost
+                        
+                        # Sort chunks by boosted similarity within each file
+                        agg["chunks"].sort(key=lambda x: x["boosted_similarity"], reverse=True)
+                    
+                    # Sort files by final score and apply limit
                     sorted_files = sorted(
                         file_aggregates.items(),
-                        key=lambda x: x[1]["boosted_similarity"],
+                        key=lambda x: x[1]["final_score"],
                         reverse=True
                     )[:self.valves.SEMANTIC_SEARCH_LIMIT]
                     
-                    print(f"📚 Aggregated into {len(file_aggregates)} files, returning top {len(sorted_files)}")
+                    print(f"📚 Aggregated {len(file_aggregates)} sources, returning top {len(sorted_files)} above {min_threshold} threshold")
+                    if sorted_files:
+                        print(f"📈 Quality range: {sorted_files[0][1]['final_score']:.3f} (best) to {sorted_files[-1][1]['final_score']:.3f} (worst)")
                     
-                    # Format context output
+                    # Format context output with quality indicators
                     context_parts = []
                     for file_path, agg in sorted_files:
                         # Take top 2 chunks per file/memory
@@ -773,10 +993,16 @@ Please address the user's request using the provided context and your capabiliti
                             continue
                         
                         source_label = "Memory" if agg.get("source_type") == "memory" else "File"
+                        project_label = f" [{agg['project_name']}]" if agg.get("project_name") and agg["project_name"] != "unknown" else ""
+                        
+                        # Quality indicator
+                        quality = "🔥 Excellent" if agg["final_score"] >= 0.90 else \
+                                 "✅ High" if agg["final_score"] >= 0.80 else \
+                                 "📊 Good" if agg["final_score"] >= 0.75 else "📉 Moderate"
                         
                         context_parts.append(
-                            f"**{source_label}:** {file_path}\n"
-                            f"**Relevance:** {agg['boosted_similarity']:.3f} ({agg['chunk_count']} matching {'entry' if source_label == 'Memory' else 'chunks'})\n"
+                            f"**{source_label}:** {file_path}{project_label}\n"
+                            f"**Quality:** {quality} (score: {agg['final_score']:.3f}, {agg['chunk_count']} matching {'entry' if source_label == 'Memory' else 'chunks'})\n"
                             f"**Content:**\n```\n"
                         )
                         
@@ -937,3 +1163,4 @@ Please address the user's request using the provided context and your capabiliti
 
         except Exception as e:
             yield f"\n\n**Error:** {str(e)}\n"
+
