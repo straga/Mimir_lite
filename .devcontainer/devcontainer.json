@@ -127,8 +127,8 @@
   // Post-create commands
   "postCreateCommand": "npm install && cd frontend && npm install",
   
-  // Run services on startup
-  "initializeCommand": "docker compose up -d neo4j copilot-api ollama",
+  // Run services on startup (uses smart startup script to detect architecture)
+  "initializeCommand": "./scripts/start.sh up",
   
   // Mount the workspace
   "mounts": [

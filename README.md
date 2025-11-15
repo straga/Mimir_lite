@@ -76,17 +76,22 @@ cd Mimir
 # Copy environment template
 cp env.example .env
 
-# Start all services (Neo4j + Copilot API + MCP Server)
-docker compose up -d
+# Start all services (automatically detects your platform)
+npm run start
+# Or manually: docker compose up -d
 ```
 
-That's it! Services will start in the background.
+That's it! Services will start in the background. The startup script automatically detects your platform (macOS ARM64, Linux, Windows) and uses the optimized docker-compose file.
 
 ### 3. Verify It's Working
 
 ```bash
 # Check that all services are running
-docker compose ps
+npm run status
+# Or manually: docker compose ps
+
+# View logs
+npm run logs
 
 # Open Mimir Web UI (includes file indexing, orchestration studio, and portal)
 # Visit: http://localhost:9042
@@ -97,6 +102,16 @@ docker compose ps
 # Check MCP server health
 curl http://localhost:9042/health
 ```
+
+**Available Commands:**
+- `npm run start` - Start all services
+- `npm run stop` - Stop all services
+- `npm run restart` - Restart services
+- `npm run logs` - View logs
+- `npm run status` - Check service status
+- `npm run rebuild` - Full rebuild without cache
+
+See [scripts/START_SCRIPT.md](scripts/START_SCRIPT.md) for more details.
 
 **You're ready!** The Mimir Web UI is now available at `http://localhost:9042`
 
