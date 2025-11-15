@@ -18,6 +18,9 @@ import { LLMConfigLoader } from "../config/LLMConfigLoader.js";
 import { RateLimitQueue } from "./rate-limit-queue.js";
 import { loadRateLimitConfig } from "../config/rate-limit-config.js";
 
+// Dummy API key for copilot-api proxy (required by LangChain OpenAI client but not used)
+const DUMMY_OPENAI_KEY = process.env.OPENAI_API_KEY || 'dummy-key-for-proxy';
+
 export interface AgentConfig {
   preamblePath: string;
   model?: CopilotModel | string;
@@ -92,14 +95,14 @@ export class CopilotAgentClient {
     }
 
     // Validate OpenAI API key if using OpenAI provider
+    // OpenAI API key is required by LangChain but not used by copilot-api proxy
+    // Use dummy key if not provided
     if (
       config.provider === LLMProvider.OPENAI &&
       !config.openAIApiKey &&
       !process.env.OPENAI_API_KEY
     ) {
-      throw new Error(
-        "OpenAI API key required for OpenAI provider. Provide via config.openAIApiKey or OPENAI_API_KEY environment variable."
-      );
+      process.env.OPENAI_API_KEY = DUMMY_OPENAI_KEY;
     }
 
     // Load config loader (synchronous singleton access)
@@ -195,13 +198,15 @@ export class CopilotAgentClient {
     return this.configLoader.getContextWindow(provider, model);
   }
 
-  async loadPreamble(path: string): Promise<void> {
+  async loadPreamble(pathOrContent: string, isContent: boolean = false): Promise<void> {
     // Initialize LLM if not already done
     if (!this.llm) {
       await this.initializeLLM();
     }
 
-    this.systemPrompt = await fs.readFile(path, "utf-8");
+    this.systemPrompt = isContent 
+      ? pathOrContent 
+      : await fs.readFile(pathOrContent, "utf-8");
 
     // Display context window information
     const contextWindow = await this.getContextWindow();
@@ -428,7 +433,7 @@ export class CopilotAgentClient {
     );
 
     this.llm = new ChatOpenAI({
-      apiKey: "dummy-key-not-used", // Required by OpenAI client but not used by proxy
+      apiKey: DUMMY_OPENAI_KEY, // Required by OpenAI client but not used by proxy
       model: model,
       configuration: {
         baseURL: this.baseURL,
@@ -446,31 +451,43 @@ export class CopilotAgentClient {
     config: AgentConfig,
     model: string
   ): Promise<void> {
-    if (!config.openAIApiKey && !process.env.OPENAI_API_KEY) {
-      throw new Error(
-        "OpenAI API key required for OpenAI provider. Provide via config.openAIApiKey or OPENAI_API_KEY environment variable."
-      );
-    }
-
+    // Use copilot-api proxy for all OpenAI requests
+    const llmConfig = await this.configLoader.load();
     const modelConfig = await this.configLoader.getModelConfig(
       LLMProvider.OPENAI,
       model
     );
 
-    this.baseURL = "https://api.openai.com/v1";
+    // Get baseURL from config or environment, default to localhost copilot-api
+    this.baseURL =
+      config.copilotBaseUrl ||
+      llmConfig.providers.copilot?.baseUrl ||
+      "http://localhost:4141/v1";
+    
     this.llmConfig = {
       maxTokens: config.maxTokens ?? modelConfig?.config?.maxTokens ?? -1,
       temperature:
         config.temperature ?? modelConfig?.config?.temperature ?? 0.0,
     };
 
+    console.log(`🔍 Initializing OpenAI client with copilot-api proxy: ${this.baseURL}`);
+    console.log(
+      `🔍 Model: ${model}, maxTokens: ${this.llmConfig.maxTokens}, temperature: ${this.llmConfig.temperature}`
+    );
+
     this.llm = new ChatOpenAI({
-      apiKey: config.openAIApiKey || process.env.OPENAI_API_KEY,
+      apiKey: DUMMY_OPENAI_KEY, // Required by OpenAI client but not used by proxy
       model: model,
+      configuration: {
+        baseURL: this.baseURL,
+      },
       temperature: this.llmConfig.temperature,
       maxTokens: this.llmConfig.maxTokens,
       streaming: false,
+      timeout: 120000, // 2 minute timeout for long-running requests
     });
+
+    console.log(`✅ OpenAI ChatOpenAI client created successfully (via copilot-api proxy)`);
   }
 
   /**

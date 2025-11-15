@@ -28,7 +28,7 @@ export async function evaluateAgent(
 ): Promise<Scores> {
   // Use GitHub Copilot for evaluation (LLM-as-judge)
   const evaluator = new ChatOpenAI({
-    apiKey: 'dummy-key-not-used', // Required by OpenAI client but not used by proxy
+    apiKey: process.env.OPENAI_API_KEY, // Required by client but unused by copilot-api proxy
     model: CopilotModel.GPT_4_1, // Default to GPT-4.1
     configuration: {
       baseURL: 'http://localhost:4141/v1', // copilot-api proxy

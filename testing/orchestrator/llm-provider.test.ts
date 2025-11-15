@@ -275,7 +275,11 @@ describe('LLM Provider Abstraction', () => {
       await fs.unlink('test-agent.md');
     });
 
-    test('should throw error if OpenAI API key not provided', async () => {
+    test('should use dummy key if OpenAI API key not provided', async () => {
+      // Clear any existing OPENAI_API_KEY env var
+      const originalKey = process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+      
       const config: AgentConfig = {
         preamblePath: 'test-agent.md',
         provider: LLMProvider.OPENAI,
@@ -284,11 +288,23 @@ describe('LLM Provider Abstraction', () => {
       
       await fs.writeFile('test-agent.md', 'You are a test agent.');
       
+      // Should NOT throw - it should use dummy key for copilot-api proxy
       expect(() => {
         new CopilotAgentClient(config);
-      }).toThrow('OpenAI API key required');
+      }).not.toThrow();
+      
+      // Verify dummy key was set
+      expect(process.env.OPENAI_API_KEY).toBeDefined();
+      expect(process.env.OPENAI_API_KEY).toBe('dummy-key-for-proxy');
       
       await fs.unlink('test-agent.md');
+      
+      // Restore original key
+      if (originalKey) {
+        process.env.OPENAI_API_KEY = originalKey;
+      } else {
+        delete process.env.OPENAI_API_KEY;
+      }
     });
   });
 
@@ -469,6 +485,24 @@ describe('LLM Provider Abstraction', () => {
     // 2. Context window size validation against model limits
     // 3. Warnings when approaching context window limits
     // Implementation requires: tiktoken or similar library for token estimation
+    
+    /**
+     * SKIPPED: Feature not yet implemented
+     * 
+     * CONFLICT: None - test is skipped because the feature doesn't exist yet
+     * 
+     * MISSING IMPLEMENTATION:
+     * - Token counting library (tiktoken, gpt-3-encoder, or similar)
+     * - Context window size tracking per model
+     * - Pre-execution validation in execute() method
+     * - Rejection when prompt + preamble exceeds model's context window
+     * 
+     * UNSKIP CONDITIONS:
+     * 1. Install token counting library (e.g., npm install tiktoken), AND
+     * 2. Add contextWindowSize property to model configurations, AND
+     * 3. Implement token estimation in LLMProvider.execute(), AND
+     * 4. Add validation that throws error when context exceeds limit
+     */
     test.skip('should validate context size before execution', async () => {
       // TODO: Implement context size validation in execute() method
       // This requires estimating token count and comparing to context window
@@ -494,6 +528,23 @@ describe('LLM Provider Abstraction', () => {
       await fs.unlink('test-agent.md');
     });
 
+    /**
+     * SKIPPED: Feature not yet implemented
+     * 
+     * CONFLICT: None - test is skipped because the feature doesn't exist yet
+     * 
+     * MISSING IMPLEMENTATION:
+     * - Token counting library for accurate usage tracking
+     * - Context usage percentage calculation
+     * - Warning system in execute() when usage exceeds 80% threshold
+     * - Console.warn() calls for high context usage
+     * 
+     * UNSKIP CONDITIONS:
+     * 1. Install token counting library (e.g., npm install tiktoken), AND
+     * 2. Implement token usage tracking in LLMProvider.execute(), AND
+     * 3. Add contextWindowSize property to model configurations, AND
+     * 4. Add warning logic when (usedTokens / contextWindowSize) > 0.8
+     */
     test.skip('should warn when context usage >80%', async () => {
       // TODO: Implement context usage warning in execute() method
       // This requires tracking token usage and warning when approaching limit

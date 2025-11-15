@@ -55,7 +55,7 @@ describe('RateLimitQueue', () => {
   describe('Throttling Behavior', () => {
     it('should enforce minimum delay between requests', async () => {
       const limiter = RateLimitQueue.getInstance({ 
-        requestsPerHour: 3600, // 1 request per second
+        requestsPerHour: 14400, // 4 requests per second = 250ms between requests
         logLevel: 'silent',
       });
       limiter.reset();
@@ -75,19 +75,19 @@ describe('RateLimitQueue', () => {
       
       expect(mockFn).toHaveBeenCalledTimes(3);
       
-      // Check spacing between requests (should be ~1000ms each)
+      // Check spacing between requests (should be ~250ms each)
       const delay1 = timestamps[1] - timestamps[0];
       const delay2 = timestamps[2] - timestamps[1];
       
-      expect(delay1).toBeGreaterThanOrEqual(950); // Allow 50ms tolerance
-      expect(delay1).toBeLessThanOrEqual(1100);
-      expect(delay2).toBeGreaterThanOrEqual(950);
-      expect(delay2).toBeLessThanOrEqual(1100);
+      expect(delay1).toBeGreaterThanOrEqual(230); // Allow 20ms tolerance
+      expect(delay1).toBeLessThanOrEqual(300);
+      expect(delay2).toBeGreaterThanOrEqual(230);
+      expect(delay2).toBeLessThanOrEqual(300);
     });
     
     it('should respect estimated request count', async () => {
       const limiter = RateLimitQueue.getInstance({ 
-        requestsPerHour: 3600, // 1 req/sec for faster tests
+        requestsPerHour: 14400, // 4 req/sec = 250ms for faster tests
         logLevel: 'silent',
       });
       limiter.reset();
@@ -98,25 +98,25 @@ describe('RateLimitQueue', () => {
       
       const metrics = limiter.getMetrics();
       expect(metrics.requestsInCurrentHour).toBe(6); // 2 × 3
-      expect(metrics.remainingCapacity).toBe(3594); // 3600 - 6
+      expect(metrics.remainingCapacity).toBe(14394); // 14400 - 6
     });
   });
   
   describe('Capacity Management', () => {
     it('should accurately track remaining capacity', async () => {
       const limiter = RateLimitQueue.getInstance({ 
-        requestsPerHour: 3600, // 1 req/sec for faster tests
+        requestsPerHour: 14400, // 4 req/sec = 250ms for faster tests
         logLevel: 'silent',
       });
       limiter.reset();
       
-      expect(limiter.getRemainingCapacity()).toBe(3600);
+      expect(limiter.getRemainingCapacity()).toBe(14400);
       
       await limiter.enqueue(async () => 'result', 3);
-      expect(limiter.getRemainingCapacity()).toBe(3597);
+      expect(limiter.getRemainingCapacity()).toBe(14397);
       
       await limiter.enqueue(async () => 'result', 2);
-      expect(limiter.getRemainingCapacity()).toBe(3595);
+      expect(limiter.getRemainingCapacity()).toBe(14395);
     });
     
     it('should wait when capacity is full', async () => {
@@ -150,14 +150,14 @@ describe('RateLimitQueue', () => {
   describe('Metrics', () => {
     it('should return accurate metrics', async () => {
       const limiter = RateLimitQueue.getInstance({ 
-        requestsPerHour: 3600, // 1 req/sec for faster tests
+        requestsPerHour: 14400, // 4 req/sec = 250ms for faster tests
         logLevel: 'silent',
       });
       limiter.reset();
       
       const initialMetrics = limiter.getMetrics();
       expect(initialMetrics.requestsInCurrentHour).toBe(0);
-      expect(initialMetrics.remainingCapacity).toBe(3600);
+      expect(initialMetrics.remainingCapacity).toBe(14400);
       expect(initialMetrics.queueDepth).toBe(0);
       expect(initialMetrics.totalProcessed).toBe(0);
       expect(initialMetrics.usagePercent).toBe(0);
@@ -168,16 +168,16 @@ describe('RateLimitQueue', () => {
       
       const afterMetrics = limiter.getMetrics();
       expect(afterMetrics.requestsInCurrentHour).toBe(15);
-      expect(afterMetrics.remainingCapacity).toBe(3585);
+      expect(afterMetrics.remainingCapacity).toBe(14385);
       expect(afterMetrics.totalProcessed).toBe(2);
-      expect(afterMetrics.usagePercent).toBeCloseTo(0.42, 1); // 15/3600 ≈ 0.42%
+      expect(afterMetrics.usagePercent).toBeCloseTo(0.104, 1); // 15/14400 ≈ 0.104%
     });
   });
   
   describe('Queue Processing', () => {
     it('should process requests in FIFO order', async () => {
       const limiter = RateLimitQueue.getInstance({ 
-        requestsPerHour: 3600,
+        requestsPerHour: 14400, // 4 req/sec = 250ms for faster tests
         logLevel: 'silent',
       });
       limiter.reset();
@@ -202,7 +202,7 @@ describe('RateLimitQueue', () => {
   describe('Error Handling', () => {
     it('should reject promise when execution throws error', async () => {
       const limiter = RateLimitQueue.getInstance({ 
-        requestsPerHour: 3600,
+        requestsPerHour: 14400, // 4 req/sec = 250ms for faster tests
         logLevel: 'silent',
       });
       limiter.reset();
@@ -217,7 +217,7 @@ describe('RateLimitQueue', () => {
     
     it('should continue processing queue after error', async () => {
       const limiter = RateLimitQueue.getInstance({ 
-        requestsPerHour: 3600,
+        requestsPerHour: 14400, // 4 req/sec = 250ms for faster tests
         logLevel: 'silent',
       });
       limiter.reset();
@@ -239,21 +239,21 @@ describe('RateLimitQueue', () => {
   describe('Dynamic Configuration', () => {
     it('should allow updating requestsPerHour at runtime', async () => {
       const limiter = RateLimitQueue.getInstance({ 
-        requestsPerHour: 3600,
+        requestsPerHour: 14400, // 4 req/sec = 250ms for faster tests
         logLevel: 'silent',
       });
       limiter.reset();
       
       await limiter.enqueue(async () => 'result', 10);
-      expect(limiter.getRemainingCapacity()).toBe(3590);
+      expect(limiter.getRemainingCapacity()).toBe(14390);
       
       // Increase limit
-      limiter.setRequestsPerHour(7200);
-      expect(limiter.getRemainingCapacity()).toBe(7190);
+      limiter.setRequestsPerHour(28800);
+      expect(limiter.getRemainingCapacity()).toBe(28790);
       
       // Decrease limit
-      limiter.setRequestsPerHour(1800);
-      expect(limiter.getRemainingCapacity()).toBe(1790);
+      limiter.setRequestsPerHour(7200);
+      expect(limiter.getRemainingCapacity()).toBe(7190);
     });
   });
   

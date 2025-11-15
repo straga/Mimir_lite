@@ -6,12 +6,12 @@ Get Mimir running in 10 minutes with step-by-step instructions.
 
 Before starting, install these tools:
 
-- **Docker Desktop** (with > 2 GB RAM allocated) → https://www.docker.com/products/docker-desktop/
+- **Docker Desktop** (with 16GB RAM allocated) → https://www.docker.com/products/docker-desktop/
 - **Node.js 18+** → https://nodejs.org/
 - **Git** → https://git-scm.com/
 - **GitHub Copilot Subscription** (Individual, Business, or Enterprise)
 
-> 💡 **Docker Memory**: Mimir requires Docker Desktop with **> 2 GB RAM** allocated. Check: Docker Desktop → Settings → Resources → Memory
+> 💡 **Docker Memory**: Mimir requires Docker Desktop with **at least 16GB RAM** allocated. Check: Docker Desktop → Settings → Resources → Memory
 
 ---
 
@@ -60,7 +60,7 @@ This command:
 ## Step 4: Start All Services
 
 ```bash
-# Start Neo4j, Copilot API, MCP Server, and Open-WebUI
+# Start Neo4j, Copilot API, and Mimir Server (with Web UI)
 docker compose up
 ```
 
@@ -69,8 +69,9 @@ docker compose up
 You'll see logs from multiple services starting up. **This is normal:**
 - `neo4j_db` - Database initialization
 - `copilot_api_server` - GitHub authentication
-- `mcp_server` - MCP server startup
-- `mimir-open-webui` - Web interface
+- `mimir-server` - MCP server + Web UI startup
+
+> 💡 **Note**: Open-WebUI is optional and disabled by default. To enable it, uncomment the `open-webui` service in `docker-compose.yml`.
 
 ---
 
@@ -136,17 +137,19 @@ You should see all services as `healthy`:
 NAME                  STATUS
 neo4j_db              Up (healthy)
 copilot_api_server    Up (healthy)
-mcp_server            Up (healthy)
-mimir-open-webui      Up
+mimir-server          Up (healthy)
 ```
 
 **Test the endpoints:**
 ```bash
+# Mimir Web UI (Portal + File Indexing)
+open http://localhost:9042
+
 # Neo4j Browser (should open in browser)
 open http://localhost:7474
 # Username: neo4j, Password: password
 
-# MCP Server Health Check
+# Mimir API Health Check
 curl http://localhost:9042/health
 # Should return: {"status":"ok"}
 
@@ -157,27 +160,35 @@ curl http://localhost:4141/v1/models
 
 ---
 
-## Step 7: Access Open-WebUI
+## Step 7: Access Mimir Web UI
 
-Open-WebUI provides a ChatGPT-like interface with Mimir integration:
+The Mimir Web UI provides a portal with file indexing and access to all features:
 
 ```
-http://localhost:3000
+http://localhost:9042
 ```
 
-**First-time setup:**
-1. Create an admin account (first user becomes admin)
-2. Select model: **gpt-4.1** (default, avoids premium usage)
-3. Start chatting!
+**What's Available:**
+1. **Portal (Main Hub)** - Navigation and file indexing management
+2. **File Indexing** - Add/remove folders to index your codebase
+3. **Orchestration Studio** - Visual workflow builder (coming soon)
+4. **MCP API** - Available at `/mcp` endpoint for AI assistants
+5. **Chat API** - Available at `/api/chat` for conversational interfaces
 
-**Try these commands:**
-```
-Create a TODO for implementing user authentication
+**Try these features:**
+- Add a folder to index your codebase
+- View indexed files in Neo4j Browser
+- Call MCP tools via the API
 
-Show me all pending tasks
+### (Optional) Enable Open-WebUI
 
-Search for files related to authentication
-```
+If you want a ChatGPT-like interface:
+
+1. Edit `docker-compose.yml` and uncomment the `open-webui` service
+2. Restart: `docker compose up -d`
+3. Access at http://localhost:3000
+4. Create an admin account (first user becomes admin)
+5. Select model: **gpt-4.1** (default, avoids premium usage)
 
 ---
 
@@ -204,8 +215,10 @@ Your AI agents now have:
 - ✅ Persistent memory (Neo4j graph database)
 - ✅ GitHub Copilot LLM access
 - ✅ Multi-agent orchestration
-- ✅ Web interface (Open-WebUI)
+- ✅ Web UI with Portal and file indexing (http://localhost:9042)
 - ✅ File indexing and semantic search
+- ✅ MCP API for AI assistant integration
+- ✅ Chat API for conversational interfaces
 
 ---
 
@@ -216,12 +229,12 @@ Your AI agents now have:
 docker compose logs -f
 
 # View logs (specific service)
-docker compose logs -f mcp-server
+docker compose logs -f mimir-server
 docker compose logs -f copilot-api
 
 # Restart a service
 docker compose restart copilot-api
-docker compose restart mcp-server
+docker compose restart mimir-server
 
 # Stop everything
 docker compose down
@@ -231,7 +244,7 @@ docker compose up -d
 
 # Rebuild after code changes
 npm run build:docker
-docker compose up -d --build mcp-server
+docker compose up -d --build mimir-server
 
 # Check service health
 docker compose ps
@@ -275,7 +288,7 @@ docker compose logs copilot-api | grep "Please enter"
 docker compose logs
 
 # Common fixes:
-# 1. Docker memory too low (need > 2GB)
+# 1. Docker memory too low (need 16GB)
 # 2. Ports already in use (7474, 4141, 9042, 3000)
 # 3. Neo4j taking too long to start (wait 60 seconds)
 
@@ -297,7 +310,7 @@ docker compose logs neo4j
 docker compose ps neo4j
 
 # If unhealthy, check memory allocation
-# Docker Desktop → Settings → Resources → Memory (need > 2GB)
+# Docker Desktop → Settings → Resources → Memory (need 16GB)
 ```
 
 ### Problem: Port conflicts
@@ -329,8 +342,8 @@ docker compose ps neo4j
 # Check Neo4j password matches .env
 docker compose logs neo4j | grep password
 
-# Restart MCP server after Neo4j is ready
-docker compose restart mcp-server
+# Restart Mimir server after Neo4j is ready
+docker compose restart mimir-server
 ```
 
 ---
@@ -358,7 +371,7 @@ After starting Open-WebUI, enable the pre-packaged Mimir pipelines:
 2. Click your username (bottom-left) → **"Admin Panel"**
 3. Navigate to **"Pipelines"** tab
 4. Toggle each Mimir pipeline to enable it:
-   - ✅ **Mimir Multi-Agent Orchestrator** - Full PM → Worker → QC workflow
+   - ✅ **Mimir Orchestrator** - Full PM → Worker → QC workflow
    - ✅ **Mimir RAG Auto** - Chat with semantic search
    - ✅ **Mimir File Browser** - Browse indexed files
    - ✅ **Mimir Tools Wrapper** - Command shortcuts (`/list_folders`, `/search`)
@@ -379,8 +392,8 @@ Open-WebUI at http://localhost:3000 provides:
 Enable file indexing to let AI agents search your code:
 
 ```bash
-# Inside the mcp-server container
-docker exec -it mcp_server node /app/scripts/setup-watch.js /workspace
+# Inside the mimir-server container
+docker exec -it mimir_server node /app/scripts/setup-watch.js /workspace
 
 # Or from Open-WebUI, use the file browser pipeline
 ```

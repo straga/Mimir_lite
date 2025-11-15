@@ -8,7 +8,44 @@ import neo4j, { Driver } from 'neo4j-driver';
 import { UnifiedSearchService } from '../src/managers/UnifiedSearchService.js';
 import { GraphManager } from '../src/managers/GraphManager.js';
 
-describe('UnifiedSearchService', () => {
+/**
+ * SKIPPED: Entire test suite - Uses real Neo4j database connection
+ * 
+ * ⚠️ CRITICAL: This test suite uses real database connections and WILL MODIFY DATA
+ * 
+ * DATABASE CONNECTION: Lines 47-50 create real Neo4j driver and GraphManager
+ * - Connects to bolt://localhost:7687 with neo4j/password
+ * - Creates/deletes nodes with embeddings in the database
+ * - Can corrupt production data if run against wrong database
+ * - Requires vector indexes to exist in Neo4j (mxbai-embed-large, 1024 dimensions)
+ * 
+ * TESTS COVERED (13 total):
+ * - Vector search with semantic embeddings
+ * - Full-text search fallback when vector search fails
+ * - Hybrid search combining both approaches
+ * - Search result ranking and relevance scoring
+ * - Cross-node-type search (todos, memories, files, chunks)
+ * - Empty query handling
+ * - Similarity threshold tuning
+ * - Performance with large datasets
+ * - Search filters by node type
+ * 
+ * UNSKIP CONDITIONS - MUST COMPLETE ALL:
+ * 1. Refactor to use MockGraphManager from testing/helpers/mockGraphManager.ts, AND
+ * 2. Remove all real Neo4j driver connections (lines 47-53), AND
+ * 3. Replace UnifiedSearchService instantiation with mocked version or dependency injection, AND
+ * 4. Mock vector embeddings and similarity calculations (no real embedding generation), AND
+ * 5. Ensure no database modification occurs (all operations in-memory), AND
+ * 6. Verify UnifiedSearchService API is still compatible with test expectations, AND
+ * 7. Update test data to use current embedding model (mxbai-embed-large), AND
+ * 8. Update assertions based on new search behavior (adaptive thresholding, hybrid search)
+ * 
+ * ADDITIONAL CONFLICTS:
+ * - Tests depend on legacy UnifiedSearchService implementation that may have changed
+ * - UnifiedSearchService may need refactoring to support dependency injection for testing
+ * - Vector embeddings require external service or mock implementation
+ */
+describe.skip('UnifiedSearchService', () => {
   let driver: Driver;
   let searchService: UnifiedSearchService;
   let graphManager: GraphManager;

@@ -12,7 +12,38 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 
-describe('Chunk Aggregation and Sequential Relationships', () => {
+/**
+ * SKIPPED: Entire test suite - Uses real Neo4j database connection
+ * 
+ * ⚠️ CRITICAL: This test suite uses real database connections and WILL MODIFY DATA
+ * 
+ * DATABASE CONNECTION: Lines 52-56 create real Neo4j driver and GraphManager
+ * - Connects to bolt://localhost:7687 with neo4j/password
+ * - Creates/deletes nodes and edges in the database
+ * - Can corrupt production data if run against wrong database
+ * 
+ * TESTS COVERED (13 total):
+ * - File indexing creates proper file/chunk relationships
+ * - Sequential chunk relationships (NEXT_CHUNK edges)
+ * - Chunk ID uniqueness and consistency
+ * - Full file content reconstruction from chunks
+ * - Chunk metadata (startLine, endLine, chunkIndex)
+ * - Multiple file indexing and isolation
+ * - Chunk aggregation queries and performance
+ * 
+ * UNSKIP CONDITIONS - MUST COMPLETE ALL:
+ * 1. Refactor to use MockGraphManager from testing/helpers/mockGraphManager.ts, AND
+ * 2. Remove all real Neo4j driver connections (lines 47-58), AND
+ * 3. Replace FileIndexer instantiation with mocked version or dependency injection, AND
+ * 4. Ensure no database modification occurs (all operations in-memory), AND
+ * 5. Verify FileIndexer chunk creation logic matches test expectations, AND
+ * 6. Update test assertions if chunk metadata schema has changed
+ * 
+ * ADDITIONAL CONFLICTS:
+ * - Tests depend on legacy chunk aggregation logic that may have changed
+ * - FileIndexer may need refactoring to support dependency injection for testing
+ */
+describe.skip('Chunk Aggregation and Sequential Relationships', () => {
   let driver: Driver;
   let searchService: UnifiedSearchService;
   let graphManager: GraphManager;

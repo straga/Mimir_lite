@@ -18,6 +18,7 @@ export type NodeType =
   | 'concept'           // Abstract concepts, ideas
   | 'person'            // People, users, agents
   | 'project'           // Projects, initiatives
+  | 'preamble'          // Agent preambles (worker/QC role definitions)
   | 'chain_execution'   // Agent chain execution tracking
   | 'agent_step'        // Individual agent step within chain
   | 'failure_pattern'   // Failed execution patterns for learning

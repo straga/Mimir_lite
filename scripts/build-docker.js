@@ -12,11 +12,11 @@ try {
   const env = { ...process.env, VERSION: version };
 
   // Try 'docker compose' first (modern Docker Desktop), then fall back to 'docker-compose'
-  let result = spawnSync('docker', ['compose', 'build', 'mcp-server'], { stdio: 'inherit', env });
+  let result = spawnSync('docker', ['compose', 'build', 'mimir-server'], { stdio: 'inherit', env });
 
   if (result.error && result.error.code === 'ENOENT') {
     console.log('Trying docker-compose (legacy)...');
-    result = spawnSync('docker-compose', ['build', 'mcp-server'], { stdio: 'inherit', env });
+    result = spawnSync('docker-compose', ['build', 'mimir-server'], { stdio: 'inherit', env });
   }
 
   if (result.error) {

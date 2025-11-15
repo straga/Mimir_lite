@@ -82,6 +82,9 @@ That's it! Services will start in the background.
 # Check that all services are running
 docker compose ps
 
+# Open Mimir Web UI (includes file indexing, orchestration studio, and portal)
+# Visit: http://localhost:9042
+
 # Open Neo4j Browser (default password: "password")
 # Visit: http://localhost:7474
 
@@ -89,7 +92,13 @@ docker compose ps
 curl http://localhost:9042/health
 ```
 
-**You're ready!** The MCP server is now available at `http://localhost:9042`
+**You're ready!** The Mimir Web UI is now available at `http://localhost:9042`
+
+**What you get:**
+- 🎯 **Portal**: Main hub with navigation and file indexing
+- 🎨 **Orchestration Studio**: Visual workflow builder (coming soon)
+- 🔌 **MCP API**: RESTful API at `http://localhost:9042/mcp`
+- 💬 **Chat API**: Conversational interface at `http://localhost:9042/api/chat`
 
 ## ⚙️ Configuration
 
@@ -146,6 +155,52 @@ SSL_CERT_FILE=/path/to/corporate-ca.crt
 ```
 
 See `env.example` or `docker-compose.yml` for complete list of configuration options.
+
+### Optional Services
+
+By default, only the core services run (Mimir Server, Neo4j, Copilot API). You can enable additional services by uncommenting them in `docker-compose.yml`:
+
+#### Enable Ollama (Local LLM Embeddings)
+
+**Why enable?** Run embeddings completely offline, no external dependencies.
+
+```bash
+# 1. Edit docker-compose.yml - uncomment the ollama service
+# 2. Update Mimir server environment:
+OLLAMA_BASE_URL=http://ollama:11434
+
+# 3. Restart services
+docker compose up -d
+```
+
+**Using External Ollama Instead:**
+
+If you already have Ollama running on your host or another machine:
+
+```bash
+# In .env file:
+OLLAMA_BASE_URL=http://192.168.1.100:11434  # Your Ollama server IP
+
+# Restart Mimir
+docker compose restart mimir-server
+```
+
+#### Enable Open-WebUI (Alternative Chat Interface)
+
+**Why enable?** Alternative web UI for chatting with Ollama models, useful for testing.
+
+```bash
+# 1. Edit docker-compose.yml - uncomment the open-webui service and volumes
+# 2. Restart services
+docker compose up -d
+
+# 3. Access Open-WebUI at http://localhost:3000
+```
+
+**Configuration:**
+- Uses Copilot API by default for models
+- Can be configured to use Ollama instead
+- See `docker/open-webui/README.md` for details
 
 ## 🎯 Usage
 
@@ -366,7 +421,7 @@ ls -la /path/to/file
 ```bash
 # Don't kill it! Large folders take time to index.
 # Watch the logs to see progress:
-docker compose logs -f mcp-server
+docker compose logs -f mimir-server
 
 # You should see:
 # - "📄 Indexing file: ..." (scanning)
@@ -403,37 +458,27 @@ npm run ollama:pull nomic-embed-text
 
 docker exec -it ollama_server ollama pull nomic-embed-text
 ```
-### HTTP API
+### Web UI
 
-Access the MCP server via HTTP for custom integrations:
+Access Mimir through your browser at `http://localhost:9042`:
 
-## Apple Silicon (temporary Copilot API workaround) 🚀 FIXED
+**🎯 Portal (Main Hub)**
+- File indexing management (add/remove folders)
+- Navigation to other features
+- System status and health
 
-> The default docker-compose.yml is for apple silicon. I publsihed a built image in docker hunbunder timothyswt/copilot-api. you dont need it, it just helps you use an openapi-compatible endpoint using your copilot license.
+**🎨 Orchestration Studio (Coming Soon)**
+- Visual workflow builder
+- Agent coordination
+- Task dependency graphs
 
-If you're running this project on Apple Silicon (M1/M2) and a prebuilt `copilot-api` Docker image for Apple Silicon is not yet available, you can run the Copilot-compatible API locally as a temporary workaround.
+### HTTP APIs
 
-1) Install the Copilot API CLI globally (requires npm):
+Mimir provides multiple APIs for different use cases:
 
+**1. MCP API** - For AI assistants (Claude, ChatGPT, etc.)
 ```bash
-npm install -g copilot-api
-```
-
-2) Start the Copilot API in the background (keeps your terminal free):
-
-```bash
-copilot-api start &
-```
-
-Notes:
-- The local `copilot-api` CLI will listen on `localhost:4141` by default. Docker services in this repo already assume the host Copilot API is available at `host.docker.internal:4141` (see `docker-compose.yml` and `docker-compose.silicon.yml`).
-- Once you have a native Apple Silicon Docker image for `timothyswt/copilot-api`, you can remove the local CLI workaround and run the service as a container instead.
-
-This step is only required until an Apple Silicon compatible Docker image is available.
-
-
-```bash
-# Initialize session
+# Initialize MCP session
 curl -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -d '{
@@ -466,6 +511,31 @@ curl -X POST http://localhost:9042/mcp \
   }'
 ```
 
+**2. Chat API** - For conversational interfaces
+```bash
+# Send a message (streaming response)
+curl -X POST http://localhost:9042/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Create a todo for implementing authentication",
+    "conversationId": "my-session-123"
+  }'
+```
+
+**3. Orchestration API** - For workflow execution
+```bash
+# Execute a plan with multiple tasks
+curl -X POST http://localhost:9042/api/orchestrate/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plan": {
+      "tasks": [
+        {"id": "1", "title": "Setup project", "dependencies": []}
+      ]
+    }
+  }'
+```
+
 ## 🏗️ Architecture
 
 ### What's Running?
@@ -474,117 +544,59 @@ When you run `docker compose up -d`, you get these services:
 
 | Service | Port | Purpose | URL |
 |---------|------|---------|-----|
+| **Mimir Server** | 9042 | Web UI + MCP API + Chat API | http://localhost:9042 |
 | **Neo4j** | 7474, 7687 | Graph database storage | http://localhost:7474 |
-| **MCP Server** | 9042 | Main API server | http://localhost:9042 |
-| **Copilot API** (optional*) | 4141 | AI model access | http://localhost:4141 |
-| **Ollama** (optional*) | 11434 | embeddings/AI model access | http://localhost:11434 |
-| **Open-WebUI** (optional*) | 3000 | OSS Chat UI | http://localhost:3000 |
+| **Copilot API** | 4141 | AI model access (optional) | http://localhost:4141 |
 
-> 🔔 Ollama is optional - However, you wont get semantic search unless you provide embeddings. You can point the indexing at any compatible /embeddings endpoint. Or, youll have to fall back to basic text search
+**Optional Services (commented out by default):**
 
-> 🔔 copliot-api is NOT required for the memory bank. It is useful if you want to do agent orchestration with it. Any OpenAI-compatible API will also work.
+| Service | Port | Purpose | Enable With |
+|---------|------|---------|-------------|
+| **Ollama** | 11434 | Local LLM embeddings | Uncomment in docker-compose.yml |
+| **Open-WebUI** | 3000 | Alternative chat UI | Uncomment in docker-compose.yml |
 
-> 🔔 Open-WebUI is also NOT required for the memory bank. It is useful for testing model access and you can use ollama models with it locally
+> � **Embeddings**: For semantic search, you need embeddings. Options:
+> - Use external Ollama server (recommended - set `OLLAMA_BASE_URL` in .env)
+> - Enable built-in Ollama service (uncomment in docker-compose.yml)
+> - Use Copilot embeddings (experimental - set `MIMIR_EMBEDDINGS_PROVIDER=copilot`)
+> - Use any OpenAI-compatible embeddings endpoint
+
+> � **Copilot API**: Required for orchestration workflows. Provides OpenAI-compatible API using your GitHub Copilot license. Any OpenAI-compatible API also works.
+
+> � **Open-WebUI**: Optional alternative chat interface. Useful for testing Ollama models locally. To enable, uncomment the `open-webui` service in docker-compose.yml and restart.
 
 ### How It Works
 
-```mermaid
-graph TB
-    subgraph Client["Client Layer"]
-        A[AI Assistant<br/>Claude Sonnet 4.5<br/>ChatGPT o1<br/>Gemini Pro]
-    end
-    
-    subgraph Server["MCP Server Layer<br/>Port 9042"]
-        B[Mimir MCP Server<br/>Node.js Runtime]
-        B1[13 MCP Tools]
-        B2[Memory Operations]
-        B3[Vector Search]
-        B4[Local Codebase Indexing]
-        
-        B --> B1
-        B --> B2
-        B --> B3
-        B --> B4
-    end
-    
-    subgraph Database["Database Layer<br/>Ports 7474 HTTP, 7687 Bolt"]
-        C[Neo4j Graph Database]
-        C1[Nodes & Edges]
-        C2[Vector Embeddings *default*]
-        C3[Full-text Search *fallback*]
-        
-        C --> C1
-        C --> C2
-        C --> C3
-    end
-    
-    A -->|MCP Protocol<br/>stdio/HTTP| B
-    B2 -->|Cypher Queries| C
-    B3 -->|Vector Operations| C
-    B4 -->|File Sync| C
-    
-    style A fill:#000000,stroke:#01579b,stroke-width:3px
-    style B fill:#000000,stroke:#e65100,stroke-width:3px
-    style C fill:#000000,stroke:#1b5e20,stroke-width:3px
-    
-    style Client fill:#000000,stroke:#1976d2,stroke-width:2px
-    style Server fill:#000000,stroke:#f57c00,stroke-width:2px
-    style Database fill:#000000,stroke:#388e3c,stroke-width:2px
 ```
-
-## Multi-Agent Orchestration flow
-
-```mermaid
-flowchart TD
-    Start([User Request]) --> Ecko{Ecko Agent<br/>Optional<br/>Prompt Optimizer}
-    Ecko -->|Enhanced Request| PM[PM Agent<br/>Research & Planning]
-    
-    PM -->|Creates| Tasks[(Neo4j Graph<br/>Task Nodes<br/>status: pending<br/>maxRetries: 2)]
-    
-    Tasks -->|Worker Claims| Lock{Acquire Lock<br/>Optimistic Locking}
-    Lock -->|Success| Worker[Worker Agent<br/>Filtered Context 90% reduction<br/>Ephemeral Execution]
-    Lock -->|Conflict| Tasks
-    
-    Worker -->|Executes| Output[Worker Output<br/>status: worker_completed<br/>workerOutput stored]
-    
-    Output --> QC[QC Agent<br/>Deliverable Verification<br/>Requirements Check]
-    
-    QC -->|Generate| Score{QC Score<br/>≥ 80?}
-    
-    Score -->|✅ PASS| Complete[Task Complete<br/>status: completed<br/>qcPassed: true]
-    
-    Score -->|❌ FAIL| Retry{attemptNumber<br/>≤ maxRetries?}
-    
-    Retry -->|YES<br/>Retry Available| ErrorCtx[Store Error Context<br/>qcFeedback<br/>issues<br/>requiredFixes]
-    
-    ErrorCtx -->|Increment<br/>attemptNumber| Worker
-    
-    Retry -->|NO<br/>Max Retries<br/>Exceeded| Breaker[🚨 Circuit Breaker<br/>Generate Failure Report]
-    
-    Breaker --> Failed[Task Failed<br/>status: failed<br/>qcFailureReport<br/>improvementNeeded: true]
-    
-    Complete --> Report[PM Final Report<br/>Aggregate Results<br/>execution-report.md]
-    Failed --> Report
-    
-    Report --> End([Complete])
-    
-    style Start fill:#000000,stroke:#01579b,stroke-width:2px
-    style PM fill:#000000,stroke:#e65100,stroke-width:2px
-    style Tasks fill:#000000,stroke:#1b5e20,stroke-width:2px
-    style Worker fill:#000000,stroke:#f57f17,stroke-width:2px
-    style QC fill:#000000,stroke:#6a1b9a,stroke-width:2px
-    style Complete fill:#000000,stroke:#2e7d32,stroke-width:3px
-    style Failed fill:#000000,stroke:#c62828,stroke-width:3px
-    style Breaker fill:#000000,stroke:#d32f2f,stroke-width:3px
-    style Report fill:#000000,stroke:#1565c0,stroke-width:2px
-    style End fill:#000000,stroke:#01579b,stroke-width:2px
+┌─────────────────────────────────────────┐
+│          Mimir Server (Port 9042)       │
+│  ┌─────────────────────────────────┐   │
+│  │     Frontend (React + Vite)     │   │  ← Web UI
+│  │  - Portal with file indexing     │   │
+│  │  - Orchestration Studio          │   │
+│  └─────────────────────────────────┘   │
+│  ┌─────────────────────────────────┐   │
+│  │      Backend (Node.js)          │   │
+│  │  - MCP API  (/mcp)              │   │  ← AI Assistants
+│  │  - Chat API (/api/chat)         │   │  ← Conversational
+│  │  - Orchestration API (/api/...)  │   │  ← Workflows
+│  └─────────────────────────────────┘   │
+└───────────────┬─────────────────────────┘
+                │
+                ▼
+┌───────────────────────────────────────┐
+│       Neo4j DB (Ports 7474, 7687)     │  ← Persistent Storage
+│  - Tasks, files, relationships        │
+│  - Vector embeddings (semantic)       │
+└───────────────────────────────────────┘
 ```
 
 **Key Points:**
-- **MCP Server** is the bridge between AI and database
-- **Neo4j** stores everything (tasks, relationships, files)
-- **Copilot API** provides AI models for embeddings (optional)
-- **All data persists** between restarts
+- **Mimir Server** provides both Web UI and APIs on port 9042
+- **Neo4j** stores everything (tasks, relationships, files, embeddings)
+- **Copilot API** provides AI models for orchestration (optional)
+- **Ollama** provides embeddings for semantic search (optional, can be external)
+- **All data persists** between restarts in `./data/neo4j/`
 
 ### Data Persistence
 
@@ -651,13 +663,18 @@ If ports are already in use, edit `docker-compose.yml`:
 
 ```yaml
 services:
+  mimir-server:
+    ports:
+      - "9043:3000"  # Change 9043 to any available port
+      
   neo4j:
     ports:
-      - "7475:7474"  # Change first number only
+      - "7475:7474"  # Change 7475 to any available port
+      - "7688:7687"  # Change 7688 to any available port
       
-  mcp-server:
+  copilot-api:
     ports:
-      - "9043:3000"  # Change first number only
+      - "4142:4141"  # Change 4142 to any available port
 ```
 
 ### Need Help?
@@ -665,8 +682,9 @@ services:
 1. **Check logs:** `docker compose logs [service-name]`
 2. **Service status:** `docker compose ps`
 3. **Health checks:** 
-   - Neo4j: http://localhost:7474
-   - MCP Server: http://localhost:9042/health
+   - Mimir Web UI: http://localhost:9042
+   - Mimir API Health: http://localhost:9042/health
+   - Neo4j Browser: http://localhost:7474
 4. **GitHub Issues:** [Report a problem](https://github.com/orneryd/Mimir/issues)
 
 ## 💡 Usage Examples
@@ -820,7 +838,7 @@ docker compose restart            # Restart all services
 # View logs
 docker compose logs               # All services
 docker compose logs neo4j         # Neo4j only
-docker compose logs mcp-server    # MCP server only
+docker compose logs mimir-server  # Mimir server only
 
 # Check status
 docker compose ps                 # Container status
@@ -830,10 +848,11 @@ curl http://localhost:7474        # Neo4j browser
 
 ### Important URLs
 
-- **MCP Server:** http://localhost:9042
+- **Mimir Web UI:** http://localhost:9042 (Portal, file indexing, APIs)
 - **Neo4j Browser:** http://localhost:7474 (user: `neo4j`, pass: `password`)
-- **Copilot API:** http://localhost:4141
-- **Ollama** (if enabled): http://localhost:11434
+- **Copilot API:** http://localhost:4141 (AI model access)
+- **Ollama** (if external): http://localhost:11434 (embeddings)
+- **Open-WebUI** (if enabled): http://localhost:3000 (alternative chat UI)
 
 ### Data Locations
 

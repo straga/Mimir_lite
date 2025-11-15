@@ -5,83 +5,22 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Driver } from 'neo4j-driver';
 import { promises as fs } from 'fs';
+import path from 'path';
 import { FileWatchManager } from '../indexing/FileWatchManager.js';
 import { WatchConfigManager } from '../indexing/WatchConfigManager.js';
 import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
+import {
+  translateHostToContainer,
+  translateContainerToHost,
+  validateAndSanitizePath,
+  pathExists,
+} from '../utils/path-utils.js';
 import type {
   WatchConfigInput,
   WatchFolderResponse,
   IndexFolderResponse,
   ListWatchedFoldersResponse
 } from '../types/index.js';
-
-// ============================================================================
-// Path Translation Utilities
-// ============================================================================
-
-/**
- * Get the host workspace root from environment
- * Default: ~/src (expanded to actual home directory)
- * When running in Docker, HOST_WORKSPACE_ROOT should be pre-expanded by docker-compose
- */
-function getHostWorkspaceRoot(): string {
-  const hostRoot = process.env.HOST_WORKSPACE_ROOT;
-  
-  // If not set, use default
-  if (!hostRoot) {
-    const defaultRoot = '~/src';
-    console.log(`🏠 Host workspace root (default): ${defaultRoot}`);
-    return defaultRoot;
-  }
-  
-  console.log(`🏠 Host workspace root (from env): ${hostRoot}`);
-  return hostRoot;
-}
-
-/**
- * Translate host path to container path
- * Example: /Users/username/src/project -> /workspace/project
- * Example: C:\Users\user\Documents\GitHub\project -> /workspace/project
- */
-function translateHostToContainer(hostPath: string): string {
-  const hostRoot = getHostWorkspaceRoot();
-  
-  // Normalize both paths: convert backslashes to forward slashes, remove trailing slashes
-  const normalizedHostRoot = hostRoot.replace(/\\/g, '/').replace(/\/$/, '');
-  const normalizedHostPath = hostPath.replace(/\\/g, '/').replace(/\/$/, '');
-  
-  // Check if the path starts with the host root
-  if (normalizedHostPath.startsWith(normalizedHostRoot)) {
-    // Replace host root with container workspace
-    const relativePath = normalizedHostPath.substring(normalizedHostRoot.length);
-    return `/workspace${relativePath}`;
-  }
-  
-  // If path doesn't start with host root, assume it's already a container path
-  return normalizedHostPath;
-}
-
-/**
- * Translate container path to host path
- * Example: /workspace/project -> /Users/username/src/project
- */
-function translateContainerToHost(containerPath: string): string {
-
-  const hostRoot = getHostWorkspaceRoot();
-  
-  // Normalize paths
-  const normalizedContainerPath = containerPath.replace(/\/$/, '');
-  
-  // Check if the path starts with /workspace
-  if (normalizedContainerPath.startsWith('/workspace')) {
-    // Replace /workspace with host root
-    const relativePath = normalizedContainerPath.substring('/workspace'.length);
-    return `${hostRoot}${relativePath}`;
-  }
-  
-  // If path doesn't start with /workspace, return as-is
-  return containerPath;
-}
 
 export function createFileIndexingTools(
   driver: Driver,
@@ -177,11 +116,25 @@ export async function handleIndexFolder(
   const configManager = new WatchConfigManager(driver);
   const startTime = Date.now();
 
-  // Translate host path to container path if running in Docker
-  const userProvidedPath = params.path;
-  const containerPath = translateHostToContainer(userProvidedPath);
+  // Sanitize and validate path input using new path utilities
+  let resolvedPath: string;
+  let containerPath: string;
   
-  console.log(`📍 Path translation: ${userProvidedPath} -> ${containerPath}`);
+  try {
+    resolvedPath = validateAndSanitizePath(params.path);
+    
+    // Translate host path to container path
+    containerPath = translateHostToContainer(resolvedPath);
+  } catch (error) {
+    return {
+      status: 'error',
+      error: 'invalid_path',
+      message: error instanceof Error ? error.message : 'Invalid path provided',
+      path: params.path
+    };
+  }
+  
+  console.log(`📍 Path translation: ${resolvedPath} -> ${containerPath}`);
 
   // Validation: Path exists (using container path)
   try {
@@ -190,8 +143,8 @@ export async function handleIndexFolder(
     return {
       status: 'error',
       error: 'path_not_found',
-      message: `Path '${userProvidedPath}' (container: '${containerPath}') does not exist on filesystem.`,
-      path: userProvidedPath
+      message: `Path '${resolvedPath}' (container: '${containerPath}') does not exist on filesystem.`,
+      path: resolvedPath
     };
   }
 
@@ -245,7 +198,7 @@ export async function handleIndexFolder(
 
   return {
     status: 'success',
-    path: userProvidedPath,  // Return original path to user
+    path: resolvedPath,  // Return sanitized path to user
     containerPath: containerPath,  // Also include container path for transparency
     files_indexed: 0,  // Will be updated in background
     elapsed_ms: elapsed,
@@ -263,17 +216,30 @@ export async function handleRemoveFolder(
 ): Promise<any> {
   const configManager = new WatchConfigManager(driver);
   
-  // Translate host path to container path if running in Docker
-  const userProvidedPath = params.path;
-  const containerPath = translateHostToContainer(userProvidedPath);
+  // Sanitize and validate path input using new path utilities
+  let resolvedPath: string;
+  let containerPath: string;
   
-  console.log(`📍 Path translation for removal: ${userProvidedPath} -> ${containerPath}`);
+  try {
+    resolvedPath = validateAndSanitizePath(params.path);
+    
+    // Translate host path to container path
+    containerPath = translateHostToContainer(resolvedPath);
+  } catch (error) {
+    return {
+      status: 'error',
+      error: 'invalid_path',
+      message: error instanceof Error ? error.message : 'Invalid path provided'
+    };
+  }
+  
+  console.log(`📍 Path translation for removal: ${resolvedPath} -> ${containerPath}`);
   
   const config = await configManager.getByPath(containerPath);
   if (!config) {
     return {
       status: 'error',
-      message: `Path '${userProvidedPath}' (container: '${containerPath}') is not being watched.`
+      message: `Path '${resolvedPath}' (container: '${containerPath}') is not being watched.`
     };
   }
 
@@ -303,7 +269,7 @@ export async function handleRemoveFolder(
     
     return {
       status: 'success',
-      path: userProvidedPath,  // Return original path to user
+      path: params.path,  // Return original path to user
       containerPath: containerPath,  // Also include container path for transparency
       files_removed: filesDeleted,
       chunks_removed: chunksDeleted,

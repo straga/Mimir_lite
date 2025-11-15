@@ -96,15 +96,15 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
-  mcp-server:
+  mimir-server:
     build:
       context: .
       dockerfile: Dockerfile
       tags:
-        - mcp-server:${VERSION:-1.0.0}
-        - mcp-server:latest
-    image: mcp-server:${VERSION:-1.0.0}
-    container_name: mcp_server
+        - mimir-server:${VERSION:-1.0.0}
+        - mimir-server:latest
+    image: mimir-server:${VERSION:-1.0.0}
+    container_name: mimir_server
     restart: unless-stopped
     environment:
       # Database Configuration
@@ -189,14 +189,14 @@ services:
       - OLLAMA_BASE_URL=
       
       # WebUI Configuration
-      - WEBUI_NAME=Mimir Multi-Agent Orchestrator
+      - WEBUI_NAME=Mimir
       - WEBUI_URL=http://localhost:3000
       - DEFAULT_MODELS=gpt-4.1  # Default selected model
       
       # Enable OpenAI API
       - ENABLE_OPENAI_API=true
     depends_on:
-      - mcp-server
+      - mimir-server
       - copilot-api
     networks:
       - mcp_network

@@ -27,10 +27,13 @@ export interface SearchResult {
   relevance?: number;
   content_preview: string;
   path?: string;
+  absolute_path?: string; // Absolute filesystem path for agent access
+  chunk_text?: string; // Full chunk text content for RAG injection
   chunk_index?: number;
   chunks_matched?: number; // For file_chunk results: number of chunks that matched
   parent_file?: {
     path: string;
+    absolute_path?: string; // Absolute path to parent file
     name: string;
     language: string;
   };
@@ -233,6 +236,11 @@ export class UnifiedSearchService {
                node.description AS description,
                node.content AS content,
                node.path AS path,
+               CASE 
+                 WHEN node.type = 'file_chunk' AND parentFile IS NOT NULL 
+                 THEN parentFile.absolute_path 
+                 ELSE node.absolute_path
+               END AS absolute_path,
                node.text AS chunk_text,
                node.chunk_index AS chunk_index,
                node.id AS chunk_id,
@@ -240,6 +248,7 @@ export class UnifiedSearchService {
                chunks_matched,
                avg_similarity,
                parentFile.path AS parent_file_path,
+               parentFile.absolute_path AS parent_file_absolute_path,
                parentFile.name AS parent_file_name,
                parentFile.language AS parent_file_language
       `, { ...queryParams, minSimilarity, finalLimit: limit });
@@ -290,9 +299,15 @@ export class UnifiedSearchService {
                n.description AS description,
                n.content AS content,
                n.path AS path,
+               CASE 
+                 WHEN n.type = 'file_chunk' AND parentFile IS NOT NULL 
+                 THEN parentFile.absolute_path 
+                 ELSE n.absolute_path
+               END AS absolute_path,
                n.text AS chunk_text,
                n.chunk_index AS chunk_index,
                parentFile.path AS parent_file_path,
+               parentFile.absolute_path AS parent_file_absolute_path,
                parentFile.name AS parent_file_name,
                parentFile.language AS parent_file_language,
                // Calculate simple relevance score based on field matches
@@ -332,12 +347,14 @@ export class UnifiedSearchService {
     const title = record.get('title');
     const name = record.get('name');
     const path = record.get('path');
+    const absolutePath = record.get('absolute_path');
     const chunkText = record.get('chunk_text');
     const chunkIndex = record.get('chunk_index');
     const chunkId = record.get('chunk_id');
     const chunksMatched = record.get('chunks_matched');
     const avgSimilarity = record.get('avg_similarity');
     const parentFilePath = record.get('parent_file_path');
+    const parentFileAbsolutePath = record.get('parent_file_absolute_path');
     const parentFileName = record.get('parent_file_name');
     const parentFileLanguage = record.get('parent_file_language');
     const nodeType = record.get('type');
@@ -381,15 +398,23 @@ export class UnifiedSearchService {
       if (parentFilePath) {
         resultObj.parent_file = {
           path: parentFilePath,
+          absolute_path: parentFileAbsolutePath,
           name: parentFileName,
           language: parentFileLanguage
         };
       }
+      // For chunks, include the chunk text as content for RAG
+      if (chunkText) {
+        resultObj.chunk_text = chunkText;
+      }
     }
     
-    // Add path for file nodes
+    // Add path for file nodes (both relative and absolute)
     if (path) {
       resultObj.path = path;
+    }
+    if (absolutePath) {
+      resultObj.absolute_path = absolutePath;
     }
     
     return resultObj;

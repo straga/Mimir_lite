@@ -6,8 +6,19 @@
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { server, initializeGraphManager, allTools } from './index.js';
+import { createOrchestrationRouter } from './api/orchestration-api.js';
+import { createChatRouter } from './api/chat-api.js';
+import { createMCPToolsRouter } from './api/mcp-tools-api.js';
+import { FileWatchManager } from './indexing/FileWatchManager.js';
+import type { IGraphManager } from './types/index.js';
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ============================================================================
 // HTTP Server - Shared Session Mode
@@ -26,13 +37,22 @@ async function startHttpServer() {
   console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   // Initialize GraphManager
+  let graphManager: IGraphManager;
+  let watchManager: FileWatchManager;
   try {
-    const graphManager = await initializeGraphManager();
+    graphManager = await initializeGraphManager();
     const stats = await graphManager.getStats();
     console.log(`✅ Connected to Neo4j`);
     console.log(`   Nodes: ${stats.nodeCount}`);
     console.log(`   Edges: ${stats.edgeCount}`);
     console.log(`   Types: ${JSON.stringify(stats.types)}`);
+
+    // Initialize FileWatchManager
+    watchManager = new FileWatchManager(graphManager.getDriver());
+    console.log(`✅ FileWatchManager initialized`);
+    
+    // Make watchManager globally accessible for API routes
+    (globalThis as any).fileWatchManager = watchManager;
   } catch (error: any) {
     console.error(`❌ Failed to initialize GraphManager: ${error.message}`);
     process.exit(1);
@@ -68,6 +88,20 @@ async function startHttpServer() {
     allowedHeaders: ['Content-Type', 'Accept', 'mcp-session-id'], 
     credentials: true 
   }));
+
+  // Mount chat API routes (OpenAI-compatible, at root level)
+  app.use('/', createChatRouter(graphManager));
+  
+  // Mount orchestration API routes
+  app.use('/api', createOrchestrationRouter(graphManager));
+  
+  // Mount MCP tools API routes
+  app.use('/api', createMCPToolsRouter(graphManager));
+
+  // Serve static frontend files
+  const frontendDistPath = path.join(__dirname, '../frontend/dist');
+  console.log(`📁 Serving frontend from: ${frontendDistPath}`);
+  app.use(express.static(frontendDistPath));
 
   app.post('/mcp', async (req, res) => {
     try {
@@ -195,6 +229,14 @@ async function startHttpServer() {
     res.json({ status: 'healthy', version: '4.1.0', mode: 'shared-session', tools: allTools.length });
   });
   
+  // SPA catch-all route - serve index.html for all non-API routes
+  // This must come AFTER all API routes but BEFORE error handlers
+  // Use a regex pattern instead of '*' to avoid path-to-regexp errors
+  app.get(/^\/(?!api|v1|mcp|health|models).*$/, (req, res) => {
+    // Serve index.html for all routes except API endpoints
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  });
+  
   // Global error handler for JSON parsing and other errors
   app.use((err: any, req: any, res: any, next: any) => {
     if (err instanceof SyntaxError && 'body' in err) {
@@ -228,6 +270,9 @@ async function startHttpServer() {
   app.listen(port, () => {
     console.error(`✅ HTTP server listening on http://localhost:${port}/mcp`);
     console.error(`✅ Health check: http://localhost:${port}/health`);
+    console.error(`🎨 Mimir Portal UI: http://localhost:${port}/portal`);
+    console.error(`🎭 Orchestration Studio: http://localhost:${port}/studio`);
+    console.error(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   });
 }
 

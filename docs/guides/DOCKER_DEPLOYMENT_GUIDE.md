@@ -47,7 +47,7 @@ docker compose --version
 - **CPU**: 1 core minimum, 2+ recommended
 - **RAM**: 512MB minimum, 1GB+ recommended
 - **Disk**: 500MB for image + storage for data
-- **Network**: Port 3000 must be available
+- **Network**: Port 9042 must be available
 
 ---
 
@@ -85,7 +85,7 @@ docker compose up -d
 ### Step 4: Verify Health
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:9042/health
 ```
 
 **Expected response**:
@@ -97,7 +97,7 @@ curl http://localhost:3000/health
 
 ```bash
 # Initialize session and capture session ID
-SESSION=$(curl -s -i -X POST http://localhost:3000/mcp \
+SESSION=$(curl -s -i -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}' \
@@ -106,7 +106,7 @@ SESSION=$(curl -s -i -X POST http://localhost:3000/mcp \
 echo "Session ID: $SESSION"
 
 # Create a TODO
-curl -s -X POST http://localhost:3000/mcp \
+curl -s -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION" \
@@ -282,13 +282,13 @@ If memory file is corrupted on startup:
 #### Export All Data
 
 ```bash
-SESSION=$(curl -s -i -X POST http://localhost:3000/mcp \
+SESSION=$(curl -s -i -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"export","version":"1.0.0"}},"id":1}' \
   | sed -n "s/^Mcp-Session-Id: //p" | tr -d '\r')
 
-curl -s -X POST http://localhost:3000/mcp \
+curl -s -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION" \
@@ -314,7 +314,7 @@ The MCP server uses session-based authentication via the `Mcp-Session-Id` header
 #### Step 1: Initialize Session
 
 ```bash
-SESSION=$(curl -s -i -X POST http://localhost:3000/mcp \
+SESSION=$(curl -s -i -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -340,7 +340,7 @@ echo "Session ID: $SESSION"
 All tool calls use the `tools/call` JSON-RPC method wrapper:
 
 ```bash
-curl -s -X POST http://localhost:3000/mcp \
+curl -s -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION" \
@@ -363,7 +363,7 @@ curl -s -X POST http://localhost:3000/mcp \
 #### Create TODO
 
 ```bash
-curl -s -X POST http://localhost:3000/mcp \
+curl -s -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION" \
@@ -385,7 +385,7 @@ curl -s -X POST http://localhost:3000/mcp \
 #### List All TODOs
 
 ```bash
-curl -s -X POST http://localhost:3000/mcp \
+curl -s -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION" \
@@ -403,7 +403,7 @@ curl -s -X POST http://localhost:3000/mcp \
 #### Create Knowledge Graph Node
 
 ```bash
-curl -s -X POST http://localhost:3000/mcp \
+curl -s -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION" \
@@ -428,7 +428,7 @@ curl -s -X POST http://localhost:3000/mcp \
 #### Update Knowledge Graph Node
 
 ```bash
-curl -s -X POST http://localhost:3000/mcp \
+curl -s -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION" \
@@ -452,7 +452,7 @@ curl -s -X POST http://localhost:3000/mcp \
 #### Get Knowledge Graph Statistics
 
 ```bash
-curl -s -X POST http://localhost:3000/mcp \
+curl -s -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION" \
@@ -546,7 +546,7 @@ docker compose exec mcp-server sh
 docker compose ps
 
 # Manual health check
-curl http://localhost:3000/health
+curl http://localhost:9042/health
 
 # View health check logs
 docker inspect --format='{{json .State.Health}}' \
@@ -565,7 +565,7 @@ docker inspect --format='{{json .State.Health}}' \
 
 1. **Port already in use**:
    ```bash
-   # Check what's using port 3000
+   # Check what's using port 9042
    lsof -i :3000
    
    # Kill process or change port in .env and docker compose.yml
@@ -619,7 +619,7 @@ docker inspect --format='{{json .State.Health}}' \
 **Solution**: Re-initialize session after server restarts:
 
 ```bash
-SESSION=$(curl -s -i -X POST http://localhost:3000/mcp \
+SESSION=$(curl -s -i -X POST http://localhost:9042/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"reconnect","version":"1.0.0"}},"id":1}' \
@@ -681,7 +681,7 @@ SESSION=$(curl -s -i -X POST http://localhost:3000/mcp \
 
 ```bash
 # Test health endpoint manually
-curl http://localhost:3000/health
+curl http://localhost:9042/health
 
 # Check container logs
 docker compose logs --tail=50 mcp-server
@@ -712,7 +712,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
 
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:9042;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -925,7 +925,7 @@ cp /secure-backups/latest-memory-backup.json data/.mcp-memory-store.json
 docker compose up -d
 
 # Wait for health
-until curl -f http://localhost:3000/health; do
+until curl -f http://localhost:9042/health; do
     echo "Waiting for server..."
     sleep 2
 done
