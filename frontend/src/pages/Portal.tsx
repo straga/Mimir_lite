@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, User, Paperclip, X, Image as ImageIcon } from 'lucide-react';
+import { Send, Sparkles, User, Paperclip, X, Image as ImageIcon, RotateCcw, ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { EyeOfMimir } from '../components/EyeOfMimir';
 import { OrchestrationStudioIcon } from '../components/OrchestrationStudioIcon';
@@ -31,6 +31,7 @@ export function Portal() {
   const [isDragging, setIsDragging] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [savingMemory, setSavingMemory] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('gpt-5-mini');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -38,6 +39,13 @@ export function Portal() {
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
   const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'text/plain'];
+
+  // Available models
+  const MODELS = [
+    { id: 'gpt-4o', name: 'GPT-4o', category: 'GPT' },
+    { id: 'gpt-4.1', name: 'GPT-4.1', category: 'GPT' },
+    { id: 'gpt-5-mini', name: 'GPT-5', category: 'GPT' },
+  ];
 
   // Set page title
   useEffect(() => {
@@ -66,6 +74,13 @@ export function Portal() {
       return `File type "${file.type}" is not supported. Allowed types: images, PDF, text files.`;
     }
     return null;
+  };
+
+  const clearChat = () => {
+    setMessages([]);
+    setAttachedFiles([]);
+    setInput('');
+    setIsLoading(false);
   };
 
   const createFilePreview = async (file: File): Promise<string> => {
@@ -210,6 +225,7 @@ export function Portal() {
           messages: [
             { role: 'user', content: currentInput }
           ],
+          model: selectedModel,
           stream: true,
         }),
       });
@@ -329,6 +345,37 @@ export function Portal() {
           </div>
         </div>
         <div className="flex items-center space-x-3">
+          {/* Model Selector */}
+          <div className="relative">
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="appearance-none pl-4 pr-10 py-2.5 bg-norse-rune hover:bg-valhalla-gold/20 border-2 border-norse-rune hover:border-valhalla-gold rounded-xl transition-all duration-300 text-gray-300 hover:text-valhalla-gold text-sm font-medium cursor-pointer h-11 focus:outline-none focus:border-valhalla-gold"
+              title="Select AI model"
+            >
+              {MODELS.map((model) => (
+                <option key={model.id} value={model.id} className="bg-[#0a0e1a] text-gray-300">
+                  {model.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+          </div>
+
+          {/* New Chat Button - Only show when there are messages */}
+          {hasMessages && (
+            <button
+              onClick={clearChat}
+              className="flex items-center space-x-2 px-4 py-2.5 bg-norse-rune hover:bg-valhalla-gold/20 border-2 border-norse-rune hover:border-valhalla-gold rounded-xl transition-all duration-300 group h-11"
+              title="Start a new chat"
+            >
+              <RotateCcw className="w-5 h-5 text-gray-300 group-hover:text-valhalla-gold transition-colors flex-shrink-0" />
+              <span className="text-gray-300 group-hover:text-valhalla-gold text-sm font-medium">
+                New Chat
+              </span>
+            </button>
+          )}
+
           {/* Save as Memory Button - Only show when there are messages */}
           {hasMessages && (
             <button

@@ -54,6 +54,8 @@ Mimir is a Model Context Protocol (MCP) server that provides AI assistants (Clau
 
 > 💡 **New to Mimir?** Check out the [5-minute Quick Start Guide](QUICKSTART.md) for a step-by-step walkthrough.
 
+> 🎯 **VS Code Users?** Try the [Dev Container setup](.devcontainer/README.md) for instant environment with zero configuration!
+
 ### 1. Prerequisites
 
 - **Docker Desktop** - [Download here](https://www.docker.com/products/docker-desktop/)

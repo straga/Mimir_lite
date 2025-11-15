@@ -34,16 +34,16 @@ ENV NODE_ENV=production
 # Install runtime dependencies (curl for environment validation)
 RUN apk add --no-cache curl
 
-# Copy only build artifacts and production deps
-COPY --from=builder /app/build ./build
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/.mimir ./.mimir
-COPY --from=builder /app/docs ./docs
-COPY --from=builder /app/frontend/dist ./frontend/dist
+# Copy only build artifacts and production deps with correct ownership
+# Using --chown during COPY is much faster than RUN chown -R (avoids 100+ second delay)
+COPY --chown=node:node --from=builder /app/build ./build
+COPY --chown=node:node --from=builder /app/node_modules ./node_modules
+COPY --chown=node:node --from=builder /app/package*.json ./
+COPY --chown=node:node --from=builder /app/.mimir ./.mimir
+COPY --chown=node:node --from=builder /app/docs ./docs
+COPY --chown=node:node --from=builder /app/frontend/dist ./frontend/dist
 
-# Ensure non-root user owns the app directory and switch to it
-RUN chown -R node:node /app
+# Switch to non-root user (files already owned by node:node from COPY --chown)
 USER node
 
 # MCP server runs on stdio, no HTTP port needed

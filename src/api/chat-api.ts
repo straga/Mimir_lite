@@ -70,8 +70,8 @@ const DEFAULT_CONFIG: ChatConfig = {
 async function loadClaudetteAutoPreamble(): Promise<string> {
   
   const preamblePaths = [
-    path.join(process.cwd(), 'docs/agents/claudette-limerick.md'),
-    path.join(__dirname, '../../docs/agents/claudette-limerick.md'),
+    path.join(process.cwd(), 'docs/agents/claudette-mimir-v2.md'),
+    path.join(__dirname, '../../docs/agents/claudette-mimir-v2.md'),
   ];
 
   for (const preamblePath of preamblePaths) {
