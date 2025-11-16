@@ -34,7 +34,7 @@ The Mimir Portal is your gateway to AI-powered knowledge retrieval and conversat
 
 When you first open the Mimir Portal, you'll see the landing screen with the Eye of Mimir.
 
-![Landing Screen - Screenshot should show: Eye of Mimir icon centered, greeting text "How may I give counsel?", empty input box at center, no messages visible]
+<img width="911" height="493" alt="image" src="https://github.com/user-attachments/assets/bd3e8a75-ca07-4cda-8457-d432ab9704d7" />
 
 **Elements:**
 - **Eye of Mimir Icon** - Centered with golden glow effect
@@ -46,7 +46,7 @@ When you first open the Mimir Portal, you'll see the landing screen with the Eye
 
 Simply type your question or request in the input box and press Enter (or click the Send button).
 
-![First Message - Screenshot should show: User typing in input box, Send button highlighted, placeholder text visible]
+<img width="1015" height="515" alt="image" src="https://github.com/user-attachments/assets/f52c064e-280e-4551-b32c-ddcd6bdee327" />
 
 ---
 
@@ -56,7 +56,7 @@ Simply type your question or request in the input box and press Enter (or click 
 
 Messages are displayed in a conversational format with distinct styling for user and assistant messages.
 
-![Chat Messages - Screenshot should show: At least 3 messages alternating between user and assistant, with different background colors, timestamps visible, markdown formatting in assistant response]
+<img width="1346" height="1320" alt="image" src="https://github.com/user-attachments/assets/a3e643dc-d51f-4b47-8b19-ca289d5dff9e" />
 
 **Message Components:**
 - **User Messages** (Blue background)
@@ -74,7 +74,6 @@ Messages are displayed in a conversational format with distinct styling for user
 
 Watch as AI responses appear word-by-word in real-time.
 
-![Streaming Response - Screenshot should show: Assistant message being written with animated dots at the bottom, partial response visible, loading indicator showing]
 
 **Streaming Indicators:**
 - Gold border pulse animation around input box
@@ -85,7 +84,7 @@ Watch as AI responses appear word-by-word in real-time.
 
 Assistant responses support rich markdown formatting for better readability.
 
-![Markdown Rendering - Screenshot should show: Assistant message with multiple markdown elements: headers, bold text, code blocks with syntax highlighting, bullet lists, numbered lists]
+<img width="1294" height="1296" alt="image" src="https://github.com/user-attachments/assets/a9d1bc79-d1f2-44b1-a188-d4beeb6722c5" />
 
 **Supported Markdown:**
 - **Headers** (`#`, `##`, `###`)
@@ -104,7 +103,7 @@ Assistant responses support rich markdown formatting for better readability.
 
 The model selector dynamically loads available models from your configured API endpoint.
 
-![Model Selector - Screenshot should show: Model dropdown menu open, showing list of available models (e.g., gpt-4o, gpt-4.1, gpt-5-mini), one model highlighted]
+<img width="642" height="695" alt="image" src="https://github.com/user-attachments/assets/bb3993f0-f903-4c23-8664-26a7a2396091" />
 
 **Features:**
 - Automatically fetches models from `/v1/models` endpoint
@@ -115,15 +114,11 @@ The model selector dynamically loads available models from your configured API e
 
 Save your preferred model for future sessions.
 
-![Default Model Saving - Screenshot should show: Model dropdown with gpt-4.1 selected, below it "Save as Default" text link visible and highlighted]
-
 **Steps:**
 1. Select your preferred model from dropdown
 2. Click "Save as Default" text below the dropdown
 3. Text changes to "✓ Default Model" (in gold)
 4. Model will auto-select on next visit
-
-![Default Model Set - Screenshot should show: Same model selector but now showing "✓ Default Model" in gold text instead of "Save as Default"]
 
 **Persistence:**
 - Saved to browser localStorage (`mimir-default-model` key)
@@ -138,7 +133,7 @@ Save your preferred model for future sessions.
 
 Choose from 17+ specialized agent behaviors for different tasks.
 
-![Chatmode Selector - Screenshot should show: Chatmode dropdown open, displaying list of options: Agentinator, Auto, Condensed, Debug, Ecko, Mimir V2, Research, etc.]
+<img width="735" height="781" alt="image" src="https://github.com/user-attachments/assets/07fac2cf-cabd-4c5a-bbb0-42b65068e559" />
 
 **Popular Chatmodes:**
 - **Mimir V2** - Default comprehensive assistant with memory
@@ -153,13 +148,11 @@ Choose from 17+ specialized agent behaviors for different tasks.
 
 Create your own chatmode with custom instructions.
 
-![Custom Preamble Button - Screenshot should show: Plus (+) button next to chatmode dropdown, highlighted with cursor hovering]
-
 **Creating Custom Preamble:**
 
 1. **Click Plus Button** - Opens custom preamble modal
 
-![Custom Preamble Modal - Screenshot should show: Modal dialog open with title "Custom Preamble", large textarea with placeholder text, "Save & Use" and "Cancel" buttons at bottom]
+<img width="1081" height="968" alt="image" src="https://github.com/user-attachments/assets/4d0b8e3c-0280-45fe-9e02-176cd370bdb5" />
 
 2. **Enter Instructions** - Paste or type your system prompt
 
@@ -183,11 +176,7 @@ Always:
 - Provide both the solution and educational explanation
 ```
 
-![Custom Preamble Filled - Screenshot should show: Modal with textarea filled with custom preamble text as shown above, cursor in textarea, "Save & Use" button enabled]
-
 3. **Save & Use** - Stores to localStorage, activates immediately
-
-![Custom Mode Active - Screenshot should show: Chatmode dropdown with "Custom" option selected and highlighted in gold color, Plus button still visible next to it]
 
 **Custom Preamble Features:**
 - Stored in localStorage (`mimir-custom-preamble` key)
@@ -217,8 +206,6 @@ Always:
 
 Multiple ways to attach files to your messages.
 
-![File Attachment Methods - Screenshot should show: Input box area with paperclip icon highlighted, dotted border indicating drag-and-drop zone active]
-
 **Three Methods:**
 
 1. **Click Paperclip Icon**
@@ -232,8 +219,6 @@ Multiple ways to attach files to your messages.
    - Drop onto input area
    - Gold border appears when hovering
    - Batch upload supported
-
-![Drag Drop Active - Screenshot should show: Files being dragged over input area, gold border around input box, translucent gold background, cursor showing drag icon]
 
 3. **Paste from Clipboard**
    - Copy image (Ctrl+C / Cmd+C)
