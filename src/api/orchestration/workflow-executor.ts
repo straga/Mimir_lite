@@ -72,6 +72,37 @@ export interface ExecutionState {
 export const executionStates = new Map<string, ExecutionState>();
 
 /**
+ * Extract deliverables from task execution results
+ * 
+ * Converts task outputs into deliverable files stored in memory.
+ * Creates markdown files for each task's output.
+ * 
+ * @param results - Array of execution results from completed tasks
+ * @param executionId - Unique execution identifier
+ * @returns Array of deliverable files
+ */
+function extractDeliverablesFromResults(results: ExecutionResult[]): Deliverable[] {
+  const deliverables: Deliverable[] = [];
+  
+  for (const result of results) {
+    if (result.status === 'success' && result.output && result.output.trim()) {
+      // Create a deliverable for each successful task output
+      const filename = `${result.taskId}-output.md`;
+      const content = `# Task Output: ${result.taskId}\n\n${result.output}`;
+      
+      deliverables.push({
+        filename,
+        content,
+        mimeType: 'text/markdown',
+        size: Buffer.byteLength(content, 'utf8'),
+      });
+    }
+  }
+  
+  return deliverables;
+}
+
+/**
  * Group tasks by their parallel execution group
  * 
  * Tasks with the same parallelGroup number can execute simultaneously.
@@ -629,19 +660,11 @@ export async function executeWorkflowFromJSON(
     finalState.endTime = Date.now();
     finalState.currentTaskId = null;
     
-    // Generate error report if failures occurred
-    if (failed > 0 || finalState.error) {
-      // await generateErrorReport(outputDir, executionId, taskDefinitions, results, finalState, wasCancelled, successful, failed);
-      console.log('Error reports, summaries, and deliverables are now stored in Neo4j instead of file system.');
-    }
-    
-    // Generate execution summary
-    // await generateExecutionSummary(outputDir, executionId, taskDefinitions, results, finalState, completionStatus, wasCancelled, successful, failed);
-    console.log('Execution summary is now stored in Neo4j instead of file system.');
-    
-    // Collect deliverables
-    // await collectDeliverables(outputDir, finalState);
-    console.log('Deliverables are now stored in Neo4j instead of file system.');
+    // Collect deliverables from task outputs
+    console.log('📦 Collecting deliverables from task outputs...');
+    const deliverables = extractDeliverablesFromResults(results);
+    finalState.deliverables = deliverables;
+    console.log(`✅ Collected ${deliverables.length} deliverable(s)`);
   }
   
   // Update execution node in Neo4j

@@ -938,8 +938,15 @@ Location: ${process.cwd()}
         
         const executions = result.records.map((record: any) => {
           const props = record.get('exec').properties;
+          const executionId = props.id;
+          
+          // Merge Neo4j data with in-memory deliverables
+          const memoryState = executionStates.get(executionId);
+          const deliverables = memoryState?.deliverables || [];
+          
           return {
-            executionId: props.id,
+            id: executionId,
+            executionId: executionId,
             planId: props.planId,
             status: props.status,
             startTime: props.startTime,
@@ -950,6 +957,12 @@ Location: ${process.cwd()}
             tasksFailed: props.tasksFailed?.toNumber() || 0,
             tokensTotal: props.tokensTotal?.toNumber() || 0,
             toolCalls: props.toolCalls?.toNumber() || 0,
+            deliverables: deliverables.map(d => ({
+              filename: d.filename,
+              size: d.size,
+              mimeType: d.mimeType,
+              downloadUrl: `/api/execution-deliverable/${executionId}/${encodeURIComponent(d.filename)}`,
+            })),
           };
         });
         
