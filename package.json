@@ -60,7 +60,8 @@
     "models:find": "node scripts/find-ollama-models.js",
     "llama:build": "./scripts/build-llama-cpp.sh",
     "llama:build-mxbai": "./scripts/build-llama-cpp-mxbai.sh",
-    "llama:pull": "docker exec -it llama_server llama pull",
+    "llama:models": "curl -s http://localhost:11434/v1/models | jq",
+    "llama:test": "curl -s http://localhost:11434/v1/embeddings -H 'Content-Type: application/json' -d '{\"model\": \"mxbai-embed-large\", \"input\": \"test\"}' | jq '.data[0].embedding | length'",
     "webui:setup": "docker exec -it mimir-open-webui pip install neo4j",
     "webui:build": "docker-compose build open-webui && docker-compose up -d --no-deps open-webui"
   },
