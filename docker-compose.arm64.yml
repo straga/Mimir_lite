@@ -86,7 +86,7 @@ services:
 
   # llama.cpp server - OpenAI-compatible embeddings (ARM64 compatible)
   llama-server:
-    image: timothyswt/llama-cpp-server-arm64:latest
+    image: timothyswt/llama-cpp-server-arm64-mxbai:latest
     container_name: llama_server
     ports:
       - "11434:8080"  # External 11434 -> Internal 8080 (llama.cpp default)
@@ -163,9 +163,9 @@ services:
       # Embeddings Configuration (only used if VECTOR_EMBEDDINGS=true)
       - MIMIR_EMBEDDINGS_ENABLED=true
       - MIMIR_EMBEDDINGS_PROVIDER=llama.cpp
-      - MIMIR_EMBEDDINGS_MODEL=nomic-embed-text
-      - MIMIR_EMBEDDINGS_DIMENSIONS=${MIMIR_EMBEDDINGS_DIMENSIONS:-768}
-      - MIMIR_EMBEDDINGS_CHUNK_SIZE=${MIMIR_EMBEDDINGS_CHUNK_SIZE:-400}
+      - MIMIR_EMBEDDINGS_MODEL=mxbai-embed-large
+      - MIMIR_EMBEDDINGS_DIMENSIONS=${MIMIR_EMBEDDINGS_DIMENSIONS:-1024}
+      - MIMIR_EMBEDDINGS_CHUNK_SIZE=${MIMIR_EMBEDDINGS_CHUNK_SIZE:-1024}
       - MIMIR_EMBEDDINGS_CHUNK_OVERLAP=${MIMIR_EMBEDDINGS_CHUNK_OVERLAP:-100}
       - MIMIR_EMBEDDINGS_DELAY_MS=${MIMIR_EMBEDDINGS_DELAY_MS:-0}
       - MIMIR_EMBEDDINGS_MAX_RETRIES=${MIMIR_EMBEDDINGS_MAX_RETRIES:-3}
