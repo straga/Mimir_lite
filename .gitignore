@@ -19,7 +19,6 @@ logs/
 .DS_Store
 test-results-claudette-mini/
 test-results-claudette-quantized/
-quantized-test-results/
 copilot-data/github_token
 pipelines\__pycache__
 ollama_models/
