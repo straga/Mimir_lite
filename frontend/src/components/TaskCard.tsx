@@ -61,7 +61,7 @@ export function TaskCard({ task, disableDrag = false, isExecuting = false }: Tas
     drop: (item: AgentTemplate) => {
       updateTask(task.id, {
         qcPreambleId: item.id,
-        qcAgentRoleDescription: item.role,
+        qcRole: item.role,
       });
     },
     collect: (monitor) => ({
@@ -224,7 +224,7 @@ export function TaskCard({ task, disableDrag = false, isExecuting = false }: Tas
                   e.stopPropagation();
                   updateTask(task.id, {
                     qcPreambleId: undefined,
-                    qcAgentRoleDescription: '',
+                    qcRole: '',
                   });
                 }}
                 className="ml-2 text-gray-500 hover:text-red-400 transition-colors"

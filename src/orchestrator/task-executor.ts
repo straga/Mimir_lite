@@ -1337,7 +1337,9 @@ async function autoGenerateVerificationCriteria(task: TaskDefinition): Promise<s
 export async function executeTask(
   task: TaskDefinition,
   preambleContent: string,
-  qcPreambleContent?: string
+  qcPreambleContent?: string,
+  executionId?: string,
+  sendSSE?: (event: string, data: any) => void
 ): Promise<ExecutionResult> {
   console.log(`\n${'='.repeat(80)}`);
   console.log(`📋 Executing Task: ${task.title}`);
@@ -1573,6 +1575,20 @@ ${task.prompt}`;
         retryReason: errorContext ? 'qc_failure' : null,
       });
       
+      // Send SSE: Worker execution start
+      if (sendSSE && executionId) {
+        sendSSE('worker-start', {
+          taskId: task.id,
+          taskTitle: task.title,
+          phase: 'worker',
+          attemptNumber,
+          isRetry: attemptNumber > 1,
+          message: attemptNumber > 1 
+            ? `🔄 Worker retrying (attempt ${attemptNumber}/${maxRetries})`
+            : `🤖 Worker executing: ${task.title}`
+        });
+      }
+      
       // Resolve model selection based on PM suggestion and feature flag
       const modelSelection = await resolveModelSelection(task, 'worker');
       
@@ -1620,6 +1636,18 @@ ${task.prompt}`;
         workerMessageCount: workerResult.metadata?.messageCount,
         workerEstimatedContextTokens: workerResult.metadata?.estimatedContextTokens,
       });
+      
+      // Send SSE: Worker execution complete
+      if (sendSSE && executionId) {
+        sendSSE('worker-complete', {
+          taskId: task.id,
+          taskTitle: task.title,
+          phase: 'worker',
+          duration: workerDuration,
+          toolCalls: workerResult.toolCalls,
+          message: `✅ Worker completed (${(workerDuration / 1000).toFixed(1)}s, ${workerResult.toolCalls} tool calls)`
+        });
+      }
       
       // 🚨 CIRCUIT BREAKER: Check if hard limit exceeded
       if (workerResult.metadata) {
@@ -1740,6 +1768,17 @@ ${task.prompt}`;
         qcAttemptNumber: attemptNumber,
       });
       
+      // Send SSE: QC verification start
+      if (sendSSE && executionId) {
+        sendSSE('qc-start', {
+          taskId: task.id,
+          taskTitle: task.title,
+          phase: 'qc',
+          attemptNumber,
+          message: `🔍 QC verifying worker output (attempt ${attemptNumber}/${maxRetries})`
+        });
+      }
+      
       let qcResult: QCResult;
       try {
         qcResult = await executeQCAgent(task, workerOutput, attemptNumber, qcPreambleContent || '');
@@ -1817,6 +1856,19 @@ ${task.prompt}`;
         const duration = Date.now() - startTime;
         console.log(`\n✅ TASK COMPLETED SUCCESSFULLY after ${attemptNumber} attempt(s)`);
         
+        // Send SSE: QC verification passed
+        if (sendSSE && executionId) {
+          sendSSE('qc-complete', {
+            taskId: task.id,
+            taskTitle: task.title,
+            phase: 'qc',
+            passed: true,
+            score: qcResult.score,
+            attemptNumber,
+            message: `✅ QC passed (Score: ${qcResult.score}/100, Attempt ${attemptNumber}/${maxRetries})`
+          });
+        }
+        
         // Update graph with final success status
         await updateGraphNode(task.id, {
           status: 'completed',
@@ -1878,6 +1930,26 @@ ${task.prompt}`;
       console.log(`\n❌ QC FAILED on attempt ${attemptNumber}`);
       console.log(`   Score: ${qcResult.score}/100`);
       console.log(`   Issues: ${qcResult.issues.length}`);
+      
+      // Send SSE: QC verification failed with gap information
+      if (sendSSE && executionId) {
+        sendSSE('qc-complete', {
+          taskId: task.id,
+          taskTitle: task.title,
+          phase: 'qc',
+          passed: false,
+          score: qcResult.score,
+          attemptNumber,
+          message: attemptNumber < maxRetries
+            ? `❌ QC failed (Score: ${qcResult.score}/100) - Retrying (${attemptNumber}/${maxRetries})`
+            : `❌ QC failed after ${maxRetries} attempts (Final score: ${qcResult.score}/100)`,
+          gap: {
+            feedback: qcResult.feedback,
+            issues: qcResult.issues,
+            requiredFixes: qcResult.requiredFixes
+          }
+        });
+      }
       
       if (attemptNumber < maxRetries) {
         // Prepare error context for next retry (FULL feedback - worker needs complete guidance)

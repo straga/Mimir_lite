@@ -20,6 +20,7 @@ import { RateLimitQueue } from "./rate-limit-queue.js";
 import { ConversationHistoryManager } from "./ConversationHistoryManager.js";
 import neo4j, { Driver } from "neo4j-driver";
 import { loadRateLimitConfig } from "../config/rate-limit-config.js";
+import { runWithWorkspaceContext } from "./workspace-context.js";
 
 // Dummy API key for copilot-api proxy (required by LangChain OpenAI client but not used)
 const DUMMY_OPENAI_KEY = process.env.OPENAI_API_KEY || 'dummy-key-for-proxy';
@@ -595,7 +596,8 @@ CONCISE SUMMARY:`;
     task: string,
     retryCount: number = 0,
     circuitBreakerLimit?: number, // Optional: PM's estimate × 1.5
-    sessionId?: string // Optional: Enable conversation persistence with embeddings + retrieval
+    sessionId?: string, // Optional: Enable conversation persistence with embeddings + retrieval
+    workingDirectory?: string // Optional: Working directory for tool execution (defaults to process.cwd())
   ): Promise<{
     output: string;
     conversationHistory: Array<{ role: string; content: string }>;
@@ -627,19 +629,34 @@ CONCISE SUMMARY:`;
     // Will be updated with actual count after execution
     const estimatedRequests = 1 + Math.min(this.tools.length, 10); // Assume up to 10 tool calls
 
-    // Wrap execution with rate limiter
+    // Wrap execution with rate limiter AND workspace context
     return this.rateLimiter.enqueue(async () => {
-      const result = await this.executeInternal(
-        task,
-        retryCount,
-        circuitBreakerLimit,
-        sessionId
-      );
+      // Set up workspace context for tool execution
+      const executeWithContext = async () => {
+        const result = await this.executeInternal(
+          task,
+          retryCount,
+          circuitBreakerLimit,
+          sessionId
+        );
 
-      // Record actual API usage after execution
-      this.recordAPIUsageMetrics(result);
+        // Record actual API usage after execution
+        this.recordAPIUsageMetrics(result);
 
-      return result;
+        return result;
+      };
+
+      // If working directory specified, run with workspace context
+      if (workingDirectory) {
+        console.log(`📁 Workspace context: ${workingDirectory}`);
+        return runWithWorkspaceContext(
+          { workingDirectory },
+          executeWithContext
+        );
+      } else {
+        // No workspace context - tools will use process.cwd()
+        return executeWithContext();
+      }
     }, estimatedRequests);
   }
 

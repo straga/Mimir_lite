@@ -179,7 +179,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - ${HOST_WORKSPACE_ROOT:-~/src}:/workspace:ro
+      - ${HOST_WORKSPACE_ROOT:-~/src}:/workspace
     ports:
       - "9042:3000"
     healthcheck:

@@ -405,7 +405,7 @@ export function TaskCanvas() {
       estimatedDuration: '30 minutes',
       estimatedToolCalls: 20,
       parallelGroup: null,
-      qcAgentRoleDescription: '',
+      qcRole: '',
       verificationCriteria: [],
       maxRetries: 3,
     };
@@ -438,7 +438,7 @@ export function TaskCanvas() {
           estimatedDuration: '30 minutes',
           estimatedToolCalls: 20,
           parallelGroup: null,
-          qcAgentRoleDescription: agent.agentType === 'qc' ? agent.role : '',
+          qcRole: agent.agentType === 'qc' ? agent.role : '',
           qcPreambleId: agent.agentType === 'qc' ? agent.id : undefined,
           verificationCriteria: [],
           maxRetries: 3,

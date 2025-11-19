@@ -146,11 +146,12 @@ export async function persistTaskExecutionToNeo4j(
         MERGE (exec)-[:FAILED_TASK]->(te)
       )
       
-      // Also link to orchestration plan if it exists
+      // Also link to orchestration plan if it exists (only if plan node found)
       WITH te
       OPTIONAL MATCH (plan:Node {id: $planId, type: 'orchestration_plan'})
-      WHERE plan IS NOT NULL
-      MERGE (plan)-[:HAS_EXECUTION]->(te)
+      FOREACH (p IN CASE WHEN plan IS NOT NULL THEN [plan] ELSE [] END |
+        MERGE (p)-[:HAS_EXECUTION]->(te)
+      )
       
       RETURN te.id as nodeId
     `, {

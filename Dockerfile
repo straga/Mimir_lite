@@ -10,11 +10,13 @@ COPY package*.json ./
 COPY frontend/package*.json ./frontend/
 COPY vscode-extension/package*.json ./vscode-extension/
 
+# Copy .npmrc to override global npm config (use public registry, no auth)
+COPY .npmrc ./
+
 # Install dependencies using npm ci (much faster than npm install)
 # npm ci uses package-lock.json exactly and is optimized for CI/CD
-# Use BuildKit cache mount to persist npm cache between builds
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --legacy-peer-deps --no-audit --no-fund
+# .npmrc already configures public registry and disables auth
+RUN npm ci --legacy-peer-deps --no-audit --no-fund
 
 # Copy source code (do this AFTER npm install for better layer caching)
 COPY . .

@@ -16,6 +16,29 @@ Graph-RAG powered AI assistant with configurable chatmodes and multi-hop knowled
 - VSCode 1.95.0 or higher
 - Mimir server running (default: `http://localhost:9042`)
 
+## Configuration
+
+### Setting Up the Mimir Endpoint
+
+The extension needs to connect to your Mimir server. Configure the endpoint in VSCode settings:
+
+**Via Settings UI**:
+1. Open Settings: `CMD+,` (Mac) or `CTRL+,` (Windows/Linux)
+2. Search for "Mimir API URL"
+3. Set to your server endpoint:
+   - Docker: `http://localhost:9042` (default)
+   - Local dev: `http://localhost:3000`
+   - Remote: `http://your-server:port`
+
+**Via settings.json**:
+```json
+{
+  "mimir.apiUrl": "http://localhost:9042"
+}
+```
+
+The extension will automatically reload when you change this setting.
+
 ## Usage
 
 ### Basic Usage

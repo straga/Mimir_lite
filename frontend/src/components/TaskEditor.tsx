@@ -135,9 +135,9 @@ export function TaskEditor() {
             QC Role Description
           </label>
           <textarea
-            value={localTask.qcAgentRoleDescription}
+            value={localTask.qcRole}
             onChange={(e) =>
-              setLocalTask({ ...localTask, qcAgentRoleDescription: e.target.value })
+              setLocalTask({ ...localTask, qcRole: e.target.value })
             }
             rows={2}
             className="w-full px-3 py-2 bg-norse-shadow border-2 border-norse-rune rounded-lg focus:ring-2 focus:ring-valhalla-gold focus:border-valhalla-gold text-sm text-gray-100"

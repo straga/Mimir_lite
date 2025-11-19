@@ -14,7 +14,7 @@ export interface Task {
   estimatedDuration: string;
   estimatedToolCalls: number;
   parallelGroup: number | null;
-  qcAgentRoleDescription: string;
+  qcRole: string; // QC Agent Role Description
   qcPreambleId?: string; // Reference to QC preamble
   verificationCriteria: string[];
   maxRetries: number;

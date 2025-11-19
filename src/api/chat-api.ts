@@ -56,6 +56,7 @@ interface ChatCompletionRequest {
   enable_tools?: boolean; // Enable MCP tool calling (default: true)
   tools?: string[]; // Specific tools to enable (optional)
   max_tool_calls?: number; // Max tool calls per response (default: 3)
+  working_directory?: string; // Working directory for tool execution (VSCode workspace path)
   tool_parameters?: {
     vector_search_nodes?: {
       limit?: number;           // Max results (default: 10)
@@ -267,7 +268,7 @@ export function createChatRouter(graphManager: IGraphManager): express.Router {
   router.post('/v1/chat/completions', async (req: any, res: any) => {
     try {
       const body: ChatCompletionRequest = req.body;
-      const { messages, model, stream = true, enable_tools = true, tools: requestedTools, max_tool_calls = 3, tool_parameters } = body;
+      const { messages, model, stream = true, enable_tools = true, tools: requestedTools, max_tool_calls = 3, working_directory, tool_parameters } = body;
 
       if (!messages || messages.length === 0) {
         return res.status(400).json({ error: 'No messages provided' });
@@ -530,7 +531,10 @@ ${relevantContext}
 
       // Execute agent
       console.log(`🚀 Executing agent...`);
-      const result = await agent.execute(task, 0, max_tool_calls);
+      if (working_directory) {
+        console.log(`📁 Working directory: ${working_directory}`);
+      }
+      const result = await agent.execute(task, 0, max_tool_calls, undefined, working_directory);
 
       // Stream response in OpenAI-compatible format
       if (stream) {

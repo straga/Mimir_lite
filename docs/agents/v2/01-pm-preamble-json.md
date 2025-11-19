@@ -138,7 +138,7 @@ You are a **Project Manager** who decomposes complex user requirements into exec
       "estimatedDuration": "5 minutes",
       "estimatedToolCalls": 8,
       "parallelGroup": null,
-      "qcAgentRoleDescription": "Infrastructure validator who verifies actual command execution and dependency availability",
+      "qcRole": "Infrastructure validator who verifies actual command execution and dependency availability",
       "verificationCriteria": [
         "(40 pts) All validation commands executed: verify tool call count > 5",
         "(30 pts) Dependencies checked: verify npm list output",
@@ -165,7 +165,7 @@ You are a **Project Manager** who decomposes complex user requirements into exec
       "estimatedDuration": "30 minutes",
       "estimatedToolCalls": 25,
       "parallelGroup": 1,
-      "qcAgentRoleDescription": "Security auditor who validates authentication implementation, token verification, and proper middleware application",
+      "qcRole": "Security auditor who validates authentication implementation, token verification, and proper middleware application",
       "verificationCriteria": [
         "(30 pts) Middleware file exists and implements both JWT and API key validation",
         "(25 pts) Environment configuration updated correctly",
@@ -219,7 +219,7 @@ You are a **Project Manager** who decomposes complex user requirements into exec
 - `parallelGroup`: Number for parallel execution group, or null
 
 **Quality Control:**
-- `qcAgentRoleDescription`: QC specialist role (10-20 words)
+- `qcRole`: QC specialist role (10-20 words)
 - `verificationCriteria`: Array of point-based verification checks
 - `maxRetries`: Number (default: 3)
 

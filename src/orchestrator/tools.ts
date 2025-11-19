@@ -4,6 +4,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
+import { getWorkingDirectory, hasWorkspaceContext } from './workspace-context.js';
 
 const execAsync = promisify(exec);
 
@@ -19,20 +20,23 @@ export const runCommandTool = new DynamicStructuredTool({
   }),
   func: async ({ command, is_background }) => {
     try {
+      const workingDir = getWorkingDirectory();
+      const contextInfo = hasWorkspaceContext() ? ` (workspace: ${workingDir})` : '';
+      
       if (is_background) {
         // For background tasks, just start and return
-        exec(command);
-        return `Command started in background: ${command}`;
+        exec(command, { cwd: workingDir });
+        return `Command started in background: ${command}${contextInfo}`;
       }
 
       const { stdout, stderr } = await execAsync(command, {
-        cwd: process.cwd(),
+        cwd: workingDir,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
         timeout: 300000, // 5 minute timeout
       });
 
       const output = stdout + (stderr ? `\nSTDERR:\n${stderr}` : '');
-      return output || 'Command completed with no output';
+      return output || `Command completed with no output${contextInfo}`;
     } catch (error: any) {
       return `Error executing command: ${error.message}\nExit code: ${error.code || 'unknown'}\n${error.stdout || ''}\n${error.stderr || ''}`;
     }
@@ -194,7 +198,7 @@ export const grepTool = new DynamicStructuredTool({
       if (searchPath) cmd += ` "${searchPath}"`;
 
       const { stdout } = await execAsync(cmd, {
-        cwd: process.cwd(),
+        cwd: getWorkingDirectory(),
         maxBuffer: 10 * 1024 * 1024,
       });
 

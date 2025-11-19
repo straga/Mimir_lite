@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { PreambleManager } from './preambleManager';
+import { StudioPanel } from './studioPanel';
 import type { ChatMessage, MimirConfig, ToolParameters } from './types';
 
 let preambleManager: PreambleManager;
@@ -85,7 +86,33 @@ export async function activate(context: vscode.ExtensionContext) {
     console.log('ℹ️  No icon.png found, using default icon');
   }
 
-  // Listen for configuration changes
+  // ========================================
+  // STUDIO UI: Register workflow commands
+  // ========================================
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mimir.openStudio', () => {
+      console.log('🎨 Opening Mimir Studio...');
+      StudioPanel.createOrShow(context.extensionUri, config.apiUrl);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mimir.createWorkflow', async () => {
+      // Open Studio and prompt for new workflow
+      StudioPanel.createOrShow(context.extensionUri, config.apiUrl);
+      vscode.window.showInformationMessage('Drag agents to the canvas to create your workflow');
+    })
+  );
+
+  // Register webview panel serializer for state restoration
+  vscode.window.registerWebviewPanelSerializer('mimirStudio', {
+    async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, state: any) {
+      console.log('🔄 Restoring Studio panel from state');
+      StudioPanel.revive(webviewPanel, context.extensionUri, state, config.apiUrl);
+    }
+  });
+
+  // Listen for configuration changes (both chat and Studio)
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('mimir')) {
@@ -94,12 +121,14 @@ export async function activate(context: vscode.ExtensionContext) {
         preambleManager.loadAvailablePreambles().then(preambles => {
           console.log(`🔄 Configuration updated, reloaded ${preambles.length} preambles`);
         });
+        // Update Studio panels with new config
+        StudioPanel.updateAllPanels({ apiUrl: newConfig.apiUrl });
       }
     })
   );
 
   context.subscriptions.push(participant);
-  console.log('✅ Mimir Chat Assistant activated!');
+  console.log('✅ Mimir Extension activated (Chat + Studio)!');
 }
 
 async function handleChatRequest(
@@ -234,6 +263,16 @@ async function handleChatRequest(
   console.log(`🔍 Model from VS Code: ${vscodeModelId || '(none)'}`);
   console.log(`📝 Selected model: ${selectedModel} (source: ${modelSource})`);
 
+  // Get workspace folder for tool execution context
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  const workingDirectory = workspaceFolder?.uri.fsPath;
+  
+  if (workingDirectory) {
+    console.log(`📁 Workspace folder: ${workingDirectory}`);
+  } else {
+    console.warn(`⚠️  No workspace folder open - tools will use server's working directory`);
+  }
+
   // Make request to Mimir with overrides from parsed args
   const requestBody = {
     messages,
@@ -241,6 +280,7 @@ async function handleChatRequest(
     stream: true,
     enable_tools: args.enableTools ?? config.enableTools,
     max_tool_calls: args.maxTools ?? config.maxToolCalls,
+    working_directory: workingDirectory, // Pass workspace path for tool execution
     tool_parameters: toolParameters
   };
 
@@ -328,7 +368,7 @@ async function handleChatRequest(
 function getConfig(): MimirConfig {
   const config = vscode.workspace.getConfiguration('mimir');
   return {
-    apiUrl: config.get('apiUrl', 'http://localhost:3000'),
+    apiUrl: config.get('apiUrl', 'http://localhost:9042'),
     defaultPreamble: config.get('defaultPreamble', 'mimir-v2'),
     model: config.get('model', 'gpt-4.1'),
     vectorSearchDepth: config.get('vectorSearch.depth', 1),
@@ -341,5 +381,5 @@ function getConfig(): MimirConfig {
 }
 
 export function deactivate() {
-  console.log('👋 Mimir Chat Assistant deactivated');
+  console.log('👋 Mimir Extension deactivated (Chat + Studio)');
 }

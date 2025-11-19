@@ -52,7 +52,7 @@ export function ParallelGroupContainer({ group, isExecuting = false }: ParallelG
           estimatedDuration: '30 minutes',
           estimatedToolCalls: 20,
           parallelGroup: group.id,
-          qcAgentRoleDescription: agent.agentType === 'qc' ? agent.role : '',
+          qcRole: agent.agentType === 'qc' ? agent.role : '',
           qcPreambleId: agent.agentType === 'qc' ? agent.id : undefined,
           verificationCriteria: [],
           maxRetries: 3,

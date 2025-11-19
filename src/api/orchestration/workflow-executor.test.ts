@@ -285,8 +285,8 @@ describe('Workflow Executor', () => {
           title: 'Task with QC',
           prompt: 'Test',
           agentRoleDescription: 'Worker',
-          qcAgentRoleDescription: 'QC Agent',
-          verificationCriteria: ['Check A', 'Check B'],
+          qcRole: 'QC Agent',
+          verificationCriteria: 'Check A, Check B',
           dependencies: [],
         },
       ];
@@ -400,8 +400,8 @@ describe('Workflow Executor', () => {
           estimatedToolCalls: 10,
           dependencies: ['task-0'],
           parallelGroup: 'group-1',
-          qcAgentRoleDescription: 'Complex QC',
-          verificationCriteria: ['Criterion 1', 'Criterion 2'],
+          qcRole: 'Complex QC',
+          verificationCriteria: 'Criterion 1, Criterion 2',
           maxRetries: 3,
         },
       ];

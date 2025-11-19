@@ -14,7 +14,7 @@ describe('TaskCard Visual States', () => {
     estimatedDuration: '10 min',
     estimatedToolCalls: 5,
     parallelGroup: null,
-    qcAgentRoleDescription: 'QC Agent',
+    qcRole: 'QC Agent',
     verificationCriteria: [],
     maxRetries: 2,
     executionStatus,

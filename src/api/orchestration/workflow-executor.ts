@@ -96,6 +96,88 @@ function extractDeliverablesFromResults(results: ExecutionResult[]): Deliverable
         mimeType: 'text/markdown',
         size: Buffer.byteLength(content, 'utf8'),
       });
+    } else if (result.status === 'failure') {
+      // Create a comprehensive failure report deliverable for failed tasks
+      const filename = `${result.taskId}-FAILURE-REPORT.md`;
+      
+      // Build comprehensive failure report with all agent chatter (untruncated)
+      let content = `# ❌ Task Failure Report: ${result.taskId}\n\n`;
+      content += `**Status**: Failed after ${result.attemptNumber || 'N/A'} attempt(s)\n`;
+      content += `**Duration**: ${(result.duration / 1000).toFixed(2)}s\n`;
+      content += `**Tool Calls**: ${result.toolCalls || 0}\n`;
+      content += `**Tokens**: ${result.tokens ? `${result.tokens.input} input, ${result.tokens.output} output` : 'N/A'}\n\n`;
+      
+      content += `---\n\n`;
+      
+      // Task Prompt
+      if (result.prompt) {
+        content += `## 📋 Task Prompt\n\n${result.prompt}\n\n`;
+      }
+      
+      // Agent Role
+      if (result.agentRoleDescription) {
+        content += `## 🤖 Worker Agent Role\n\n${result.agentRoleDescription}\n\n`;
+      }
+      
+      // Full Worker Output (untruncated)
+      content += `## 💬 Worker Output (Full, Untruncated)\n\n`;
+      if (result.output && result.output.trim()) {
+        content += `\`\`\`\n${result.output}\n\`\`\`\n\n`;
+      } else {
+        content += `*No output captured*\n\n`;
+      }
+      
+      // QC Verification History (all attempts)
+      if (result.qcVerificationHistory && result.qcVerificationHistory.length > 0) {
+        content += `## 🔍 QC Verification History (${result.qcVerificationHistory.length} attempt(s))\n\n`;
+        result.qcVerificationHistory.forEach((qc, idx) => {
+          content += `### Attempt ${idx + 1}\n\n`;
+          content += `- **Passed**: ${qc.passed ? '✅ Yes' : '❌ No'}\n`;
+          content += `- **Score**: ${qc.score}/100\n`;
+          content += `- **Timestamp**: ${qc.timestamp || 'N/A'}\n\n`;
+          content += `**Feedback**:\n${qc.feedback}\n\n`;
+          
+          if (qc.issues && qc.issues.length > 0) {
+            content += `**Issues**:\n`;
+            qc.issues.forEach((issue, i) => {
+              content += `${i + 1}. ${issue}\n`;
+            });
+            content += `\n`;
+          }
+          
+          if (qc.requiredFixes && qc.requiredFixes.length > 0) {
+            content += `**Required Fixes**:\n`;
+            qc.requiredFixes.forEach((fix, i) => {
+              content += `${i + 1}. ${fix}\n`;
+            });
+            content += `\n`;
+          }
+          
+          content += `---\n\n`;
+        });
+      }
+      
+      // QC Failure Report (final analysis)
+      if (result.qcFailureReport) {
+        content += `## 📊 Final QC Analysis\n\n${result.qcFailureReport}\n\n`;
+      }
+      
+      // Circuit Breaker Analysis (if triggered)
+      if (result.circuitBreakerAnalysis) {
+        content += `## 🚨 Circuit Breaker Analysis\n\n${result.circuitBreakerAnalysis}\n\n`;
+      }
+      
+      // Error Details
+      if (result.error) {
+        content += `## ⚠️ Error Details\n\n\`\`\`\n${result.error}\n\`\`\`\n\n`;
+      }
+      
+      deliverables.push({
+        filename,
+        content,
+        mimeType: 'text/markdown',
+        size: Buffer.byteLength(content, 'utf8'),
+      });
     }
   }
   
@@ -219,7 +301,13 @@ async function executeTaskGroup(
       total: totalTasks,
     });
     
-    const result = await executeTask(task, preambleContent, qcPreambleContent);
+    const result = await executeTask(
+      task, 
+      preambleContent, 
+      qcPreambleContent, 
+      executionId, 
+      (event, data) => sendSSEEvent(executionId, event, data)
+    );
     
     // Persist and update state
     try {
@@ -294,7 +382,13 @@ async function executeTaskGroup(
     console.log(`   ⚡ Starting ${task.id} (parallel)`);
     
     try {
-      const result = await executeTask(task, preambleContent, qcPreambleContent);
+      const result = await executeTask(
+        task, 
+        preambleContent, 
+        qcPreambleContent, 
+        executionId, 
+        (event, data) => sendSSEEvent(executionId, event, data)
+      );
       
       // Persist to Neo4j
       try {
@@ -412,7 +506,7 @@ async function executeTaskGroup(
  *     title: 'Generate report',
  *     prompt: 'Create quarterly report',
  *     agentRoleDescription: 'Report writer',
- *     qcAgentRoleDescription: 'Quality auditor',
+ *     qcRole: 'Quality auditor',
  *     verificationCriteria: ['Accuracy', 'Completeness', 'Formatting']
  *   }
  * ];
@@ -471,8 +565,8 @@ export async function executeWorkflowFromJSON(
     dependencies: task.dependencies || [],
     estimatedDuration: task.estimatedDuration || '30 min',
     parallelGroup: task.parallelGroup,
-    qcRole: task.qcAgentRoleDescription,
-    verificationCriteria: task.verificationCriteria ? task.verificationCriteria.join('\n') : undefined,
+    qcRole: task.qcRole,
+    verificationCriteria: task.verificationCriteria, // Fixed: already a string, don't join
     maxRetries: task.maxRetries || 2,
     estimatedToolCalls: task.estimatedToolCalls,
   }));

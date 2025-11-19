@@ -1,17 +1,27 @@
 {
   "name": "mimir-chat",
-  "displayName": "Mimir Chat Assistant",
-  "description": "Graph-RAG powered AI assistant with configurable chatmodes and multi-hop knowledge traversal",
+  "displayName": "Mimir - AI Assistant & Workflow Studio",
+  "description": "Graph-RAG powered AI chat assistant with drag-and-drop multi-agent workflow builder",
   "version": "0.1.0",
   "publisher": "mimir",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/orneryd/Mimir.git"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
   "categories": [
     "AI",
-    "Chat"
+    "Chat",
+    "Visualization"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:mimir.openStudio",
+    "onCommand:mimir.createWorkflow"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "chatParticipants": [
@@ -22,13 +32,39 @@
         "isSticky": true
       }
     ],
+    "commands": [
+      {
+        "command": "mimir.openStudio",
+        "title": "Mimir: Open Workflow Studio",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "mimir.createWorkflow",
+        "title": "Mimir: Create New Workflow",
+        "icon": "$(add)"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "mimir.workflow",
+        "displayName": "Mimir Workflow Designer",
+        "selector": [
+          {
+            "filenamePattern": "*.mimir-workflow"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "configuration": {
       "title": "Mimir",
       "properties": {
         "mimir.apiUrl": {
           "type": "string",
           "default": "http://localhost:9042",
-          "description": "Mimir server URL"
+          "description": "Mimir server endpoint URL (http://localhost:9042 for Docker, http://localhost:3000 for local dev)",
+          "scope": "window",
+          "order": 0
         },
         "mimir.defaultPreamble": {
           "type": "string",
@@ -78,21 +114,59 @@
           "default": "",
           "description": "Custom preamble content (overrides default preambles)",
           "editPresentation": "multilineText"
+        },
+        "mimir.studio.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-save workflows while editing in Studio"
+        },
+        "mimir.studio.autoSaveDelay": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 500,
+          "maximum": 10000,
+          "description": "Auto-save delay in milliseconds"
         }
       }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "mimir.openStudio",
+          "when": "true"
+        },
+        {
+          "command": "mimir.createWorkflow",
+          "when": "true"
+        }
+      ]
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run build",
+    "build": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
     "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.x",
     "@types/vscode": "^1.95.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
     "@vscode/vsce": "^2.x",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4",
+    "ts-loader": "^9.5.0",
+    "css-loader": "^6.8.0",
+    "style-loader": "^3.3.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-dnd": "^16.0.1",
+    "react-dnd-html5-backend": "^16.0.1",
+    "zustand": "^4.4.0"
+  }
 }

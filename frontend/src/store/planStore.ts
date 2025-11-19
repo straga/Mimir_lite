@@ -460,7 +460,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
       markdown += `**Estimated Duration:** ${task.estimatedDuration}\n\n`;
       markdown += `**Estimated Tool Calls:** ${task.estimatedToolCalls}\n\n`;
       markdown += `**Parallel Group:** ${task.parallelGroup ?? 'N/A'}\n\n`;
-      markdown += `**QC Agent Role Description:** ${task.qcAgentRoleDescription}\n\n`;
+      markdown += `**QC Agent Role Description:** ${task.qcRole}\n\n`;
       markdown += `**Verification Criteria:**\n`;
       task.verificationCriteria.forEach((criterion) => {
         markdown += `- [ ] ${criterion}\n`;

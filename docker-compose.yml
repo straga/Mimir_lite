@@ -204,7 +204,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - ${HOST_WORKSPACE_ROOT:-~/src}:/workspace:ro
+      - ${HOST_WORKSPACE_ROOT:-~/src}:/workspace  # Read-write for file editing (remove :ro)
+      # - ${HOST_WORKSPACE_ROOT:-~/src}:/workspace:ro  # Read-write for file editing (remove :ro)
     ports:
       - "9042:3000"
     healthcheck:

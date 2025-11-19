@@ -1,0 +1,19 @@
+{
+  "agents": [
+    {
+      "id": "pm-1732045678901",
+      "name": "PM Agent",
+      "role": "Planning & Research"
+    },
+    {
+      "id": "worker-1732045678902",
+      "name": "Worker Agent",
+      "role": "Implementation"
+    },
+    {
+      "id": "qc-1732045678903",
+      "name": "QC Agent",
+      "role": "Quality Check"
+    }
+  ]
+}
