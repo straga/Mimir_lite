@@ -1,0 +1,747 @@
+import { Router, Request, Response } from 'express';
+import { FileWatchManager } from '../indexing/FileWatchManager.js';
+import { WatchConfigManager } from '../indexing/WatchConfigManager.js';
+import neo4j from 'neo4j-driver';
+
+const router = Router();
+
+// Get FileWatchManager instance from global (set in http-server.ts)
+const getWatchManager = (): FileWatchManager => {
+  const manager = (globalThis as any).fileWatchManager;
+  if (!manager) {
+    throw new Error('FileWatchManager not initialized');
+  }
+  return manager;
+};
+
+/**
+ * GET /api/indexed-folders
+ * Returns list of all folders currently being watched/indexed
+ */
+router.get('/indexed-folders', async (req: Request, res: Response) => {
+  let driver: neo4j.Driver | null = null;
+  
+  try {
+    driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const configManager = new WatchConfigManager(driver);
+    const watchConfigs = await configManager.listActive();
+    
+    // Use separate session for each query to avoid transaction conflicts
+    const folders = await Promise.all(
+      watchConfigs.map(async (config) => {
+        const session = driver!.session();
+        try {
+          const result = await session.run(
+            `
+            MATCH (f:File)
+            WHERE f.path STARTS WITH $folderPath
+            OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+            OPTIONAL MATCH (c)-[:HAS_EMBEDDING]->(e)
+            RETURN 
+              COUNT(DISTINCT f) as fileCount,
+              COUNT(DISTINCT c) as chunkCount,
+              COUNT(DISTINCT e) as embeddingCount
+            `,
+            { folderPath: config.path }
+          );
+
+          const record = result.records[0];
+          const fileCount = record ? record.get('fileCount').toInt() : 0;
+          const chunkCount = record ? record.get('chunkCount').toInt() : 0;
+          const embeddingCount = record ? record.get('embeddingCount').toInt() : 0;
+
+          // Convert Neo4j DateTime to ISO string
+          const lastSyncDate: any = config.last_indexed || config.added_date;
+          const lastSyncString = lastSyncDate 
+            ? (typeof lastSyncDate === 'string' ? lastSyncDate : lastSyncDate.toString())
+            : new Date().toISOString();
+
+          return {
+            path: config.path,
+            hostPath: config.host_path,
+            fileCount,
+            chunkCount,
+            embeddingCount,
+            status: config.status || 'active',
+            error: config.error || null,
+            lastSync: lastSyncString,
+            patterns: config.file_patterns
+          };
+        } finally {
+          await session.close();
+        }
+      })
+    );
+
+    res.json({ folders });
+  } catch (error: any) {
+    console.error('❌ Error fetching indexed folders:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch indexed folders', 
+      details: error.message 
+    });
+  } finally {
+    if (driver) {
+      await driver.close();
+    }
+  }
+});
+
+/**
+ * POST /api/index-folder
+ * Adds a new folder to the watch/index system
+ */
+router.post('/index-folder', async (req: Request, res: Response) => {
+  try {
+    const { path, hostPath, recursive, generate_embeddings, file_patterns, ignore_patterns } = req.body;
+
+    if (!path) {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+
+    console.log(`📁 Adding folder to indexing: ${path}`);
+    console.log(`   Host path: ${hostPath || 'N/A'}`);
+    console.log(`   Recursive: ${recursive !== false}`);
+    console.log(`   Generate embeddings: ${generate_embeddings !== false}`);
+
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const configManager = new WatchConfigManager(driver);
+    
+    // Check if already watching
+    const existing = await configManager.getByPath(path);
+    if (existing) {
+      await driver.close();
+      return res.status(409).json({ 
+        error: 'Folder is already being watched', 
+        path,
+        existingConfig: existing
+      });
+    }
+
+    // Create watch configuration
+    const config = await configManager.createWatch({
+      path,
+      host_path: hostPath,
+      recursive: recursive !== false,
+      generate_embeddings: generate_embeddings !== false,
+      file_patterns,
+      ignore_patterns,
+      debounce_ms: 500
+    });
+
+    // Start watching with FileWatchManager
+    const watchManager = getWatchManager();
+    await watchManager.startWatch(config);
+
+    await driver.close();
+
+    res.json({ 
+      success: true, 
+      message: `Folder added to indexing: ${path}`,
+      path,
+      hostPath,
+      config
+    });
+  } catch (error: any) {
+    console.error('❌ Error adding folder to indexing:', error);
+    res.status(500).json({ 
+      error: 'Failed to add folder to indexing', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * DELETE /api/indexed-folders
+ * Removes a folder from the watch/index system and deletes its indexed data
+ */
+router.delete('/indexed-folders', async (req: Request, res: Response) => {
+  try {
+    const { path } = req.body;
+
+    if (!path) {
+      return res.status(400).json({ error: 'Path is required' });
+    }
+
+    console.log(`🗑️ Removing folder from indexing: ${path}`);
+
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const configManager = new WatchConfigManager(driver);
+    
+    // Get config by path
+    const config = await configManager.getByPath(path);
+    if (!config) {
+      await driver.close();
+      return res.status(404).json({ 
+        error: 'Folder not found in watch list', 
+        path
+      });
+    }
+
+    // Stop watching
+    const watchManager = getWatchManager();
+    await watchManager.stopWatch(path);
+
+    // Delete watch configuration
+    await configManager.delete(config.id);
+
+    // Delete indexed files and chunks for this folder
+    const session = driver.session();
+    try {
+      await session.run(
+        `
+        MATCH (f:File)
+        WHERE f.path STARTS WITH $folderPath
+        OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+        OPTIONAL MATCH (c)-[:HAS_EMBEDDING]->(e)
+        DETACH DELETE f, c, e
+        `,
+        { folderPath: path }
+      );
+    } finally {
+      await session.close();
+      await driver.close();
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Folder removed from indexing: ${path}`,
+      path
+    });
+  } catch (error: any) {
+    console.error('❌ Error removing folder from indexing:', error);
+    res.status(500).json({ 
+      error: 'Failed to remove folder from indexing', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * GET /api/index-stats
+ * Returns aggregate statistics about all indexed content
+ */
+router.get('/index-stats', async (req: Request, res: Response) => {
+  try {
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const session = driver.session();
+
+    try {
+      // Get aggregate stats
+      const statsResult = await session.run(`
+        MATCH (f:File)
+        OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+        OPTIONAL MATCH (c)-[:HAS_EMBEDDING]->(e)
+        WITH 
+          COUNT(DISTINCT f) as totalFiles,
+          COUNT(DISTINCT c) as totalChunks,
+          COUNT(DISTINCT e) as totalEmbeddings,
+          COLLECT(DISTINCT f.extension) as extensions
+        RETURN 
+          totalFiles,
+          totalChunks,
+          totalEmbeddings,
+          extensions
+      `);
+
+      const statsRecord = statsResult.records[0];
+      const totalFiles = statsRecord ? statsRecord.get('totalFiles').toInt() : 0;
+      const totalChunks = statsRecord ? statsRecord.get('totalChunks').toInt() : 0;
+      const totalEmbeddings = statsRecord ? statsRecord.get('totalEmbeddings').toInt() : 0;
+
+      // Get file count by extension
+      const extensionResult = await session.run(`
+        MATCH (f:File)
+        WHERE f.extension IS NOT NULL
+        WITH f.extension as ext, COUNT(f) as count
+        RETURN ext, count
+        ORDER BY count DESC
+      `);
+
+      const byExtension: Record<string, number> = {};
+      extensionResult.records.forEach(record => {
+        const ext = record.get('ext');
+        const count = record.get('count').toInt();
+        byExtension[ext || '(no extension)'] = count;
+      });
+
+      // Get file count by type (node label)
+      const typeResult = await session.run(`
+        MATCH (f:File)
+        WITH f, [label IN labels(f) WHERE label <> 'File'] as filteredLabels
+        UNWIND filteredLabels as label
+        WITH label, COUNT(f) as count
+        RETURN label as type, count
+        ORDER BY count DESC
+      `);
+
+      const byType: Record<string, number> = {};
+      typeResult.records.forEach(record => {
+        const type = record.get('type');
+        const count = record.get('count').toInt();
+        byType[type] = count;
+      });
+
+      // Count watched folders
+      const configManager = new WatchConfigManager(driver);
+      const watchConfigs = await configManager.listActive();
+
+      res.json({
+        totalFolders: watchConfigs.length,
+        totalFiles,
+        totalChunks,
+        totalEmbeddings,
+        byType,
+        byExtension
+      });
+    } finally {
+      await session.close();
+      await driver.close();
+    }
+  } catch (error: any) {
+    console.error('❌ Error fetching index stats:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch index stats', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * POST /api/migrate-indexed-folders
+ * Creates WatchConfig nodes for existing indexed folders (only for paths that exist on filesystem)
+ */
+router.post('/migrate-indexed-folders', async (req: Request, res: Response) => {
+  try {
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const session = driver.session();
+    const configManager = new WatchConfigManager(driver);
+    const fs = await import('fs').then(m => m.promises);
+
+    try {
+      // Find all unique root folders
+      const foldersResult = await session.run(`
+        MATCH (f:File)
+        WITH SPLIT(f.path, '/')[0..3] as pathParts, f
+        WITH '/' + pathParts[0] + '/' + pathParts[1] + '/' + pathParts[2] + '/' + pathParts[3] as rootFolder, 
+             COUNT(DISTINCT f) as fileCount
+        WHERE fileCount > 0
+        RETURN DISTINCT rootFolder
+        ORDER BY rootFolder
+      `);
+
+      const migratedFolders = [];
+      const skippedFolders = [];
+
+      for (const record of foldersResult.records) {
+        const folderPath = record.get('rootFolder');
+
+        // Skip null or invalid paths
+        if (!folderPath || typeof folderPath !== 'string') {
+          skippedFolders.push({
+            path: folderPath,
+            reason: 'Invalid or null path'
+          });
+          continue;
+        }
+
+        // Check if WatchConfig already exists
+        const existing = await configManager.getByPath(folderPath);
+        if (existing) {
+          skippedFolders.push({
+            path: folderPath,
+            reason: 'WatchConfig already exists'
+          });
+          continue;
+        }
+
+        // Check if path actually exists on filesystem
+        try {
+          await fs.access(folderPath);
+        } catch {
+          skippedFolders.push({
+            path: folderPath,
+            reason: 'Path does not exist on filesystem'
+          });
+          console.log(`⏭️  Skipping non-existent path: ${folderPath}`);
+          continue;
+        }
+
+        // Create WatchConfig for this folder
+        try {
+          await configManager.createWatch({
+            path: folderPath,
+            recursive: true,
+            generate_embeddings: false, // Don't re-generate embeddings
+            file_patterns: null,
+            ignore_patterns: [],
+            debounce_ms: 500
+          });
+
+          migratedFolders.push(folderPath);
+          console.log(`✅ Created WatchConfig for: ${folderPath}`);
+        } catch (error: any) {
+          skippedFolders.push({
+            path: folderPath,
+            reason: error.message
+          });
+          console.error(`❌ Failed to create WatchConfig for ${folderPath}:`, error.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        migratedCount: migratedFolders.length,
+        skippedCount: skippedFolders.length,
+        migrated: migratedFolders,
+        skipped: skippedFolders
+      });
+    } finally {
+      await session.close();
+      await driver.close();
+    }
+  } catch (error: any) {
+    console.error('❌ Error migrating indexed folders:', error);
+    res.status(500).json({
+      error: 'Failed to migrate indexed folders',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/migrate-file-paths
+ * Migrates existing File nodes to new path structure:
+ * OLD: f.path (relative) + f.absolute_path (container)
+ * NEW: f.path (container) + f.host_path (host)
+ */
+router.post('/api/migrate-file-paths', async (req: Request, res: Response) => {
+  try {
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const session = driver.session();
+    const workspaceRoot = process.env.WORKSPACE_ROOT || '/workspace';
+    const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT;
+
+    try {
+      // Get all File nodes with old structure
+      const files = await session.run(`
+        MATCH (f:File)
+        WHERE f.absolute_path IS NOT NULL
+        RETURN f.path as oldPath, f.absolute_path as containerPath, id(f) as nodeId
+        LIMIT 1000
+      `);
+
+      let migrated = 0;
+      let skipped = 0;
+
+      for (const record of files.records) {
+        const containerPath = record.get('containerPath');
+        const nodeId = record.get('nodeId');
+        
+        if (!containerPath) {
+          skipped++;
+          continue;
+        }
+
+        // Calculate host path
+        let hostPath = containerPath;
+        if (hostWorkspaceRoot && containerPath.startsWith(workspaceRoot)) {
+          hostPath = containerPath.replace(workspaceRoot, hostWorkspaceRoot);
+        }
+
+        // Update the node
+        await session.run(`
+          MATCH (f:File)
+          WHERE id(f) = $nodeId
+          SET 
+            f.path = $containerPath,
+            f.host_path = $hostPath
+          REMOVE f.absolute_path
+        `, {
+          nodeId,
+          containerPath,
+          hostPath
+        });
+
+        migrated++;
+      }
+
+      res.json({
+        success: true,
+        migrated,
+        skipped,
+        total: files.records.length,
+        workspaceRoot,
+        hostWorkspaceRoot: hostWorkspaceRoot || '(not set - non-Docker mode)'
+      });
+
+      console.log(`✅ Migrated ${migrated} file paths`);
+    } finally {
+      await session.close();
+      await driver.close();
+    }
+  } catch (error: any) {
+    console.error('❌ Error migrating file paths:', error);
+    res.status(500).json({
+      error: 'Failed to migrate file paths',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/debug-file-paths
+ * Returns sample file paths to diagnose indexing issues
+ */
+router.get('/debug-file-paths', async (req: Request, res: Response) => {
+  try {
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const session = driver.session();
+
+    try {
+      const result = await session.run(`
+        MATCH (f:File)
+        RETURN f.path as path
+        LIMIT 20
+      `);
+
+      const paths = result.records.map(r => r.get('path'));
+      
+      // Group by root folder
+      const rootFolders = new Map<string, number>();
+      paths.forEach(path => {
+        if (path) {
+          const parts = path.split('/').filter(Boolean);
+          if (parts.length >= 2) {
+            const root = `/${parts[0]}/${parts[1]}`;
+            rootFolders.set(root, (rootFolders.get(root) || 0) + 1);
+          }
+        }
+      });
+
+      res.json({
+        samplePaths: paths,
+        rootFolders: Array.from(rootFolders.entries()).map(([path, count]) => ({ path, count }))
+      });
+    } finally {
+      await session.close();
+      await driver.close();
+    }
+  } catch (error: any) {
+    console.error('❌ Error fetching debug paths:', error);
+    res.status(500).json({
+      error: 'Failed to fetch debug paths',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/cleanup-invalid-watchconfigs
+ * Removes WatchConfig nodes with path_not_found errors and File nodes with null paths
+ */
+router.post('/cleanup-invalid-watchconfigs', async (req: Request, res: Response) => {
+  try {
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const session = driver.session();
+
+    try {
+      // Delete WatchConfig nodes with path_not_found error
+      const watchConfigResult = await session.run(`
+        MATCH (w:WatchConfig)
+        WHERE w.error = 'path_not_found' OR w.status = 'inactive'
+        WITH w, w.path as path, w.error as error
+        DELETE w
+        RETURN path, error
+      `);
+
+      const deletedWatchConfigs = watchConfigResult.records.map(r => ({
+        path: r.get('path'),
+        error: r.get('error')
+      }));
+
+      // Delete File nodes with null or invalid paths (and their chunks/embeddings)
+      const fileResult = await session.run(`
+        MATCH (f:File)
+        WHERE f.path IS NULL OR f.path = ''
+        OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+        OPTIONAL MATCH (c)-[:HAS_EMBEDDING]->(e)
+        WITH f, c, e, f.path as path
+        DETACH DELETE f, c, e
+        RETURN count(DISTINCT f) as fileCount, count(DISTINCT c) as chunkCount, count(DISTINCT e) as embeddingCount
+      `);
+
+      const fileStats = fileResult.records[0];
+      const deletedFiles = fileStats ? fileStats.get('fileCount').toInt() : 0;
+      const deletedChunks = fileStats ? fileStats.get('chunkCount').toInt() : 0;
+      const deletedEmbeddings = fileStats ? fileStats.get('embeddingCount').toInt() : 0;
+
+      res.json({
+        success: true,
+        watchConfigs: {
+          deletedCount: deletedWatchConfigs.length,
+          deleted: deletedWatchConfigs
+        },
+        files: {
+          deletedFiles,
+          deletedChunks,
+          deletedEmbeddings
+        }
+      });
+
+      console.log(`✅ Cleanup complete:`);
+      console.log(`   - Removed ${deletedWatchConfigs.length} invalid WatchConfig nodes`);
+      console.log(`   - Deleted ${deletedFiles} File nodes with null paths`);
+      console.log(`   - Deleted ${deletedChunks} orphaned chunks`);
+      console.log(`   - Deleted ${deletedEmbeddings} orphaned embeddings`);
+    } finally {
+      await session.close();
+      await driver.close();
+    }
+  } catch (error: any) {
+    console.error('❌ Error cleaning up invalid data:', error);
+    res.status(500).json({
+      error: 'Failed to cleanup invalid data',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/migrate-watchconfig-paths
+ * Migrates all existing WatchConfig nodes to include host_path
+ */
+router.post('/migrate-watchconfig-paths', async (req: Request, res: Response) => {
+  try {
+    console.log('🔄 Migrating WatchConfig nodes to include host_path...');
+    
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      neo4j.auth.basic(
+        process.env.NEO4J_USER || 'neo4j',
+        process.env.NEO4J_PASSWORD || 'your_password_here'
+      )
+    );
+
+    const session = driver.session();
+
+    try {
+      // Helper function to translate container path to host path
+      const translateToHostPath = (containerPath: string): string => {
+        const containerWorkspaceRoot = process.env.WORKSPACE_ROOT || '/workspace';
+        const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT || containerWorkspaceRoot;
+        
+        if (containerPath.startsWith(containerWorkspaceRoot)) {
+          return containerPath.replace(containerWorkspaceRoot, hostWorkspaceRoot);
+        }
+        
+        // If it doesn't start with container workspace root, return as-is
+        return containerPath;
+      };
+
+      // Get all WatchConfig nodes
+      const watchConfigsResult = await session.run(`
+        MATCH (w:WatchConfig)
+        RETURN w.id as id, w.path as path, w.host_path as hostPath
+      `);
+
+      const updates = [];
+      for (const record of watchConfigsResult.records) {
+        const id = record.get('id');
+        const path = record.get('path');
+        const existingHostPath = record.get('hostPath');
+
+        // Only update if host_path is missing
+        if (!existingHostPath && path) {
+          const hostPath = translateToHostPath(path);
+          
+          await session.run(`
+            MATCH (w:WatchConfig {id: $id})
+            SET w.host_path = $hostPath
+          `, { id, hostPath });
+
+          updates.push({
+            id,
+            path,
+            hostPath
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        updatedCount: updates.length,
+        updates
+      });
+
+      console.log(`✅ Migration complete: Updated ${updates.length} WatchConfig nodes`);
+    } finally {
+      await session.close();
+      await driver.close();
+    }
+  } catch (error: any) {
+    console.error('❌ Error migrating WatchConfig paths:', error);
+    res.status(500).json({
+      error: 'Failed to migrate WatchConfig paths',
+      details: error.message
+    });
+  }
+});
+
+export default router;

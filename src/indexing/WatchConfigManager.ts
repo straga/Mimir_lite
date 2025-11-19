@@ -24,6 +24,7 @@ export class WatchConfigManager {
           id: $id,
           type: 'watchConfig',
           path: $path,
+          host_path: $host_path,
           recursive: $recursive,
           debounce_ms: $debounce_ms,
           file_patterns: $file_patterns,
@@ -38,6 +39,7 @@ export class WatchConfigManager {
       `, {
         id,
         path: input.path,
+        host_path: input.host_path || null,
         recursive: input.recursive ?? true,
         debounce_ms: input.debounce_ms ?? 500,
         file_patterns: input.file_patterns ?? null,
@@ -205,6 +207,7 @@ export class WatchConfigManager {
     return {
       id: props.id,
       path: props.path,
+      host_path: props.host_path,
       recursive: props.recursive,
       debounce_ms: props.debounce_ms,
       file_patterns: props.file_patterns,

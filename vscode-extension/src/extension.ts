@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { PreambleManager } from './preambleManager';
 import { StudioPanel } from './studioPanel';
+import { PortalPanel } from './portalPanel';
+import { IntelligencePanel } from './intelligencePanel';
 import type { ChatMessage, MimirConfig, ToolParameters } from './types';
 
 let preambleManager: PreambleManager;
@@ -87,6 +89,75 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   // ========================================
+  // CHAT UI: Register chat commands (Cursor/Windsurf compatible)
+  // ========================================
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mimir.askQuestion', async () => {
+      const prompt = await vscode.window.showInputBox({
+        prompt: 'Ask Mimir a question',
+        placeHolder: 'e.g., Explain this function, summarize these files, etc.',
+        ignoreFocusOut: true
+      });
+      
+      if (prompt && prompt.trim()) {
+        // Show output channel for response
+        const outputChannel = vscode.window.createOutputChannel('Mimir Response');
+        outputChannel.clear();
+        outputChannel.show(true);
+        
+        outputChannel.appendLine('🤔 Thinking...\n');
+        
+        try {
+          const response = await fetch(`${config.apiUrl}/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: [{ role: 'user', content: prompt }],
+              model: config.model,
+              stream: false
+            })
+          });
+          
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+          }
+          
+          const data = await response.json() as any;
+          const answer = data.choices?.[0]?.message?.content || 'No response';
+          
+          outputChannel.clear();
+          outputChannel.appendLine(`📝 Question: ${prompt}\n`);
+          outputChannel.appendLine(`💬 Answer:\n${answer}\n`);
+        } catch (error: any) {
+          outputChannel.clear();
+          outputChannel.appendLine(`❌ Error: ${error.message}\n`);
+          outputChannel.appendLine(`💡 Make sure Mimir server is running at ${config.apiUrl}`);
+        }
+      }
+    })
+  );
+
+  // ========================================
+  // PORTAL UI: Register chat interface command
+  // ========================================
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mimir.openChat', () => {
+      console.log('💬 Opening Mimir Chat...');
+      PortalPanel.createOrShow(context.extensionUri, config.apiUrl);
+    })
+  );
+
+  // ========================================
+  // INTELLIGENCE UI: Register code intelligence command
+  // ========================================
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mimir.openIntelligence', () => {
+      console.log('🧠 Opening Mimir Code Intelligence...');
+      IntelligencePanel.createOrShow(context.extensionUri, config.apiUrl);
+    })
+  );
+
+  // ========================================
   // STUDIO UI: Register workflow commands
   // ========================================
   context.subscriptions.push(
@@ -104,7 +175,21 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Register webview panel serializer for state restoration
+  // Register webview panel serializers for state restoration
+  vscode.window.registerWebviewPanelSerializer('mimirPortal', {
+    async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, state: any) {
+      console.log('🔄 Restoring Portal panel from state');
+      PortalPanel.revive(webviewPanel, context.extensionUri, state, config.apiUrl);
+    }
+  });
+
+  vscode.window.registerWebviewPanelSerializer('mimirIntelligence', {
+    async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, state: any) {
+      console.log('🔄 Restoring Intelligence panel from state');
+      IntelligencePanel.revive(webviewPanel, context.extensionUri, state, config.apiUrl);
+    }
+  });
+
   vscode.window.registerWebviewPanelSerializer('mimirStudio', {
     async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, state: any) {
       console.log('🔄 Restoring Studio panel from state');
@@ -112,7 +197,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   });
 
-  // Listen for configuration changes (both chat and Studio)
+  // Listen for configuration changes (chat, Portal, Intelligence, and Studio)
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('mimir')) {
@@ -121,7 +206,9 @@ export async function activate(context: vscode.ExtensionContext) {
         preambleManager.loadAvailablePreambles().then(preambles => {
           console.log(`🔄 Configuration updated, reloaded ${preambles.length} preambles`);
         });
-        // Update Studio panels with new config
+        // Update Portal, Intelligence, and Studio panels with new config
+        PortalPanel.updateAllPanels({ apiUrl: newConfig.apiUrl });
+        IntelligencePanel.updateAllPanels({ apiUrl: newConfig.apiUrl });
         StudioPanel.updateAllPanels({ apiUrl: newConfig.apiUrl });
       }
     })

@@ -39,6 +39,28 @@ export class FileIndexer {
   }
 
   /**
+   * Translate container path to host path
+   * e.g., /workspace/my-project/file.ts -> /Users/user/src/my-project/file.ts
+   * If not in Docker, both paths are the same
+   */
+  private translateToHostPath(containerPath: string): string {
+    const workspaceRoot = process.env.WORKSPACE_ROOT || '/workspace';
+    const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT;
+    
+    // If HOST_WORKSPACE_ROOT not set, assume not in Docker
+    if (!hostWorkspaceRoot) {
+      return containerPath;
+    }
+    
+    // Replace container workspace root with host workspace root
+    if (containerPath.startsWith(workspaceRoot)) {
+      return containerPath.replace(workspaceRoot, hostWorkspaceRoot);
+    }
+    
+    return containerPath;
+  }
+
+  /**
    * Index a single file with optional embeddings (Industry Standard: Separate Chunks)
    * Creates File node + FileChunk nodes with individual embeddings
    */
@@ -114,14 +136,19 @@ export class FileIndexer {
       // - If embeddings ENABLED and file is SMALL → Store content on File node + embedding
       const shouldStoreFullContent = !generateEmbeddings || !needsChunking;
       
-      // Create File node
-      // Small files: Store embedding directly on File node
-      // Large files: Store embeddings in FileChunk nodes
+      // Create File node with BOTH container and host paths
+      // f.path = absolute container path (e.g., /app/docs/README.md)
+      // f.host_path = absolute host path (e.g., /Users/user/src/Mimir/docs/README.md)
+      // When not in Docker, both paths are the same
+      
+      // Convert container path to host path using environment variables
+      const hostPath = this.translateToHostPath(filePath);
+      
       const fileResult = await session.run(`
         MERGE (f:File:Node {path: $path})
         ON CREATE SET f.id = 'file-' + toString(timestamp()) + '-' + substring(randomUUID(), 0, 8)
         SET 
-          f.absolute_path = $absolute_path,
+          f.host_path = $host_path,
           f.name = $name,
           f.extension = $extension,
           f.language = $language,
@@ -134,8 +161,8 @@ export class FileIndexer {
           f.content = $content
         RETURN f.path AS path, f.size_bytes AS size_bytes, id(f) AS node_id
       `, {
-        path: relativePath,
-        absolute_path: filePath,
+        path: filePath,  // Now stores absolute container path
+        host_path: hostPath,
         name: path.basename(filePath),
         extension: extension,
         language: language,

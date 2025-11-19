@@ -5,6 +5,7 @@
 export interface WatchConfig {
   id: string;
   path: string;
+  host_path?: string;
   recursive: boolean;
   debounce_ms: number;
   file_patterns: string[] | null;
@@ -20,6 +21,7 @@ export interface WatchConfig {
 
 export interface WatchConfigInput {
   path: string;
+  host_path?: string;
   recursive?: boolean;
   debounce_ms?: number;
   file_patterns?: string[] | null;

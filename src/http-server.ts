@@ -13,6 +13,7 @@ import { server, initializeGraphManager, allTools } from './index.js';
 import { createOrchestrationRouter } from './api/orchestration-api.js';
 import { createChatRouter } from './api/chat-api.js';
 import { createMCPToolsRouter } from './api/mcp-tools-api.js';
+import indexRouter from './api/index-api.js';
 import { FileWatchManager } from './indexing/FileWatchManager.js';
 import type { IGraphManager } from './types/index.js';
 
@@ -97,6 +98,9 @@ async function startHttpServer() {
   
   // Mount MCP tools API routes
   app.use('/api', createMCPToolsRouter(graphManager));
+  
+  // Mount index management API routes
+  app.use('/api', indexRouter);
 
   // Serve static frontend files
   const frontendDistPath = path.join(__dirname, '../frontend/dist');

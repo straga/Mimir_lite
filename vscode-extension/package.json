@@ -19,6 +19,9 @@
   ],
   "activationEvents": [
     "onStartupFinished",
+    "onCommand:mimir.askQuestion",
+    "onCommand:mimir.openChat",
+    "onCommand:mimir.openIntelligence",
     "onCommand:mimir.openStudio",
     "onCommand:mimir.createWorkflow"
   ],
@@ -33,6 +36,21 @@
       }
     ],
     "commands": [
+      {
+        "command": "mimir.askQuestion",
+        "title": "Mimir: Ask a Question",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "mimir.openChat",
+        "title": "Mimir: Open Chat",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "mimir.openIntelligence",
+        "title": "Mimir: Open Code Intelligence",
+        "icon": "$(database)"
+      },
       {
         "command": "mimir.openStudio",
         "title": "Mimir: Open Workflow Studio",

@@ -34,15 +34,89 @@ module.exports = [
     devtool: 'source-map'
   },
   
-  // Webview configuration (Browser context for React)
+  // Studio webview configuration (Browser context for React)
   {
-    name: 'webview',
+    name: 'studio',
     target: 'web',
     mode: 'none',
     entry: './webview-src/studio/main.tsx',
     output: {
       path: path.resolve(__dirname, 'dist'),
       filename: 'studio.js'
+    },
+    resolve: {
+      extensions: ['.tsx', '.ts', '.js', '.jsx']
+    },
+    module: {
+      rules: [
+        {
+          test: /\.tsx?$/,
+          exclude: /node_modules/,
+          use: [{
+            loader: 'ts-loader',
+            options: {
+              configFile: path.resolve(__dirname, 'webview-src', 'tsconfig.json')
+            }
+          }]
+        },
+        {
+          test: /\.css$/,
+          use: ['style-loader', 'css-loader']
+        }
+      ]
+    },
+    devtool: 'source-map',
+    performance: {
+      hints: false
+    }
+  },
+
+  // Portal webview configuration (Browser context for React)
+  {
+    name: 'portal',
+    target: 'web',
+    mode: 'none',
+    entry: './webview-src/portal/main.tsx',
+    output: {
+      path: path.resolve(__dirname, 'dist'),
+      filename: 'portal.js'
+    },
+    resolve: {
+      extensions: ['.tsx', '.ts', '.js', '.jsx']
+    },
+    module: {
+      rules: [
+        {
+          test: /\.tsx?$/,
+          exclude: /node_modules/,
+          use: [{
+            loader: 'ts-loader',
+            options: {
+              configFile: path.resolve(__dirname, 'webview-src', 'tsconfig.json')
+            }
+          }]
+        },
+        {
+          test: /\.css$/,
+          use: ['style-loader', 'css-loader']
+        }
+      ]
+    },
+    devtool: 'source-map',
+    performance: {
+      hints: false
+    }
+  },
+
+  // Intelligence webview configuration (Browser context for React)
+  {
+    name: 'intelligence',
+    target: 'web',
+    mode: 'none',
+    entry: './webview-src/intelligence/main.tsx',
+    output: {
+      path: path.resolve(__dirname, 'dist'),
+      filename: 'intelligence.js'
     },
     resolve: {
       extensions: ['.tsx', '.ts', '.js', '.jsx']
