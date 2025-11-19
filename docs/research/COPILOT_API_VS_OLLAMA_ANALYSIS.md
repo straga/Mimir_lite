@@ -66,7 +66,7 @@
 // Line 45-51: Using copilot-api as OpenAI-compatible endpoint
 this.llm = new ChatOpenAI({
   apiKey: 'dummy-key-not-used', // Required but ignored
-  model: config.model || CopilotModel.GPT_4_1,
+  model: model || process.env,
   configuration: {
     baseURL: 'http://localhost:4141/v1', // copilot-api proxy
   },

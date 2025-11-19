@@ -3,7 +3,7 @@ import { evaluateAgent } from './evaluators/index.js';
 import { generateReport } from './report-generator.js';
 import fs from 'fs/promises';
 import path from 'path';
-import { CopilotModel } from './types.js';
+import { fetchAvailableModels } from './types.js';
 
 interface BenchmarkTask {
   name: string;
@@ -22,7 +22,7 @@ async function validateAgent(
   agentPath: string,
   benchmarkPath: string,
   outputDir: string,
-  model: CopilotModel | string
+  model: string
 ): Promise<void> {
   console.log(`\n🔍 Validating agent: ${agentPath}`);
   console.log(`📋 Benchmark: ${benchmarkPath}\n`);
@@ -101,49 +101,73 @@ async function validateAgent(
 }
 
 /**
- * List available models
+ * List available models dynamically from the configured endpoint
  */
-function listModels(): void {
-  console.log('\n📋 Available Models via GitHub Copilot API:\n');
-  console.log('GPT Models:');
-  console.log(`  - ${CopilotModel.GPT_4_1} (default)`);
-  console.log(`  - ${CopilotModel.GPT_4_1_COPILOT}`);
-  console.log(`  - ${CopilotModel.GPT_4_1_LATEST}`);
-  console.log(`  - ${CopilotModel.GPT_5}`);
-  console.log(`  - ${CopilotModel.GPT_4O}`);
-  console.log(`  - ${CopilotModel.GPT_4O_LATEST}`);
-  console.log(`  - ${CopilotModel.GPT_4O_MINI}`);
-  console.log(`  - ${CopilotModel.GPT_4}`);
-  console.log(`  - ${CopilotModel.GPT_4_TURBO}`);
-  console.log(`  - ${CopilotModel.GPT_3_5_TURBO}`);
-//   console.log('\nO-Series:');
-//   console.log(`  - ${CopilotModel.O3_MINI}`);
-//   console.log(`  - ${CopilotModel.O3_MINI_LATEST}`);
-//   console.log('\nClaude:');
-//   console.log(`  - ${CopilotModel.CLAUDE_SONNET_4}`);
-//   console.log(`  - ${CopilotModel.CLAUDE_3_7_SONNET}`);
-//   console.log(`  - ${CopilotModel.CLAUDE_3_7_SONNET_THINKING}`);
-//   console.log(`  - ${CopilotModel.CLAUDE_3_5_SONNET}`);
-//   console.log('\nGemini:');
-//   console.log(`  - ${CopilotModel.GEMINI_2_5_PRO}`);
-//   console.log(`  - ${CopilotModel.GEMINI_2_0_FLASH}`);
-  console.log('\n💡 Set model: `export COPILOT_MODEL=gpt-4.1');
+async function listModels(): Promise<void> {
+  console.log('\n📋 Fetching Available Models...\n');
+  
+  // Get API URL from env var
+  const apiUrl = process.env.MIMIR_LLM_API || 'http://localhost:9042/v1';
+  console.log(`   Checking: ${apiUrl}/models`);
+  console.log(`   Timeout: 5 seconds\n`);
+  
+  try {
+    const models = await fetchAvailableModels(apiUrl);
+    
+    if (models.length === 0) {
+      console.error('⚠️  No models found or connection failed.');
+      console.error(`   API URL: ${apiUrl}`);
+      console.error('\n💡 Troubleshooting:');
+      console.error('   1. Check if your LLM provider is running:');
+      console.error(`      curl ${apiUrl}/models`);
+      console.error('   2. Verify MIMIR_LLM_API environment variable');
+      console.error('   3. Check network connectivity\n');
+      process.exit(1);
+    }
+    
+    console.log(`✅ Found ${models.length} models from ${apiUrl}:\n`);
+    
+    // Group by owner/provider for cleaner display
+    const byOwner = models.reduce((acc, m) => {
+      const owner = m.owned_by || 'unknown';
+      if (!acc[owner]) acc[owner] = [];
+      acc[owner].push(m.id);
+      return acc;
+    }, {} as Record<string, string[]>);
+    
+    for (const [owner, modelIds] of Object.entries(byOwner)) {
+      console.log(`${owner.toUpperCase()}:`);
+      modelIds.forEach(id => {
+        console.log(`  - ${id}`);
+      });
+      console.log();
+    }
+    
+    const defaultModel = process.env.MIMIR_DEFAULT_MODEL || 'gpt-4.1';
+    console.log(`💡 Current default: ${defaultModel}`);
+    console.log(`   Set via: export MIMIR_DEFAULT_MODEL=<model-name>\n`);
+  } catch (error) {
+    console.error('❌ Failed to fetch models:', error);
+    console.error(`\n💡 Ensure your LLM provider is running at: ${apiUrl}`);
+    console.error('   Check logs above for details\n');
+    process.exit(1);
+  }
 }
 
 // CLI usage
 const args = process.argv.slice(2);
 
 if (args.includes('--list-models') || args.includes('-l')) {
-  listModels();
+  await listModels();
   process.exit(0);
 }
 
 const [agentPath, benchmarkPath, model] = args;
 
 if (!agentPath || !benchmarkPath) {
-  console.error('Usage: npm run validate <agent.md> <benchmark.json>');
+  console.error('Usage: npm run validate <agent.md> <benchmark.json> [model]');
   console.error('       npm run validate --list-models  (show available models)');
-  console.error('\nSet model: export COPILOT_MODEL=gpt-4.1');
+  console.error('\nSet model: export MIMIR_DEFAULT_MODEL=<model-name>');
   process.exit(1);
 }
 
@@ -151,6 +175,6 @@ validateAgent(
   agentPath,
   benchmarkPath,
   'validation-output',
-  model || CopilotModel.GPT_4_1 // Default to GPT-4o (proven function calling support)
+  model || process.env.MIMIR_DEFAULT_MODEL || 'gpt-4.1'
 ).catch(console.error);
 

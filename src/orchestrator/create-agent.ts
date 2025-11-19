@@ -14,7 +14,6 @@
  */
 
 import { CopilotAgentClient } from './llm-client.js';
-import { CopilotModel } from './types.js';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -44,7 +43,7 @@ function cleanLLMOutput(output: string): string {
 export async function createAgent(
   roleDescription: string,
   outputDir: string = 'generated-agents',
-  model: CopilotModel = CopilotModel.GPT_4_1,
+  model: string = process.env.MIMIR_DEFAULT_MODEL || 'gpt-4.1',
   taskExample?: any, // Optional: first task using this role for context
   isQC: boolean = false // Whether this is a QC agent (affects hash prefix)
 ): Promise<string> {
@@ -207,7 +206,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   const [roleDescription] = args;
-  const model = (process.env.COPILOT_MODEL as CopilotModel) || CopilotModel.GPT_4_1;
+  const model = process.env.MIMIR_DEFAULT_MODEL || 'gpt-4.1';
 
   createAgent(
     roleDescription,

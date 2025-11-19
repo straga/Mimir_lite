@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import type { IGraphManager } from '../types/index.js';
 import { CopilotAgentClient } from '../orchestrator/llm-client.js';
-import { CopilotModel } from '../orchestrator/types.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -387,7 +386,7 @@ export function createOrchestrationRouter(graphManager: IGraphManager): Router {
       // Create PM agent client
       const pmAgent = new CopilotAgentClient({
         preamblePath: pmPreamblePath,
-        model: CopilotModel.GPT_4_TURBO,
+        model: process.env.MIMIR_PM_MODEL || process.env.MIMIR_DEFAULT_MODEL || 'gpt-4.1',
         temperature: 0.2, // Lower temperature for structured output
         agentType: 'pm',
       });

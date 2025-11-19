@@ -1,5 +1,5 @@
 import { ChatOpenAI } from '@langchain/openai';
-import { CopilotModel } from '../types.js';
+import { CopilotAgentClient } from '../llm-client.js';
 
 interface Rubric {
   categories: Array<{
@@ -29,7 +29,7 @@ export async function evaluateAgent(
   // Use GitHub Copilot for evaluation (LLM-as-judge)
   const evaluator = new ChatOpenAI({
     apiKey: process.env.OPENAI_API_KEY, // Required by client but unused by copilot-api proxy
-    model: CopilotModel.GPT_4_1, // Default to GPT-4.1
+    model: process.env.MIMIR_DEFAULT_MODEL || 'gpt-4.1', // Default to GPT-4.1
     configuration: {
       baseURL: 'http://localhost:4141/v1', // copilot-api proxy
     },

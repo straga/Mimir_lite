@@ -170,9 +170,9 @@ services:
       - MIMIR_DEFAULT_MODEL=${MIMIR_DEFAULT_MODEL:-gpt-4.1}
       
       # Per-Agent Model Configuration (optional overrides)
-      - MIMIR_PM_MODEL=${MIMIR_PM_MODEL:-}
-      - MIMIR_WORKER_MODEL=${MIMIR_WORKER_MODEL:-}
-      - MIMIR_QC_MODEL=${MIMIR_QC_MODEL:-}
+      - MIMIR_PM_MODEL=${MIMIR_PM_MODEL:-gpt-4.1}
+      - MIMIR_WORKER_MODEL=${MIMIR_WORKER_MODEL:-gpt-4.1}
+      - MIMIR_QC_MODEL=${MIMIR_QC_MODEL:-gpt-4.1}
       
       # Context Window Configuration
       - MIMIR_DEFAULT_CONTEXT_WINDOW=${MIMIR_DEFAULT_CONTEXT_WINDOW:-128000}

@@ -226,38 +226,13 @@ async function handleChatRequest(
     console.warn(`⚠️  Please report this issue with the debug output above.`);
   }
   
-  // Map VS Code model IDs to Mimir-compatible names (matching CopilotModel enum)
-  const modelMap: Record<string, string> = {
-    // GPT models (VS Code → Mimir)
-    'copilot-gpt-4o': 'gpt-4o',
-    'copilot-gpt-4': 'gpt-4',
-    'copilot-gpt-4.1': 'gpt-4.1',
-    'copilot-gpt-3.5-turbo': 'gpt-3.5-turbo',
-    'gpt4o': 'gpt-4o',
-    'gpt4': 'gpt-4',
-    
-    // Claude models (VS Code → Mimir)
-    'claude-sonnet-4.5': 'claude-sonnet-4.5',
-    'claude-sonnet-4': 'claude-sonnet-4',
-    'claude-3.7-sonnet': 'claude-3.7-sonnet',
-    'claude-3.5-sonnet': 'claude-3.5-sonnet',
-    'claude-3-5-sonnet': 'claude-3.5-sonnet',
-    
-    // Gemini models (VS Code → Mimir)
-    'gemini-2.5-pro': 'gemini-2.5-pro',
-    'gemini-2.0-flash': 'gemini-2.0-flash-001',
-    
-    // O-series models (VS Code → Mimir)
-    'o3-mini': 'o3-mini',
-  };
-  
-  const selectedModel = modelMap[rawModel] || rawModel;
+  // Pass through model name as-is (fully dynamic - no hardcoded mapping)
+  // The backend will use whatever model name is provided from VS Code or settings
+  const selectedModel = rawModel;
   
   // Log for debugging
-  console.log(`🔍 Raw model from VS Code: ${vscodeModelId || '(none)'}`);
-  if (rawModel !== selectedModel) {
-    console.log(`🔄 Mapped model: ${rawModel} → ${selectedModel}`);
-  }
+  console.log(`🔍 Model from VS Code: ${vscodeModelId || '(none)'}`);
+  console.log(`📝 Selected model: ${selectedModel} (source: ${modelSource})`);
 
   // Make request to Mimir with overrides from parsed args
   const requestBody = {

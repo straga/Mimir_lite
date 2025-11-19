@@ -11,7 +11,6 @@
  */
 
 import { CopilotAgentClient, AgentConfig } from './llm-client.js';
-import { CopilotModel } from './types.js';
 import { planningTools } from './tools.js';
 import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
 import { createGraphManager } from '../managers/index.js';

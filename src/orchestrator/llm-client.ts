@@ -12,7 +12,7 @@ import type { CompiledStateGraph } from "@langchain/langgraph";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { BaseMessage } from "@langchain/core/messages";
 import fs from "fs/promises";
-import { CopilotModel, LLMProvider } from "./types.js";
+import { LLMProvider } from "./types.js";
 import { consolidatedTools, planningTools, getToolNames } from "./tools.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { LLMConfigLoader } from "../config/LLMConfigLoader.js";
@@ -26,7 +26,7 @@ const DUMMY_OPENAI_KEY = process.env.OPENAI_API_KEY || 'dummy-key-for-proxy';
 
 export interface AgentConfig {
   preamblePath: string;
-  model?: CopilotModel | string;
+  model?: string;
   temperature?: number;
   maxTokens?: number;
   tools?: StructuredToolInterface[]; // Allow custom tool set
@@ -53,7 +53,7 @@ export { LLMProvider };
  * ```typescript
  * const client = new CopilotAgentClient({
  *   preamblePath: 'agent.md',
- *   model: CopilotModel.GPT_4_1,  // Use enum for autocomplete!
+ *   model: 'gpt-4.1',  // Or use env var: process.env.MIMIR_DEFAULT_MODEL
  *   temperature: 0.0,
  * });
  * await client.loadPreamble('agent.md');
@@ -136,15 +136,8 @@ export class CopilotAgentClient {
       if (this.agentConfig.provider) {
         return this.agentConfig.provider as LLMProvider;
       }
-      // If using CopilotModel enum, infer Copilot provider for backward compatibility
-      if (
-        this.agentConfig.model &&
-        Object.values(CopilotModel).includes(this.agentConfig.model as any)
-      ) {
-        return LLMProvider.COPILOT;
-      }
-      // Default to OLLAMA (post-migration default)
-      return LLMProvider.OLLAMA;
+      // Default to OPENAI provider
+      return LLMProvider.OPENAI;
     }
     return this.provider;
   }
@@ -152,14 +145,10 @@ export class CopilotAgentClient {
   public getModel(): string {
     if (!this.llm) {
       if (this.agentConfig.model) {
-        // Handle CopilotModel enum - extract the string value
-        const modelValue = this.agentConfig.model.toString();
-        // Map enum values to actual model names
-        if (modelValue === "gpt-4.1") return "gpt-4o"; // GPT_4_1 enum maps to gpt-4o
-        return modelValue;
+        return this.agentConfig.model;
       }
-      // Default to tinyllama for Ollama
-      return "tinyllama";
+      // Default from env var or fallback
+      return process.env.MIMIR_DEFAULT_MODEL || "gpt-4.1";
     }
     return this.modelName;
   }
@@ -315,13 +304,6 @@ export class CopilotAgentClient {
       );
       provider = defaults.provider as LLMProvider;
       model = defaults.model;
-    } else if (
-      config.model &&
-      Object.values(CopilotModel).includes(config.model as any)
-    ) {
-      // If using CopilotModel enum, infer Copilot provider for backward compatibility
-      provider = LLMProvider.COPILOT;
-      model = config.model;
     } else {
       // Read default provider from config file (if available)
       try {
@@ -390,7 +372,7 @@ export class CopilotAgentClient {
       case LLMProvider.OLLAMA:
         return config.providers.ollama?.defaultModel || "tinyllama";
       case LLMProvider.COPILOT:
-        return config.providers.copilot?.defaultModel || CopilotModel.GPT_4O;
+        return config.providers.copilot?.defaultModel || "gpt-4o";
       case LLMProvider.OPENAI:
         return "gpt-4-turbo";
       default:

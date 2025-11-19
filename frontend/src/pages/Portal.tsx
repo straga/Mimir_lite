@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, User, Paperclip, X, Image as ImageIcon, RotateCcw, ChevronDown, Plus, Edit2, Copy, Check, ChevronRight } from 'lucide-react';
+import { Send, Sparkles, User, Paperclip, X, Image as ImageIcon, RotateCcw, ChevronDown, Plus, Edit2, Copy, Check, ChevronRight, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { EyeOfMimir } from '../components/EyeOfMimir';
 import { OrchestrationStudioIcon } from '../components/OrchestrationStudioIcon';
@@ -113,6 +113,24 @@ interface Preamble {
 }
 
 /**
+ * Vector search settings configuration.
+ * 
+ * @interface VectorSearchSettings
+ * @property {boolean} enabled - Enable/disable vector search
+ * @property {number} limit - Max results to retrieve (1-50)
+ * @property {number} minSimilarity - Similarity threshold 0-1
+ * @property {number} depth - Graph traversal depth 1-3
+ * @property {string[]} types - Node types to search
+ */
+interface VectorSearchSettings {
+  enabled: boolean;
+  limit: number;
+  minSimilarity: number;
+  depth: number;
+  types: string[];
+}
+
+/**
  * Main chat portal component for interacting with the Mimir AI system.
  * 
  * Provides a full-featured chat interface with:
@@ -180,6 +198,17 @@ export function Portal() {
   const [editingMessageText, setEditingMessageText] = useState('');
   const [copiedConversation, setCopiedConversation] = useState(false);
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
+  
+  // Vector search settings state
+  const [showVectorSearchModal, setShowVectorSearchModal] = useState(false);
+  const [vectorSearchSettings, setVectorSearchSettings] = useState<VectorSearchSettings>({
+    enabled: true,
+    limit: 10,
+    minSimilarity: 0.8,
+    depth: 1,
+    types: ['todo', 'memory', 'file', 'file_chunk'],
+  });
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -206,6 +235,19 @@ export function Portal() {
     const saved = localStorage.getItem('mimir-custom-preamble');
     if (saved) {
       setCustomPreambleContent(saved);
+    }
+  }, []);
+
+  // Load vector search settings from localStorage on mount
+  useEffect(() => {
+    const savedSettings = localStorage.getItem('mimir-vector-search-settings');
+    if (savedSettings) {
+      try {
+        const parsed = JSON.parse(savedSettings);
+        setVectorSearchSettings(parsed);
+      } catch (error) {
+        console.error('Failed to load vector search settings:', error);
+      }
     }
   }, []);
 
@@ -631,7 +673,7 @@ export function Portal() {
       // Add the edited user message
       messagesPayload.push({ role: 'user', content: editingMessageText.trim() });
 
-      // Call API with full conversation history
+      // Call API with full conversation history and vector search settings
       const response = await fetch('/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -641,7 +683,15 @@ export function Portal() {
           messages: messagesPayload,
           model: selectedModel,
           stream: true,
-          enable_tools: true, // Explicitly enable tool calling
+          enable_tools: vectorSearchSettings.enabled, // Enable tool calling based on settings
+          tool_parameters: vectorSearchSettings.enabled ? {
+            vector_search_nodes: {
+              limit: vectorSearchSettings.limit,
+              min_similarity: vectorSearchSettings.minSimilarity,
+              depth: vectorSearchSettings.depth,
+              types: vectorSearchSettings.types,
+            },
+          } : undefined,
         }),
       });
 
@@ -935,7 +985,7 @@ export function Portal() {
       // Add user message
       messagesPayload.push({ role: 'user', content: currentInput });
 
-      // Call OpenAI-compatible RAG-enhanced chat API with streaming
+      // Call OpenAI-compatible RAG-enhanced chat API with streaming and vector search settings
       const response = await fetch('/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -945,7 +995,15 @@ export function Portal() {
           messages: messagesPayload,
           model: selectedModel,
           stream: true,
-          enable_tools: true, // Explicitly enable tool calling
+          enable_tools: vectorSearchSettings.enabled, // Enable tool calling based on settings
+          tool_parameters: vectorSearchSettings.enabled ? {
+            vector_search_nodes: {
+              limit: vectorSearchSettings.limit,
+              min_similarity: vectorSearchSettings.minSimilarity,
+              depth: vectorSearchSettings.depth,
+              types: vectorSearchSettings.types,
+            },
+          } : undefined,
         }),
       });
 
@@ -1107,6 +1165,51 @@ export function Portal() {
   };
 
   const hasMessages = messages.length > 0;
+
+  /**
+   * Opens the vector search settings modal.
+   */
+  const handleOpenVectorSearchModal = () => {
+    setShowVectorSearchModal(true);
+  };
+
+  /**
+   * Saves vector search settings to localStorage and closes modal.
+   */
+  const handleSaveVectorSearchSettings = () => {
+    localStorage.setItem('mimir-vector-search-settings', JSON.stringify(vectorSearchSettings));
+    setShowVectorSearchModal(false);
+  };
+
+  /**
+   * Cancels vector search settings editing.
+   */
+  const handleCancelVectorSearchSettings = () => {
+    // Reload from localStorage to discard changes
+    const savedSettings = localStorage.getItem('mimir-vector-search-settings');
+    if (savedSettings) {
+      try {
+        setVectorSearchSettings(JSON.parse(savedSettings));
+      } catch (error) {
+        console.error('Failed to reload settings:', error);
+      }
+    }
+    setShowVectorSearchModal(false);
+  };
+
+  /**
+   * Resets vector search settings to defaults.
+   */
+  const handleResetVectorSearchSettings = () => {
+    const defaults: VectorSearchSettings = {
+      enabled: true,
+      limit: 10,
+      minSimilarity: 0.8,
+      depth: 1,
+      types: ['todo', 'memory', 'file', 'file_chunk'],
+    };
+    setVectorSearchSettings(defaults);
+  };
 
   return (
     <div className="h-screen flex flex-col bg-norse-night">
@@ -1321,6 +1424,16 @@ export function Portal() {
                     onDrop={handleDrop}
                   >
                     <div className="flex items-center px-4 py-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpenVectorSearchModal}
+                        className="flex-shrink-0 p-2 text-gray-400 hover:text-valhalla-gold transition-all rounded-lg hover:bg-norse-rune/50"
+                        title="Vector Search Settings"
+                        disabled={isLoading}
+                      >
+                        <Settings className="w-5 h-5" />
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
@@ -1678,6 +1791,16 @@ export function Portal() {
                 <div className="flex items-center px-4 py-3 gap-2">
                   <button
                     type="button"
+                    onClick={handleOpenVectorSearchModal}
+                    className="flex-shrink-0 p-2 text-gray-400 hover:text-valhalla-gold transition-all rounded-lg hover:bg-norse-rune/50"
+                    title="Vector Search Settings"
+                    disabled={isLoading}
+                  >
+                    <Settings className="w-5 h-5" />
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => fileInputRef.current?.click()}
                     className="flex-shrink-0 p-2 text-gray-400 hover:text-valhalla-gold transition-all rounded-lg hover:bg-norse-rune/50"
                     title="Attach file (Click, Drag, or Paste)"
@@ -1771,6 +1894,128 @@ export function Portal() {
                   className="px-6 py-2 bg-valhalla-gold hover:bg-yellow-500 border-2 border-valhalla-gold rounded-xl text-norse-night text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save & Use
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Vector Search Settings Modal */}
+      {showVectorSearchModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-[#1a1f2e] border-2 border-valhalla-gold rounded-2xl p-6 max-w-2xl w-full mx-4 shadow-2xl">
+                         <div className="flex items-center justify-between mb-4">
+               <h2 className="text-2xl font-bold text-valhalla-gold">Vector Search Settings</h2>
+               <button
+                 onClick={handleCancelVectorSearchSettings}
+                 className="text-gray-400 hover:text-valhalla-gold transition-colors"
+               >
+                 <X className="w-6 h-6" />
+               </button>
+             </div>
+             
+             <p className="text-gray-300 mb-4 text-sm">
+               Configure semantic search parameters for retrieving relevant context from your knowledge graph.
+               Vector search helps the AI find related memories, files, and concepts to improve responses.
+             </p>
+             
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="vectorSearchEnabled"
+                  checked={vectorSearchSettings.enabled}
+                  onChange={(e) => setVectorSearchSettings(prev => ({ ...prev, enabled: e.target.checked }))}
+                  className="mr-2 h-4 w-4 text-valhalla-gold focus:ring-valhalla-gold border-gray-600 bg-gray-700"
+                />
+                <label htmlFor="vectorSearchEnabled" className="text-gray-300 text-sm">Enable Vector Search</label>
+              </div>
+              <div className="flex items-center">
+                <input
+                  type="number"
+                  id="vectorSearchLimit"
+                  value={vectorSearchSettings.limit}
+                  onChange={(e) => setVectorSearchSettings(prev => ({ ...prev, limit: parseInt(e.target.value, 10) || 1 }))}
+                  min="1"
+                  max="50"
+                  className="w-24 h-8 p-1 bg-gray-800 border border-gray-600 rounded-md text-gray-100 text-sm focus:outline-none focus:ring-1 focus:ring-valhalla-gold focus:border-valhalla-gold"
+                />
+                <label htmlFor="vectorSearchLimit" className="text-gray-300 text-sm ml-2">Max Results: {vectorSearchSettings.limit}</label>
+              </div>
+              <div className="flex items-center">
+                <input
+                  type="number"
+                  id="vectorSearchMinSimilarity"
+                  value={vectorSearchSettings.minSimilarity}
+                  onChange={(e) => setVectorSearchSettings(prev => ({ ...prev, minSimilarity: parseFloat(e.target.value) || 0 }))}
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  className="w-24 h-8 p-1 bg-gray-800 border border-gray-600 rounded-md text-gray-100 text-sm focus:outline-none focus:ring-1 focus:ring-valhalla-gold focus:border-valhalla-gold"
+                />
+                <label htmlFor="vectorSearchMinSimilarity" className="text-gray-300 text-sm ml-2">Min Similarity: {vectorSearchSettings.minSimilarity.toFixed(2)}</label>
+              </div>
+              <div className="flex items-center">
+                <input
+                  type="number"
+                  id="vectorSearchDepth"
+                  value={vectorSearchSettings.depth}
+                  onChange={(e) => setVectorSearchSettings(prev => ({ ...prev, depth: parseInt(e.target.value, 10) || 1 }))}
+                  min="1"
+                  max="3"
+                  className="w-24 h-8 p-1 bg-gray-800 border border-gray-600 rounded-md text-gray-100 text-sm focus:outline-none focus:ring-1 focus:ring-valhalla-gold focus:border-valhalla-gold"
+                />
+                <label htmlFor="vectorSearchDepth" className="text-gray-300 text-sm ml-2">Graph Depth: {vectorSearchSettings.depth}</label>
+              </div>
+            </div>
+
+                         <div className="mb-4">
+               <p className="text-gray-300 text-sm font-semibold mb-2">Node Types to Search:</p>
+               <div className="grid grid-cols-2 gap-2">
+                 {['todo', 'todoList', 'memory', 'file', 'file_chunk', 'function', 'class', 'module', 'concept', 'person', 'project', 'custom'].map((type) => (
+                   <div key={type} className="flex items-center">
+                     <input
+                       type="checkbox"
+                       id={`vectorSearchType-${type}`}
+                       checked={vectorSearchSettings.types.includes(type)}
+                       onChange={(e) => {
+                         if (e.target.checked) {
+                           setVectorSearchSettings(prev => ({ ...prev, types: [...prev.types, type] }));
+                         } else {
+                           setVectorSearchSettings(prev => ({ ...prev, types: prev.types.filter(t => t !== type) }));
+                         }
+                       }}
+                       className="mr-2 h-4 w-4 text-valhalla-gold focus:ring-valhalla-gold border-gray-600 bg-gray-700 rounded"
+                     />
+                     <label htmlFor={`vectorSearchType-${type}`} className="text-gray-300 text-sm capitalize">
+                       {type.replace(/_/g, ' ')}
+                     </label>
+                   </div>
+                 ))}
+               </div>
+             </div>
+
+            <div className="flex items-center justify-between mt-6">
+              <button
+                onClick={handleResetVectorSearchSettings}
+                className="px-6 py-2 bg-red-900/30 hover:bg-red-900/50 border-2 border-red-800 hover:border-red-600 rounded-xl text-red-400 hover:text-red-300 text-sm font-medium transition-all"
+              >
+                Reset to Defaults
+              </button>
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={handleCancelVectorSearchSettings}
+                  className="px-6 py-2 bg-norse-rune hover:bg-gray-700 border-2 border-norse-rune hover:border-gray-600 rounded-xl text-gray-300 hover:text-gray-100 text-sm font-medium transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveVectorSearchSettings}
+                  disabled={!vectorSearchSettings.enabled && vectorSearchSettings.limit === 10 && vectorSearchSettings.minSimilarity === 0.5 && vectorSearchSettings.depth === 1 && vectorSearchSettings.types.length === 4}
+                  className="px-6 py-2 bg-valhalla-gold hover:bg-yellow-500 border-2 border-valhalla-gold rounded-xl text-norse-night text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save Settings
                 </button>
               </div>
             </div>

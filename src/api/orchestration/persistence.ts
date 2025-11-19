@@ -276,10 +276,11 @@ export async function createExecutionNodeInNeo4j(
       
       WITH exec
       
-      // Link to orchestration plan
+      // Link to orchestration plan (only if it exists)
       OPTIONAL MATCH (plan:Node {id: $planId, type: 'orchestration_plan'})
-      WHERE plan IS NOT NULL
-      MERGE (exec)-[:EXECUTES_PLAN]->(plan)
+      FOREACH (p IN CASE WHEN plan IS NOT NULL THEN [plan] ELSE [] END |
+        MERGE (exec)-[:EXECUTES_PLAN]->(p)
+      )
       
       RETURN exec.id as nodeId
     `, {

@@ -39,7 +39,7 @@
     "test:quant": "tsc && node build/orchestrator/test-quantized.js",
     "watch": "node esbuild.config.js --watch",
     "dev": "node esbuild.config.js && node build/index.js",
-    "validate": "tsc && node build/orchestrator/validate-agent.js",
+    "list-models": "tsc && node build/orchestrator/validate-agent.js --list-models",
     "create-agent": "tsc && node build/orchestrator/create-agent.js",
     "test:agent-mode": "tsc && node build/orchestrator/test-agent-mode.js",
     "chain": "tsc && node build/orchestrator/agent-chain.js",
