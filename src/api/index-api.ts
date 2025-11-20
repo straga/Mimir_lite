@@ -47,11 +47,13 @@ router.get('/indexed-folders', async (req: Request, res: Response) => {
             WHERE f.path STARTS WITH $folderPath OR f.path = $exactPath
             WITH DISTINCT f
             OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
-            OPTIONAL MATCH (c)-[:HAS_EMBEDDING]->(e)
+            WITH f, c, 
+                 CASE WHEN c IS NOT NULL AND c.embedding IS NOT NULL THEN 1 ELSE 0 END as chunkHasEmbedding,
+                 CASE WHEN f.embedding IS NOT NULL THEN 1 ELSE 0 END as fileHasEmbedding
             RETURN 
               COUNT(DISTINCT f) as fileCount,
               COUNT(DISTINCT c) as chunkCount,
-              COUNT(DISTINCT e) as embeddingCount
+              SUM(chunkHasEmbedding) + SUM(fileHasEmbedding) as embeddingCount
             `,
             { 
               folderPath: folderPath,
@@ -370,11 +372,13 @@ router.get('/index-stats', async (req: Request, res: Response) => {
       const statsResult = await session.run(`
         MATCH (f:File)
         OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
-        OPTIONAL MATCH (c)-[:HAS_EMBEDDING]->(e)
+        WITH f, c,
+          CASE WHEN c IS NOT NULL AND c.embedding IS NOT NULL THEN 1 ELSE 0 END as chunkHasEmbedding,
+          CASE WHEN f.embedding IS NOT NULL THEN 1 ELSE 0 END as fileHasEmbedding
         WITH 
           COUNT(DISTINCT f) as totalFiles,
           COUNT(DISTINCT c) as totalChunks,
-          COUNT(DISTINCT e) as totalEmbeddings,
+          SUM(chunkHasEmbedding) + SUM(fileHasEmbedding) as totalEmbeddings,
           COLLECT(DISTINCT f.extension) as extensions
         RETURN 
           totalFiles,
