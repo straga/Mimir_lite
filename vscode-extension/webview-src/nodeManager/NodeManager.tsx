@@ -61,6 +61,18 @@ export function NodeManager() {
   const [selectedNode, setSelectedNode] = useState<NodeDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
+  
+  // Search state
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchResults, setSearchResults] = useState<string[]>([]); // Node IDs
+  const [searchResultNodes, setSearchResultNodes] = useState<Record<string, Node[]>>({}); // Full nodes by type
+  const [isSearching, setIsSearching] = useState(false);
+  const [showSearchSettings, setShowSearchSettings] = useState(false);
+  const [searchSettings, setSearchSettings] = useState({
+    minSimilarity: 0.75,
+    limit: 50,
+    types: [] as string[]
+  });
 
   const loadTypes = useCallback(async () => {
     setLoading(true);
@@ -96,7 +108,7 @@ export function NodeManager() {
     setError('');
     
     try {
-      const url = `${apiUrl}/api/nodes/${encodeURIComponent(type)}?page=${page}&limit=20`;
+      const url = `${apiUrl}/api/nodes/types/${encodeURIComponent(type)}?page=${page}&limit=20`;
       console.log(`[NodeManager] Fetching nodes for type "${type}" from:`, url);
       
       const response = await fetch(url);
@@ -184,7 +196,7 @@ export function NodeManager() {
     setError('');
     
     try {
-      const response = await fetch(`${apiUrl}/api/nodes/${encodeURIComponent(type)}/${encodeURIComponent(id)}/details`);
+      const response = await fetch(`${apiUrl}/api/nodes/types/${encodeURIComponent(type)}/${encodeURIComponent(id)}/details`);
       const data = await response.json();
       
       if (response.ok) {
@@ -207,7 +219,18 @@ export function NodeManager() {
     } else {
       setExpandedType(type);
       setSelectedNode(null);
-      loadNodesForType(type);
+      
+      // If search is active and we have cached results, use them
+      if (searchResults.length > 0 && searchResultNodes[type]) {
+        setNodes(prev => ({
+          ...prev,
+          [type]: searchResultNodes[type]
+        }));
+      } else if (searchResults.length === 0) {
+        // No search active - fetch from API
+        loadNodesForType(type);
+      }
+      // If search is active but no results for this type, nodes[type] will remain undefined
     }
   };
 
@@ -257,6 +280,122 @@ export function NodeManager() {
     }
   };
 
+  const handleDownloadNode = (node: Node, event: React.MouseEvent) => {
+    event.stopPropagation();
+    
+    // Send message to extension host to save the file
+    vscode.postMessage({
+      command: 'downloadNode',
+      node: {
+        id: node.id,
+        type: node.type,
+        displayName: node.displayName,
+        created: node.created,
+        updated: node.updated,
+        edgeCount: node.edgeCount,
+        embeddingCount: node.embeddingCount,
+        properties: node.properties
+      }
+    });
+  };
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) {
+      // Clear search - show all nodes
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    setError('');
+
+    try {
+      const params = new URLSearchParams({
+        query: searchQuery,
+        limit: searchSettings.limit.toString(),
+        min_similarity: searchSettings.minSimilarity.toString()
+      });
+
+      // Determine types to search
+      let typesToSearch = searchSettings.types;
+      if (typesToSearch.length === 0) {
+        // If no types selected, search all types EXCEPT files and chunks
+        typesToSearch = types
+          .map(t => t.type)
+          .filter(t => t !== 'file' && t !== 'file_chunk' && t !== 'node_chunk');
+      } else {
+        // Filter out files and chunks from selected types
+        typesToSearch = typesToSearch.filter(t => t !== 'file' && t !== 'file_chunk' && t !== 'node_chunk');
+      }
+
+      if (typesToSearch.length > 0) {
+        params.append('types', typesToSearch.join(','));
+      }
+
+      const response = await fetch(`${apiUrl}/api/nodes/vector-search?${params}`);
+      const data = await response.json();
+
+      if (response.ok) {
+        // Extract node IDs and organize full nodes by type
+        const nodeIds = data.results.map((r: any) => r.id);
+        const nodesByType: Record<string, Node[]> = {};
+        
+        data.results.forEach((r: any) => {
+          const node: Node = {
+            id: r.id,
+            type: r.type,
+            displayName: r.title || r.name || r.id,
+            created: r.created || '',
+            updated: r.updated || '',
+            edgeCount: 0, // We don't have this from search
+            embeddingCount: 0, // We don't have this from search
+            properties: r.props || {}
+          };
+          
+          if (!nodesByType[r.type]) {
+            nodesByType[r.type] = [];
+          }
+          nodesByType[r.type].push(node);
+        });
+        
+        setSearchResults(nodeIds);
+        setSearchResultNodes(nodesByType);
+      } else {
+        setError(data.error || 'Search failed');
+        setSearchResults([]);
+        setSearchResultNodes({});
+      }
+    } catch (err: any) {
+      setError(`Search failed: ${err.message}`);
+      setSearchResults([]);
+      setSearchResultNodes({});
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchResultNodes({});
+    setIsSearching(false);
+  };
+
+  // Filter nodes based on search results
+  const filterNodesBySearch = (nodeList: Node[]) => {
+    if (searchResults.length === 0 && searchQuery.trim() === '') {
+      // No search active - show all nodes
+      return nodeList;
+    }
+    if (searchResults.length === 0 && searchQuery.trim() !== '') {
+      // Search active but no results
+      return [];
+    }
+    // Filter by search results
+    return nodeList.filter(node => searchResults.includes(node.id));
+  };
+
   const handlePageChange = (type: string, newPage: number) => {
     loadNodesForType(type, newPage);
   };
@@ -296,6 +435,118 @@ export function NodeManager() {
         {error && <div className="error-banner">{error}</div>}
       </div>
 
+      {/* Vector Search */}
+      <div className="search-container">
+        <div className="search-bar">
+          <input
+            type="text"
+            className="search-input"
+            placeholder="🔍 Vector search nodes by meaning..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleSearch();
+              }
+            }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              className="clear-search-btn"
+              onClick={clearSearch}
+              title="Clear search"
+            >
+              ✕
+            </button>
+          )}
+          <button
+            type="button"
+            className="search-btn"
+            onClick={handleSearch}
+            disabled={isSearching}
+            title="Search"
+          >
+            {isSearching ? '⏳' : '🔍'}
+          </button>
+          <button
+            type="button"
+            className="settings-btn"
+            onClick={() => setShowSearchSettings(!showSearchSettings)}
+            title="Search settings"
+          >
+            ⚙️
+          </button>
+        </div>
+
+        {showSearchSettings && (
+          <div className="search-settings">
+            <div className="setting-item">
+              <label htmlFor="min-similarity">Min Similarity:</label>
+              <input
+                id="min-similarity"
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={searchSettings.minSimilarity}
+                onChange={(e) => setSearchSettings({
+                  ...searchSettings,
+                  minSimilarity: parseFloat(e.target.value)
+                })}
+              />
+              <span className="setting-value">{searchSettings.minSimilarity}</span>
+            </div>
+            <div className="setting-item">
+              <label htmlFor="search-limit">Max Results:</label>
+              <input
+                id="search-limit"
+                type="number"
+                min="1"
+                max="100"
+                value={searchSettings.limit}
+                onChange={(e) => setSearchSettings({
+                  ...searchSettings,
+                  limit: parseInt(e.target.value, 10)
+                })}
+              />
+              <span className="setting-value">{searchSettings.limit}</span>
+            </div>
+            <div className="setting-item">
+              <label htmlFor="node-types">Node Types:</label>
+              <select
+                id="node-types"
+                multiple
+                value={searchSettings.types}
+                onChange={(e) => {
+                  const selected = Array.from(e.target.selectedOptions, option => option.value);
+                  setSearchSettings({
+                    ...searchSettings,
+                    types: selected
+                  });
+                }}
+              >
+                {types.map(t => (
+                  <option key={t.type} value={t.type}>{t.type}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {searchQuery && (
+          <div className="search-status">
+            {isSearching ? (
+              <span>Searching...</span>
+            ) : searchResults.length > 0 ? (
+              <span>Found {searchResults.length} matching nodes</span>
+            ) : (
+              <span>No results found</span>
+            )}
+          </div>
+        )}
+      </div>
+
       {loading && !types.length && (
         <div className="loading">Loading node types...</div>
       )}
@@ -313,7 +564,11 @@ export function NodeManager() {
               >
                 <span className="type-icon">{expandedType === nodeType.type ? '▼' : '▶'}</span>
                 <span className="type-name">{nodeType.type}</span>
-                <span className="type-count">{nodeType.count}</span>
+                <span className="type-count">
+                  {searchResults.length > 0 
+                    ? `${searchResultNodes[nodeType.type]?.length || 0}/${nodeType.count}`
+                    : nodeType.count}
+                </span>
               </div>
 
               {expandedType === nodeType.type && (
@@ -322,7 +577,7 @@ export function NodeManager() {
                     <div className="loading-small">Loading nodes...</div>
                   ) : (
                     <>
-                      {nodes[nodeType.type]?.map(node => (
+                      {filterNodesBySearch(nodes[nodeType.type] || []).map(node => (
                         <div 
                           key={node.id}
                           className="node-item"
@@ -331,6 +586,14 @@ export function NodeManager() {
                           role="button"
                           tabIndex={0}
                         >
+                          <button
+                            type="button"
+                            className="download-btn"
+                            onClick={(e) => handleDownloadNode(node, e)}
+                            title="Download node as JSON"
+                          >
+                            📥
+                          </button>
                           <div className="node-main">
                             <div className="node-name">{node.displayName}</div>
                             <div className="node-meta">

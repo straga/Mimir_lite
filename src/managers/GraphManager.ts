@@ -827,7 +827,7 @@ export class GraphManager implements IGraphManager {
     const searchResult = await this.unifiedSearchService.search(query, {
       types: options.types,
       limit: options.limit || 100,
-      minSimilarity: 0.5, // Default threshold
+      minSimilarity: options.minSimilarity || 0.75, // Default threshold
       offset: options.offset || 0
     });
     

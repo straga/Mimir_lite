@@ -74,6 +74,43 @@ export class NodeManagerPanel {
             break;
           }
 
+          case 'downloadNode': {
+            // Save node as JSON to .mimir/nodes/
+            try {
+              const workspaceFolders = vscode.workspace.workspaceFolders;
+              if (!workspaceFolders) {
+                vscode.window.showErrorMessage('No workspace folder open');
+                return;
+              }
+
+              const fs = await import('fs');
+              const path = await import('path');
+              const workspaceRoot = workspaceFolders[0].uri.fsPath;
+              const mimirDir = path.join(workspaceRoot, '.mimir', 'nodes');
+
+              // Create directory if it doesn't exist
+              if (!fs.existsSync(mimirDir)) {
+                fs.mkdirSync(mimirDir, { recursive: true });
+              }
+
+              // Create filename: type_displayName_id.json
+              const safeDisplayName = message.node.displayName
+                .replace(/[^a-z0-9]/gi, '_')
+                .toLowerCase()
+                .substring(0, 50);
+              const filename = `${message.node.type}_${safeDisplayName}_${message.node.id}.json`;
+              const filePath = path.join(mimirDir, filename);
+
+              // Write JSON file
+              fs.writeFileSync(filePath, JSON.stringify(message.node, null, 2), 'utf8');
+
+              vscode.window.showInformationMessage(`Node saved to ${filename}`);
+            } catch (error: any) {
+              vscode.window.showErrorMessage(`Failed to save node: ${error.message}`);
+            }
+            break;
+          }
+
           case 'showError':
             vscode.window.showErrorMessage(message.message);
             break;

@@ -35,8 +35,8 @@ export function createVectorSearchTools(driver: Driver): Tool[] {
           },
           min_similarity: {
             type: 'number',
-            description: 'Minimum cosine similarity threshold 0-1 (default: 0.5)',
-            default: 0.5
+            description: 'Minimum cosine similarity threshold 0-1 (default: 0.75)',
+            default: 0.75
           },
           depth: {
             type: 'number',

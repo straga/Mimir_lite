@@ -60,7 +60,7 @@ interface ChatCompletionRequest {
   tool_parameters?: {
     vector_search_nodes?: {
       limit?: number;           // Max results (default: 10)
-      min_similarity?: number;  // Similarity threshold 0-1 (default: 0.5)
+      min_similarity?: number;  // Similarity threshold 0-1 (default: 0.75)
       depth?: number;           // Graph traversal depth 1-3 (default: 1)
       types?: string[];         // Filter by node types
     };
@@ -86,7 +86,7 @@ interface ChatCompletionRequest {
 const DEFAULT_CONFIG: ChatConfig = {
   semanticSearchEnabled: true,
   semanticSearchLimit: 10,
-  minSimilarityThreshold: 0.55,
+  minSimilarityThreshold: 0.75,
   llmProvider: normalizeProvider(process.env.MIMIR_DEFAULT_PROVIDER || 'ollama').toString(),
   // Base URL only - LangChain clients add their own paths
   llmApiUrl: process.env.MIMIR_LLM_API || 'http://ollama:11434',

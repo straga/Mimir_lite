@@ -57,10 +57,69 @@ router.get('/types', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/nodes/:type
+ * GET /api/nodes/vector-search
+ * Vector search across nodes (excluding files and chunks)
+ */
+router.get('/vector-search', async (req: Request, res: Response) => {
+  try {
+    const query = req.query.query as string;
+    const limit = parseInt(req.query.limit as string, 10) || 50;
+    const minSimilarity = parseFloat(req.query.min_similarity as string) || 0.75;
+    const depth = parseInt(req.query.depth as string, 10) || 1;
+    const typesParam = req.query.types as string;
+
+    if (!query) {
+      return res.status(400).json({ error: 'Query parameter is required' });
+    }
+
+    // Parse types
+    let types: string[] | undefined;
+    if (typesParam) {
+      types = typesParam.split(',').map(t => t.trim());
+    }
+
+    // Import GraphManager and handleVectorSearchNodes
+    const { GraphManager } = await import('../managers/GraphManager.js');
+    const { handleVectorSearchNodes } = await import('../tools/vectorSearch.tools.js');
+    
+    const graphManager = new GraphManager(
+      process.env.NEO4J_URI || 'bolt://localhost:7687',
+      process.env.NEO4J_USER || 'neo4j',
+      process.env.NEO4J_PASSWORD || 'password'
+    );
+
+    // Use the same tool handler as chat API for consistency
+    const results = await handleVectorSearchNodes(
+      {
+        query,
+        types,
+        limit,
+        min_similarity: minSimilarity,
+        depth
+      },
+      graphManager.getDriver()
+    );
+
+    res.json({
+      query,
+      results: results.results,
+      count: results.results.length,
+      total_results: results.total_results
+    });
+  } catch (error: any) {
+    console.error('❌ Error in vector search:', error);
+    res.status(500).json({
+      error: 'Vector search failed',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/nodes/types/:type
  * Get paginated list of nodes of a specific type
  */
-router.get('/:type', async (req: Request, res: Response) => {
+router.get('/types/:type', async (req: Request, res: Response) => {
   const { type } = req.params;
   const page = Math.floor(parseInt(req.query.page as string, 10)) || 1;
   const limit = Math.floor(parseInt(req.query.limit as string, 10)) || 20;
@@ -154,10 +213,10 @@ router.get('/:type', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/nodes/:type/:id/details
+ * GET /api/nodes/types/:type/:id/details
  * Get detailed information about a specific node including edges
  */
-router.get('/:type/:id/details', async (req: Request, res: Response) => {
+router.get('/types/:type/:id/details', async (req: Request, res: Response) => {
   const { type, id } = req.params;
 
   const driver = neo4j.driver(

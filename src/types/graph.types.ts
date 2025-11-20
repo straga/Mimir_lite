@@ -77,6 +77,7 @@ export interface SearchOptions {
   types?: NodeType[];
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
+  minSimilarity?: number;
 }
 
 /**

@@ -471,7 +471,7 @@ function getConfig(): MimirConfig {
     model: config.get('model', 'gpt-4.1'),
     vectorSearchDepth: config.get('vectorSearch.depth', 1),
     vectorSearchLimit: config.get('vectorSearch.limit', 10),
-    vectorSearchMinSimilarity: config.get('vectorSearch.minSimilarity', 0.5),
+    vectorSearchMinSimilarity: config.get('vectorSearch.minSimilarity', 0.75),
     enableTools: config.get('enableTools', true),
     maxToolCalls: config.get('maxToolCalls', 3),
     customPreamble: config.get('customPreamble', '')
