@@ -80,12 +80,8 @@ export class IntelligencePanel {
   }
 
   private async _handleSelectFolder() {
-    // Get workspace folders
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-      vscode.window.showErrorMessage('❌ No workspace folder is open');
-      return;
-    }
+    // Get workspace folders (may be empty if using HOST_WORKSPACE_ROOT)
+    const workspaceFolders = vscode.workspace.workspaceFolders || [];
 
     // Show folder picker
     const folderUri = await vscode.window.showOpenDialog({
@@ -230,6 +226,13 @@ export class IntelligencePanel {
     }
 
     // No HOST_WORKSPACE_ROOT set - validate against VSCode workspace folders (local development)
+    if (workspaceFolders.length === 0) {
+      return {
+        isValid: false,
+        error: 'No workspace folder is open and HOST_WORKSPACE_ROOT is not set.\n\nPlease either:\n1. Open a folder in VSCode (File → Open Folder)\n2. Set HOST_WORKSPACE_ROOT environment variable for Docker'
+      };
+    }
+
     let isWithinWorkspace = false;
 
     for (const folder of workspaceFolders) {
