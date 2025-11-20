@@ -3,6 +3,7 @@ import { PreambleManager } from './preambleManager';
 import { StudioPanel } from './studioPanel';
 import { PortalPanel } from './portalPanel';
 import { IntelligencePanel } from './intelligencePanel';
+import { NodeManagerPanel } from './nodeManagerPanel';
 import type { ChatMessage, MimirConfig, ToolParameters } from './types';
 
 let preambleManager: PreambleManager;
@@ -154,6 +155,16 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('mimir.openIntelligence', () => {
       console.log('🧠 Opening Mimir Code Intelligence...');
       IntelligencePanel.createOrShow(context.extensionUri, config.apiUrl);
+    })
+  );
+
+  // ========================================
+  // NODE MANAGER UI: Browse and manage Neo4j nodes
+  // ========================================
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mimir.openNodeManager', () => {
+      console.log('📊 Opening Mimir Node Manager...');
+      NodeManagerPanel.createOrShow(context.extensionUri);
     })
   );
 

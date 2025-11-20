@@ -14,6 +14,7 @@ import { createOrchestrationRouter } from './api/orchestration-api.js';
 import { createChatRouter } from './api/chat-api.js';
 import { createMCPToolsRouter } from './api/mcp-tools-api.js';
 import indexRouter from './api/index-api.js';
+import nodesRouter from './api/nodes-api.js';
 import { FileWatchManager } from './indexing/FileWatchManager.js';
 import type { IGraphManager } from './types/index.js';
 
@@ -101,6 +102,9 @@ async function startHttpServer() {
   
   // Mount index management API routes
   app.use('/api', indexRouter);
+  
+  // Mount nodes management API routes
+  app.use('/api/nodes', nodesRouter);
 
   // Serve static frontend files
   const frontendDistPath = path.join(__dirname, '../frontend/dist');

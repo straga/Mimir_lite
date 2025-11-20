@@ -143,5 +143,40 @@ module.exports = [
     performance: {
       hints: false
     }
+  },
+  {
+    name: 'nodeManager',
+    target: 'web',
+    mode: 'none',
+    entry: './webview-src/nodeManager/main.tsx',
+    output: {
+      path: path.resolve(__dirname, 'dist'),
+      filename: 'nodeManager.js'
+    },
+    resolve: {
+      extensions: ['.tsx', '.ts', '.js', '.jsx']
+    },
+    module: {
+      rules: [
+        {
+          test: /\.tsx?$/,
+          exclude: /node_modules/,
+          use: [{
+            loader: 'ts-loader',
+            options: {
+              configFile: path.resolve(__dirname, 'webview-src', 'tsconfig.json')
+            }
+          }]
+        },
+        {
+          test: /\.css$/,
+          use: ['style-loader', 'css-loader']
+        }
+      ]
+    },
+    devtool: 'source-map',
+    performance: {
+      hints: false
+    }
   }
 ];

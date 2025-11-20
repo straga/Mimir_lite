@@ -23,6 +23,7 @@
     "onCommand:mimir.askQuestion",
     "onCommand:mimir.openChat",
     "onCommand:mimir.openIntelligence",
+    "onCommand:mimir.openNodeManager",
     "onCommand:mimir.openStudio",
     "onCommand:mimir.createWorkflow"
   ],
@@ -51,6 +52,11 @@
         "command": "mimir.openIntelligence",
         "title": "Mimir: Open Code Intelligence",
         "icon": "$(database)"
+      },
+      {
+        "command": "mimir.openNodeManager",
+        "title": "Mimir: Open Node Manager",
+        "icon": "$(symbol-structure)"
       },
       {
         "command": "mimir.openStudio",
