@@ -481,7 +481,6 @@ Describe the expected deliverables.
           padding: '16px',
           overflowY: 'auto'
         }}>
-          <h2 style={{ fontSize: '16px', marginTop: 0 }}>Agents</h2>
           <AgentPalette preambles={preambles} isExecuting={isExecuting} />
         </div>
 
@@ -586,6 +585,12 @@ Describe the expected deliverables.
  * Agent palette - draggable agent templates from Neo4j
  */
 function AgentPalette({ preambles, isExecuting }: { preambles: Preamble[]; isExecuting: boolean }) {
+  const [isCreatingAgent, setIsCreatingAgent] = useState(false);
+  const [roleDescription, setRoleDescription] = useState('');
+  const [agentType, setAgentType] = useState<'worker' | 'qc'>('worker');
+  const [useAgentinator, setUseAgentinator] = useState(true);
+  const [isCreating, setIsCreating] = useState(false);
+
   // Convert preambles to Agent format, grouped by type (use agentType from API)
   const workerAgents: Agent[] = preambles
     .filter(p => p.agentType === 'worker')
@@ -607,8 +612,166 @@ function AgentPalette({ preambles, isExecuting }: { preambles: Preamble[]; isExe
       preamble: p.name
     }));
 
+  const handleCreateAgent = async () => {
+    if (!roleDescription.trim()) return;
+
+    setIsCreating(true);
+    try {
+      // Call backend to create agent via agentinator
+      vscode.postMessage({
+        command: 'createAgent',
+        roleDescription: roleDescription.trim(),
+        agentType,
+        useAgentinator
+      });
+
+      // Reset form
+      setRoleDescription('');
+      setAgentType('worker');
+      setUseAgentinator(true);
+      setIsCreatingAgent(false);
+    } catch (error) {
+      console.error('Failed to create agent:', error);
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  // If creating agent, show creation form
+  if (isCreatingAgent) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 'bold' }}>Create New Agent</div>
+            <button
+              type="button"
+              onClick={() => setIsCreatingAgent(false)}
+              style={{
+                padding: '4px 8px',
+                backgroundColor: 'var(--vscode-button-secondaryBackground)',
+                color: 'var(--vscode-button-secondaryForeground)',
+                border: '1px solid var(--vscode-button-border)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 'bold'
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <label htmlFor="roleDescription" style={{ fontSize: '12px', fontWeight: 'bold' }}>Role Description</label>
+          <textarea
+            id="roleDescription"
+            value={roleDescription}
+            onChange={(e) => setRoleDescription(e.target.value)}
+            placeholder="e.g., DevOps engineer specializing in Kubernetes deployment"
+            style={{
+              padding: '8px',
+              backgroundColor: 'var(--vscode-input-background)',
+              border: '1px solid var(--vscode-input-border)',
+              borderRadius: '4px',
+              color: 'var(--vscode-input-foreground)',
+              fontSize: '12px',
+              resize: 'vertical',
+              minHeight: '80px'
+            }}
+          />
+          <div style={{ fontSize: '11px', opacity: 0.7 }}>
+            Describe the role, expertise, and responsibilities
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Agent Type</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '12px' }}>
+              <input
+                type="radio"
+                value="worker"
+                checked={agentType === 'worker'}
+                onChange={(e) => setAgentType(e.target.value as 'worker')}
+                style={{ marginRight: '8px' }}
+              />
+              Worker (Task Executor)
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '12px' }}>
+              <input
+                type="radio"
+                value="qc"
+                checked={agentType === 'qc'}
+                onChange={(e) => setAgentType(e.target.value as 'qc')}
+                style={{ marginRight: '8px' }}
+              />
+              QC (Quality Control)
+            </label>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <input
+            type="checkbox"
+            id="useAgentinator"
+            checked={useAgentinator}
+            onChange={(e) => setUseAgentinator(e.target.checked)}
+          />
+          <label htmlFor="useAgentinator" style={{ fontSize: '12px', cursor: 'pointer' }}>
+            ✨ Generate full preamble with Agentinator
+          </label>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleCreateAgent}
+          disabled={isCreating || !roleDescription.trim()}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: isCreating || !roleDescription.trim()
+              ? 'var(--vscode-button-secondaryBackground)'
+              : 'var(--vscode-button-background)',
+            color: isCreating || !roleDescription.trim()
+              ? 'var(--vscode-button-secondaryForeground)'
+              : 'var(--vscode-button-foreground)',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: isCreating || !roleDescription.trim() ? 'not-allowed' : 'pointer',
+            fontWeight: 'bold',
+            fontSize: '12px'
+          }}
+        >
+          {isCreating ? '⏳ Creating...' : '✨ Create Agent'}
+        </button>
+      </div>
+    );
+  }
+
+  // Normal agent library view
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+        <h2 style={{ fontSize: '16px', margin: 0 }}>Agents</h2>
+        <button
+          type="button"
+          onClick={() => setIsCreatingAgent(true)}
+          disabled={isExecuting}
+          style={{
+            padding: '4px 8px',
+            backgroundColor: 'var(--vscode-button-background)',
+            color: 'var(--vscode-button-foreground)',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: isExecuting ? 'not-allowed' : 'pointer',
+            opacity: isExecuting ? 0.5 : 1,
+            fontSize: '14px',
+            fontWeight: 'bold'
+          }}
+          title="Create new agent"
+        >
+          +
+        </button>
+      </div>
       <div style={{ fontSize: '11px', opacity: 0.7, marginBottom: '4px' }}>
         {preambles.length === 0 ? 'Loading agents...' : isExecuting ? 'Executing workflow...' : `${preambles.length} agent(s) available. Drag to canvas:`}
       </div>

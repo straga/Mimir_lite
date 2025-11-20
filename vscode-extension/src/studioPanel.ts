@@ -117,6 +117,10 @@ export class StudioPanel {
         await this._loadWorkflow(message.filePath);
         break;
 
+      case 'createAgent':
+        await this._createAgent(message.roleDescription, message.agentType, message.useAgentinator);
+        break;
+
       case 'error':
         vscode.window.showErrorMessage(`Studio Error: ${message.error}`);
         break;
@@ -677,6 +681,47 @@ export class StudioPanel {
     } catch (error: any) {
       console.error('❌ Exception loading agents:', error);
       vscode.window.showErrorMessage(`Failed to load agents: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create a new agent using Agentinator
+   */
+  private async _createAgent(roleDescription: string, agentType: 'worker' | 'qc', useAgentinator: boolean) {
+    try {
+      console.log(`🤖 Creating ${agentType} agent: ${roleDescription.substring(0, 50)}...`);
+      vscode.window.showInformationMessage(`🤖 Creating ${agentType} agent...`);
+      
+      const response = await fetch(`${this._apiUrl}/api/agents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          roleDescription,
+          agentType,
+          useAgentinator
+        })
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`❌ Failed to create agent (${response.status}):`, errorText);
+        vscode.window.showErrorMessage(`Failed to create agent: ${response.status} ${response.statusText}`);
+        return;
+      }
+
+      const result = await response.json() as any;
+      console.log(`✅ Agent created:`, result);
+      
+      vscode.window.showInformationMessage(`✅ Agent created: ${result.agent?.name || 'New Agent'}`);
+      
+      // Reload agents to update the library
+      await this._loadPreambles();
+      
+    } catch (error: any) {
+      console.error('❌ Exception creating agent:', error);
+      vscode.window.showErrorMessage(`Failed to create agent: ${error.message}`);
     }
   }
 
