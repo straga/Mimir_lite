@@ -195,24 +195,14 @@ MIMIR_SESSION_COOKIE_HTTPONLY=true
 MIMIR_SESSION_COOKIE_SAMESITE=strict
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Downstream Service Authentication (PCTX, etc.)
+# API Key Authentication (Downstream Services - Simplified)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Enable service accounts
-MIMIR_ENABLE_SERVICE_ACCOUNTS=true
+# API keys for trusted services (comma-separated for multiple keys)
+MIMIR_API_KEYS=key1,key2,key3
 
-# Service account token lifetime (seconds)
-MIMIR_SERVICE_ACCOUNT_TOKEN_LIFETIME=86400  # 24 hours
-
-# Token forwarding (pass upstream token to downstream)
-MIMIR_ENABLE_TOKEN_FORWARDING=true
-MIMIR_TOKEN_FORWARDING_HEADER=X-Forwarded-Token
-
-# User context propagation
-MIMIR_ENABLE_USER_CONTEXT_PROPAGATION=true
-MIMIR_USER_CONTEXT_HEADER=X-User-ID
-MIMIR_USER_EMAIL_HEADER=X-User-Email
-MIMIR_USER_ROLES_HEADER=X-User-Roles
+# Or single API key
+MIMIR_API_KEY=your-api-key-here
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OAuth Security Features
@@ -334,27 +324,21 @@ NGINX_GZIP_ENABLED=on
 NGINX_GZIP_COMP_LEVEL=6
 ```
 
-### PCTX Configuration for Phase 1
+### PCTX Configuration for Phase 1 (Simplified)
 
 ```bash
 # ============================================================================
-# PCTX AUTHENTICATION WITH MIMIR (Phase 1)
+# PCTX AUTHENTICATION WITH MIMIR (Phase 1 - Simplified)
 # ============================================================================
 
 # Mimir URL
 MIMIR_URL=https://mimir.yourcompany.com
 
-# Authentication mode (api-key, token-forwarding, service-account)
-MIMIR_AUTH_MODE=service-account
-
-# Service Account mode (recommended)
-MIMIR_SERVICE_ACCOUNT_ID=pctx-service
-MIMIR_SERVICE_ACCOUNT_SECRET=your-pctx-service-secret
-
-# User context propagation
-MIMIR_USER_CONTEXT_ENABLED=true
-MIMIR_USER_CONTEXT_SOURCE=header  # header, jwt, session
+# API Key (simple and secure)
+MIMIR_API_KEY=your-mimir-api-key
 ```
+
+**Simplified**: No auth modes, no service accounts, no user context propagation. Just API key.
 
 ### Complete Phase 1 `.env` Example
 

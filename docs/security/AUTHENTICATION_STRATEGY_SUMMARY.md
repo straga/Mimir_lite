@@ -27,11 +27,11 @@ Mimir now supports **comprehensive authentication provider integration** with OA
 
 ### Downstream Authentication (PCTX/Services → Mimir)
 
-| Method | Use Case | Token Type | User Context |
-|--------|----------|------------|--------------|
-| **API Key** | Legacy, service-to-service | `X-API-Key` | ❌ No |
-| **Token Forwarding** | User context needed | `Bearer <IdP_token>` | ✅ Yes |
-| **Service Account** | Recommended | `Bearer <Mimir_JWT>` | ✅ Yes (in JWT claims) |
+| Method | Use Case | Token Type | Setup Time |
+|--------|----------|------------|------------|
+| **API Key** | Trusted services (PCTX, internal tools) | `X-API-Key: xxx` | 5 minutes |
+
+**Simplified**: No service accounts, no token forwarding, no JWT issuance. Just API keys.
 
 ---
 
@@ -91,21 +91,20 @@ Mimir now supports **comprehensive authentication provider integration** with OA
 
 **Cost**: $0 (development)
 
-### Week 3: Downstream Integration (PCTX)
+### Week 3: API Key Management
 
 **Tasks**:
-1. Implement Mimir JWT issuance
-2. Add service account management
-3. Implement token forwarding
-4. Add user context propagation
-5. Test with PCTX
+1. Add API key CRUD operations
+2. Add API key validation to auth middleware
+3. Test with PCTX
 
 **Deliverables**:
-- PCTX can authenticate with Mimir
-- Service accounts working
-- User context propagated
+- API key management working
+- PCTX can authenticate with API key
 
 **Cost**: $0 (development)
+
+**Simplified**: No JWT issuance, no service accounts, no token forwarding.
 
 ### Week 4: Token Management
 
@@ -152,14 +151,8 @@ MIMIR_OAUTH_SCOPE=openid profile email groups
 MIMIR_TOKEN_STORAGE=redis
 MIMIR_REDIS_URL=redis://redis:6379
 
-# JWT Configuration
-MIMIR_JWT_SECRET=your-jwt-secret
-MIMIR_JWT_ISSUER=https://mimir.yourcompany.com
-MIMIR_JWT_AUDIENCE=mimir-api
-
-# Service Accounts
-MIMIR_ENABLE_SERVICE_ACCOUNTS=true
-MIMIR_ENABLE_USER_CONTEXT_PROPAGATION=true
+# API Keys (for downstream services)
+MIMIR_API_KEY=your-api-key
 ```
 
 ### PCTX Configuration

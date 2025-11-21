@@ -113,13 +113,13 @@ Mimir authenticates users via external Identity Providers:
 
 ### Downstream Authentication (PCTX/Services → Mimir)
 
-Services authenticate with Mimir using:
+Services authenticate with Mimir using **simple API keys**:
 
-| Method | Use Case | Token Type | User Context |
-|--------|----------|------------|--------------|
-| **API Key** | Legacy, simple | `X-API-Key` | ❌ No |
-| **Token Forwarding** | User context needed | `Bearer <IdP_token>` | ✅ Yes |
-| **Service Account** | Best practice | `Bearer <Mimir_JWT>` | ✅ Yes (in claims) |
+| Method | Use Case | Token Type | Setup Time |
+|--------|----------|------------|------------|
+| **API Key** | Trusted services (PCTX, internal tools) | `X-API-Key: xxx` | 5 minutes |
+
+**Simplified**: No service accounts, no token forwarding, no JWT issuance. Just API keys for services, OAuth for users.
 
 **See**: [Authentication Provider Integration](./AUTHENTICATION_PROVIDER_INTEGRATION.md) → Downstream Services
 
@@ -182,24 +182,22 @@ Services authenticate with Mimir using:
 
 ## 🔍 Common Scenarios
 
-### Scenario 1: PCTX Integration with OAuth
+### Scenario 1: PCTX Integration (Simplified)
 
-**Requirement**: PCTX needs to call Mimir with user context
+**Requirement**: PCTX needs to call Mimir
 
-**Solution**: Service Account with User Context Propagation
+**Solution**: Simple API Key
 
 ```bash
 # Mimir Configuration
-MIMIR_ENABLE_SERVICE_ACCOUNTS=true
-MIMIR_ENABLE_USER_CONTEXT_PROPAGATION=true
-MIMIR_USER_CONTEXT_HEADER=X-User-ID
+MIMIR_API_KEY=your-api-key
 
 # PCTX Configuration
-MIMIR_AUTH_MODE=service-account
-MIMIR_SERVICE_ACCOUNT_ID=pctx-service
-MIMIR_SERVICE_ACCOUNT_SECRET=your-secret
-MIMIR_USER_CONTEXT_ENABLED=true
+MIMIR_URL=https://mimir.yourcompany.com
+MIMIR_API_KEY=your-api-key
 ```
+
+**Simplified**: No service accounts, no user context propagation. Just API key authentication.
 
 **See**: [Authentication Provider Integration](./AUTHENTICATION_PROVIDER_INTEGRATION.md) → PCTX Integration
 
@@ -276,14 +274,12 @@ curl -H "Cookie: mimir_session=xxx" https://mimir.yourcompany.com/api/nodes/quer
 # Expected: 200 OK
 ```
 
-### Test PCTX Integration
+### Test PCTX Integration (Simplified)
 
 ```bash
 # Configure PCTX
 export MIMIR_URL=https://mimir.yourcompany.com
-export MIMIR_AUTH_MODE=service-account
-export MIMIR_SERVICE_ACCOUNT_ID=pctx-service
-export MIMIR_SERVICE_ACCOUNT_SECRET=your-secret
+export MIMIR_API_KEY=your-api-key
 
 # Start PCTX
 pctx start
@@ -294,6 +290,8 @@ curl -X POST http://localhost:8080/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 # Expected: 200 OK with Mimir tools
 ```
+
+**Simplified**: Just set URL and API key. No auth modes, no service accounts.
 
 **See**: [Authentication Provider Integration](./AUTHENTICATION_PROVIDER_INTEGRATION.md) → Testing & Validation
 

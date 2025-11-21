@@ -81,13 +81,14 @@ This document defines Mimir's authentication strategy for integrating with **ups
 
 ### Authentication Modes
 
-Mimir supports **3 authentication modes** simultaneously:
+Mimir supports **2 authentication modes** (simplified):
 
 | Mode | Use Case | Token Type | Validation |
 |------|----------|------------|------------|
-| **1. API Key** | Legacy, service-to-service | `X-API-Key: xxx` | Simple string match |
-| **2. OAuth/OIDC** | User authentication | `Authorization: Bearer <IdP_token>` | JWT validation against IdP |
-| **3. Mimir JWT** | Downstream services | `Authorization: Bearer <Mimir_token>` | JWT validation against Mimir |
+| **1. API Key** | Simple, service-to-service, backward compatible | `X-API-Key: xxx` | String match |
+| **2. OAuth/OIDC** | User authentication, enterprise SSO | `Authorization: Bearer <token>` | JWT validation against IdP |
+
+**Note**: Mimir validates tokens from upstream IdPs directly. No intermediate Mimir JWT layer - keeps it simple.
 
 ---
 
@@ -221,7 +222,7 @@ MIMIR_KEYCLOAK_SERVER_URL=https://keycloak.yourcompany.com
 
 PCTX needs to authenticate with Mimir to access MCP tools. Mimir supports **2 authentication flows** for PCTX:
 
-#### Flow 1: PCTX with API Key (Simple)
+#### PCTX Authentication (Simplified - API Key Only)
 
 ```
 ┌──────────┐                           ┌──────────┐
@@ -237,82 +238,34 @@ MIMIR_URL=https://mimir.yourcompany.com
 MIMIR_API_KEY=your-mimir-api-key
 ```
 
-**Pros**: Simple, works immediately  
-**Cons**: No user context, shared credentials
-
-#### Flow 2: PCTX with Token Forwarding (Advanced)
-
-```
-┌──────────┐                           ┌──────────┐                           ┌──────────┐
-│  User    │  OAuth Token             │  PCTX    │  Forwarded Token         │  Mimir   │
-│  Client  │ ───────────────────────→  │  Server  │ ───────────────────────→  │  Server  │
-└──────────┘                           └──────────┘                           └──────────┘
-                                             │                                      │
-                                             │  Validates token with IdP            │
-                                             │ ←────────────────────────────────────┘
-```
-
-**Configuration**:
-```bash
-# PCTX .env
-MIMIR_URL=https://mimir.yourcompany.com
-MIMIR_AUTH_MODE=token_forwarding
-MIMIR_TOKEN_HEADER=Authorization  # Forward user's token to Mimir
-```
-
-**Pros**: User context preserved, audit trail  
-**Cons**: Requires OAuth setup
-
-#### Flow 3: PCTX with Service Account (Recommended)
-
-```
-┌──────────┐                           ┌──────────┐                           ┌──────────┐
-│  User    │  User Token              │  PCTX    │  PCTX Service Token      │  Mimir   │
-│  Client  │ ───────────────────────→  │  Server  │ ───────────────────────→  │  Server  │
-└──────────┘                           └──────────┘                           └──────────┘
-                                             │                                      │
-                                             │  Issues Mimir JWT                    │
-                                             │  (with user context in claims)       │
-                                             │ ←────────────────────────────────────┘
-```
-
-**Configuration**:
-```bash
-# PCTX .env
-MIMIR_URL=https://mimir.yourcompany.com
-MIMIR_AUTH_MODE=service_account
-MIMIR_SERVICE_ACCOUNT_ID=pctx-service
-MIMIR_SERVICE_ACCOUNT_SECRET=your-service-secret
-
-# Optional: Include user context
-MIMIR_FORWARD_USER_CONTEXT=true
-MIMIR_USER_CONTEXT_HEADER=X-User-ID
-```
-
-**Pros**: Service identity + user context, best of both worlds  
-**Cons**: Requires Mimir to issue JWTs
+**Why Simple?**: 
+- ✅ Works immediately, no OAuth setup needed
+- ✅ PCTX is a trusted service on your infrastructure
+- ✅ Use OAuth for end-user authentication, API keys for service-to-service
+- ✅ Reduces complexity - no token forwarding, no service accounts, no JWT issuance
 
 ### Other Downstream Services
 
 Any service that needs to call Mimir can use:
 
-1. **API Key** (simple, service-to-service)
-2. **OAuth Token** (if user context needed)
-3. **Mimir JWT** (if service account with user context)
+1. **API Key** - For trusted services on your infrastructure (PCTX, internal tools)
+2. **OAuth Token** - For end-user authentication (web apps, mobile apps)
+
+**Simplified**: No intermediate JWT layer. Services use API keys, users use OAuth.
 
 ---
 
 ## Token Management
 
-### Token Types
+### Token Types (Simplified)
 
 | Token Type | Issuer | Lifetime | Use Case |
 |------------|--------|----------|----------|
-| **IdP Access Token** | Okta/Auth0/Azure | 1 hour | User authenticates with Mimir |
-| **IdP Refresh Token** | Okta/Auth0/Azure | 90 days | Refresh access token |
-| **Mimir JWT** | Mimir | 1 hour | Downstream services call Mimir |
-| **Mimir Refresh Token** | Mimir | 30 days | Refresh Mimir JWT |
-| **API Key** | Mimir Admin | Infinite | Service-to-service (legacy) |
+| **OAuth Access Token** | Okta/Auth0/Azure/Google | 1 hour | User authentication |
+| **OAuth Refresh Token** | Okta/Auth0/Azure/Google | 90 days | Refresh access token |
+| **API Key** | Mimir Admin | Infinite | Service-to-service, backward compatible |
+
+**Simplified**: Mimir validates IdP tokens directly. No need for Mimir to issue its own JWTs.
 
 ### Token Lifecycle
 
@@ -418,23 +371,22 @@ src/providers/google.ts
 src/providers/base-provider.ts   # Abstract base class
 ```
 
-### Phase 3: Downstream Integration (Week 3)
+### Phase 3: API Key Management (Week 3)
 
-**Goal**: Enable PCTX and other services to authenticate
+**Goal**: Simple API key management for downstream services
 
 **Tasks**:
-1. Implement Mimir JWT issuance
-2. Add service account management
-3. Implement token forwarding
-4. Add user context propagation
-5. Test with PCTX
+1. Add API key CRUD operations
+2. Add API key validation to auth middleware
+3. Test with PCTX
 
 **Files to Create/Modify**:
 ```
-src/api/service-accounts-api.ts  # Manage service accounts
-src/utils/jwt-issuer.ts          # Issue Mimir JWTs
-src/middleware/token-forwarding.ts
+src/api/api-keys-api.ts          # Manage API keys (create, list, revoke)
+src/middleware/auth.ts           # Add API key validation
 ```
+
+**Simplified**: No JWT issuance, no service accounts, no token forwarding. Just simple API keys.
 
 ### Phase 4: Token Management (Week 4)
 
@@ -545,24 +497,14 @@ MIMIR_SESSION_COOKIE_HTTPONLY=true
 MIMIR_SESSION_COOKIE_SAMESITE=strict
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Downstream Service Authentication (PCTX, etc.)
+# API Key Authentication (Downstream Services)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Enable service accounts
-MIMIR_ENABLE_SERVICE_ACCOUNTS=true
+# API keys for trusted services (comma-separated for multiple keys)
+MIMIR_API_KEYS=key1,key2,key3
 
-# Service account token lifetime (seconds)
-MIMIR_SERVICE_ACCOUNT_TOKEN_LIFETIME=86400  # 24 hours
-
-# Token forwarding (pass upstream token to downstream)
-MIMIR_ENABLE_TOKEN_FORWARDING=true
-MIMIR_TOKEN_FORWARDING_HEADER=X-Forwarded-Token
-
-# User context propagation
-MIMIR_ENABLE_USER_CONTEXT_PROPAGATION=true
-MIMIR_USER_CONTEXT_HEADER=X-User-ID
-MIMIR_USER_EMAIL_HEADER=X-User-Email
-MIMIR_USER_ROLES_HEADER=X-User-Roles
+# Or single API key
+MIMIR_API_KEY=your-api-key-here
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider-Specific Configuration
@@ -621,30 +563,17 @@ MIMIR_AUTH_METRICS_ENDPOINT=/metrics/auth
 
 ```bash
 # ============================================================================
-# PCTX AUTHENTICATION WITH MIMIR
+# PCTX AUTHENTICATION WITH MIMIR (Simplified)
 # ============================================================================
 
 # Mimir URL
 MIMIR_URL=https://mimir.yourcompany.com
 
-# Authentication mode (api-key, token-forwarding, service-account)
-MIMIR_AUTH_MODE=service-account
-
-# API Key mode (simple)
-# MIMIR_API_KEY=your-mimir-api-key
-
-# Service Account mode (recommended)
-MIMIR_SERVICE_ACCOUNT_ID=pctx-service
-MIMIR_SERVICE_ACCOUNT_SECRET=your-service-secret
-
-# Token forwarding mode (advanced)
-# MIMIR_TOKEN_HEADER=Authorization
-# MIMIR_FORWARD_USER_CONTEXT=true
-
-# User context propagation
-MIMIR_USER_CONTEXT_ENABLED=true
-MIMIR_USER_CONTEXT_SOURCE=header  # header, jwt, session
+# API Key (simple and secure)
+MIMIR_API_KEY=your-mimir-api-key
 ```
+
+**That's it!** No auth modes, no service accounts, no token forwarding. Just a simple API key.
 
 ---
 
