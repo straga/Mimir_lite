@@ -271,7 +271,7 @@ router.get('/index-config', async (req: Request, res: Response) => {
   try {
     const config = {
       hostWorkspaceRoot: process.env.HOST_WORKSPACE_ROOT || '',
-      workspaceRoot: process.env.WORKSPACE_ROOT || '/workspace',
+      workspaceRoot: process.env.WORKSPACE_ROOT || '',
       home: process.env.HOME || process.env.USERPROFILE || '',
     };
     
@@ -589,8 +589,8 @@ router.post('/api/migrate-file-paths', async (req: Request, res: Response) => {
     );
 
     const session = driver.session();
-    const workspaceRoot = process.env.WORKSPACE_ROOT || '/workspace';
-    const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT;
+    const workspaceRoot = process.env.WORKSPACE_ROOT || '';
+    const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT || '';
 
     try {
       // Get all File nodes with old structure
@@ -818,8 +818,8 @@ router.post('/migrate-watchconfig-paths', async (req: Request, res: Response) =>
     try {
       // Helper function to translate container path to host path
       const translateToHostPath = (containerPath: string): string => {
-        const containerWorkspaceRoot = process.env.WORKSPACE_ROOT || '/workspace';
-        const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT || containerWorkspaceRoot;
+        const containerWorkspaceRoot = process.env.WORKSPACE_ROOT || '';
+        const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT || '';
         
         // Ensure root ends with separator to avoid false matches
         const rootWithSep = containerWorkspaceRoot.endsWith('/') ? containerWorkspaceRoot : `${containerWorkspaceRoot}/`;

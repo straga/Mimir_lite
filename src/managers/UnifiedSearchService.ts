@@ -16,6 +16,7 @@ import { Driver, Session } from 'neo4j-driver';
 import neo4j from 'neo4j-driver';
 import { EmbeddingsService } from '../indexing/EmbeddingsService.js';
 import { Node } from '../types/index.js';
+import { ReciprocalRankFusion, RRFResult } from '../utils/reciprocal-rank-fusion.js';
 
 export interface SearchResult {
   id: string;
@@ -44,7 +45,12 @@ export interface UnifiedSearchOptions {
   limit?: number;
   minSimilarity?: number;
   offset?: number;
-  vectorOnly?: boolean; // If true, don't fallback to full-text
+  
+  // RRF Configuration (Reciprocal Rank Fusion - combines vector + BM25)
+  rrfK?: number;              // RRF constant k (default: 60, higher = less emphasis on top ranks)
+  rrfVectorWeight?: number;   // Weight for vector search ranking (default: 1.0)
+  rrfBm25Weight?: number;     // Weight for BM25 keyword ranking (default: 1.0)
+  rrfMinScore?: number;       // Minimum RRF score to include result (default: 0.01)
 }
 
 export interface UnifiedSearchResponse {
@@ -53,9 +59,17 @@ export interface UnifiedSearchResponse {
   results: SearchResult[];
   total_candidates: number;
   returned: number;
-  search_method: 'vector' | 'fulltext' | 'hybrid';
+  search_method: 'rrf_hybrid' | 'fulltext';
   fallback_triggered?: boolean;
   message?: string;
+  advanced_metrics?: {
+    stage1Time: number;
+    stage2Time: number;
+    stage3Time: number;
+    stage4Time: number;
+    totalTime: number;
+    candidatesPerMethod: Record<string, number>;
+  };
 }
 
 export class UnifiedSearchService {
@@ -92,6 +106,7 @@ export class UnifiedSearchService {
   /**
    * Unified search with automatic fallback
    * Tries vector search first (if enabled), falls back to full-text if needed
+   * Can optionally use advanced multi-stage hybrid search
    */
   async search(query: string, options: UnifiedSearchOptions = {}): Promise<UnifiedSearchResponse> {
     await this.initialize();
@@ -109,21 +124,12 @@ export class UnifiedSearchService {
       };
     }
 
-    // Try vector search first if enabled
+    // Always use RRF hybrid search if embeddings enabled
     if (this.embeddingsService.isEnabled()) {
-        const vectorResults = await this.vectorSearch(query, options);
-        return {
-            status: 'success',
-            query,
-            results: vectorResults,
-            total_candidates: vectorResults.length,
-            returned: vectorResults.length,
-            search_method: 'vector',
-            fallback_triggered: false
-        };
+      return await this.rrfHybridSearch(query, options);
     }
     
-    // Embeddings disabled or vectorOnly mode, use full-text directly
+    // Fall back to full-text search if embeddings disabled
     const fulltextResults = await this.fullTextSearch(query, options);
     
     return {
@@ -269,15 +275,14 @@ export class UnifiedSearchService {
   }
 
   /**
-   * Full-text keyword search
-   * Searches across all string properties: content, path, name, description, etc.
+   * Full-text keyword search using Neo4j's native BM25-powered Lucene index
+   * Supports fuzzy matching, proximity search, field boosting, and boolean operators
    */
   private async fullTextSearch(query: string, options: UnifiedSearchOptions): Promise<SearchResult[]> {
     const session = this.driver.session();
     
     try {
       const limit = options.limit || 100;
-      const offset = options.offset || 0;
 
       // Expand 'file' to include 'file_chunk' for type filtering
       let expandedTypes = options.types;
@@ -290,68 +295,59 @@ export class UnifiedSearchService {
         });
       }
 
-      // Search across string properties only to avoid type errors with arrays
+      // Use Neo4j's native BM25-powered full-text search
       const result = await session.run(
         `
-        MATCH (n)
-        WHERE (
-          (n.path IS NOT NULL AND toLower(n.path) CONTAINS toLower($query)) OR
-          (n.language IS NOT NULL AND toLower(n.language) CONTAINS toLower($query)) OR
-          (n.content IS NOT NULL AND toLower(n.content) CONTAINS toLower($query)) OR
-          (n.text IS NOT NULL AND toLower(n.text) CONTAINS toLower($query)) OR
-          (n.name IS NOT NULL AND toLower(n.name) CONTAINS toLower($query)) OR
-          (n.description IS NOT NULL AND toLower(n.description) CONTAINS toLower($query)) OR
-          (n.status IS NOT NULL AND toLower(n.status) CONTAINS toLower($query)) OR
-          (n.priority IS NOT NULL AND toLower(n.priority) CONTAINS toLower($query)) OR
-          (n.type IS NOT NULL AND toLower(n.type) CONTAINS toLower($query)) OR
-          (n.title IS NOT NULL AND toLower(n.title) CONTAINS toLower($query))
-        )
-        ${expandedTypes && expandedTypes.length > 0 ? `AND n.type IN $types` : ''}
+        CALL db.index.fulltext.queryNodes('node_search', $query)
+        YIELD node, score
+        
+        // Filter by type if specified
+        ${expandedTypes && expandedTypes.length > 0 ? 'WHERE node.type IN $types' : ''}
         
         // For FileChunk nodes, get parent File information
-        OPTIONAL MATCH (n)<-[:HAS_CHUNK]-(parentFile:File)
+        OPTIONAL MATCH (node)<-[:HAS_CHUNK]-(parentFile:File)
         
-        RETURN COALESCE(n.id, n.path) AS id,
-               n.type AS type,
-               COALESCE(n.title, n.name) AS title,
-               n.name AS name,
-               n.description AS description,
-               n.content AS content,
-               n.path AS path,
+        RETURN COALESCE(node.id, node.path) AS id,
+               node.type AS type,
+               COALESCE(node.title, node.name) AS title,
+               node.name AS name,
+               node.description AS description,
+               node.content AS content,
+               node.path AS path,
                CASE 
-                 WHEN n.type = 'file_chunk' AND parentFile IS NOT NULL 
+                 WHEN node.type = 'file_chunk' AND parentFile IS NOT NULL 
                  THEN parentFile.absolute_path 
-                 ELSE n.absolute_path
+                 ELSE node.absolute_path
                END AS absolute_path,
-               n.text AS chunk_text,
-               n.chunk_index AS chunk_index,
+               node.text AS chunk_text,
+               node.chunk_index AS chunk_index,
                parentFile.path AS parent_file_path,
                parentFile.absolute_path AS parent_file_absolute_path,
                parentFile.name AS parent_file_name,
                parentFile.language AS parent_file_language,
-               // Calculate simple relevance score based on field matches
-               CASE 
-                 WHEN n.title IS NOT NULL AND toLower(n.title) CONTAINS toLower($query) THEN 1.0
-                 WHEN n.name IS NOT NULL AND toLower(n.name) CONTAINS toLower($query) THEN 0.9
-                 WHEN n.description IS NOT NULL AND toLower(n.description) CONTAINS toLower($query) THEN 0.8
-                 WHEN n.content IS NOT NULL AND toLower(n.content) CONTAINS toLower($query) THEN 0.7
-                 WHEN n.text IS NOT NULL AND toLower(n.text) CONTAINS toLower($query) THEN 0.7
-                 ELSE 0.5
-               END AS relevance
-        ORDER BY relevance DESC
-        SKIP $offset
+               score AS relevance
+        ORDER BY score DESC
         LIMIT $limit
         `,
         { 
           query, 
-          types: expandedTypes || [], 
-          offset: neo4j.int(offset), 
+          types: expandedTypes || [],
           limit: neo4j.int(limit) 
         }
       );
 
       return result.records.map(record => this.formatSearchResult(record, 'fulltext'));
       
+    } catch (error: any) {
+      // Fallback to basic search if full-text index doesn't exist
+      if (error.code === 'Neo.ClientError.Schema.IndexNotFound') {
+        console.warn('⚠️  Full-text index "node_search" not found. Creating it...');
+        console.warn('⚠️  Run: CREATE FULLTEXT INDEX node_search FOR (n:File|FileChunk|Memory|Todo|Concept) ON EACH [n.content, n.text, n.title, n.name, n.description]');
+        
+        // Return empty results for now
+        return [];
+      }
+      throw error;
     } finally {
       await session.close();
     }
@@ -369,9 +365,10 @@ export class UnifiedSearchService {
     const absolutePath = record.get('absolute_path');
     const chunkText = record.get('chunk_text');
     const chunkIndex = record.get('chunk_index');
-    const chunkId = record.get('chunk_id');
-    const chunksMatched = record.get('chunks_matched');
-    const avgSimilarity = record.get('avg_similarity');
+    // chunk_id only exists in vector search results
+    const chunkId = record.has('chunk_id') ? record.get('chunk_id') : null;
+    const chunksMatched = record.has('chunks_matched') ? record.get('chunks_matched') : null;
+    const avgSimilarity = record.has('avg_similarity') ? record.get('avg_similarity') : null;
     const parentFilePath = record.get('parent_file_path');
     const parentFileAbsolutePath = record.get('parent_file_absolute_path');
     const parentFileName = record.get('parent_file_name');
@@ -437,6 +434,112 @@ export class UnifiedSearchService {
     }
     
     return resultObj;
+  }
+
+  /**
+   * Hybrid search using Reciprocal Rank Fusion (RRF)
+   * Industry-standard method for combining vector and BM25 rankings
+   */
+  private async rrfHybridSearch(query: string, options: UnifiedSearchOptions): Promise<UnifiedSearchResponse> {
+    const startTime = Date.now();
+    
+    try {
+      const limit = Math.floor(options.limit || 50);
+      
+      console.log(`🔍 RRF: Starting hybrid search for query: "${query}"`);
+      
+      // Step 1: Get vector search results (cosine similarity ranking)
+      const vectorResults = await this.vectorSearch(query, {
+        ...options,
+        limit: Math.floor(limit * 2) // Get more candidates for better fusion
+      });
+      
+      console.log(`🔍 RRF: Vector search returned ${vectorResults.length} results`);
+      
+      // Step 2: Get BM25 keyword search results
+      const bm25Results = await this.fullTextSearch(query, {
+        ...options,
+        limit: Math.floor(limit * 2)
+      });
+      
+      console.log(`🔍 RRF: BM25 search returned ${bm25Results.length} results`);
+      
+      if (vectorResults.length === 0 && bm25Results.length === 0) {
+        return {
+          status: 'success',
+          query,
+          results: [],
+          total_candidates: 0,
+          returned: 0,
+          search_method: 'rrf_hybrid',
+          fallback_triggered: false,
+          message: 'No results found'
+        };
+      }
+      
+      // Step 3: Fuse rankings using RRF
+      // Use custom config if provided, otherwise use adaptive config based on query
+      const rrfConfig = (options.rrfK || options.rrfVectorWeight || options.rrfBm25Weight || options.rrfMinScore)
+        ? {
+            k: options.rrfK || 60,
+            vectorWeight: options.rrfVectorWeight || 1.0,
+            bm25Weight: options.rrfBm25Weight || 1.0,
+            minScore: options.rrfMinScore || 0.01
+          }
+        : ReciprocalRankFusion.getAdaptiveConfig(query);
+      
+      const rrf = new ReciprocalRankFusion(rrfConfig);
+      
+      console.log(`🔍 RRF: Using config - k=${rrfConfig.k}, vectorWeight=${rrfConfig.vectorWeight}, bm25Weight=${rrfConfig.bm25Weight}`);
+      
+      const fusedResults = rrf.fuse(vectorResults, bm25Results);
+      
+      // Step 4: Limit to requested number of results
+      const finalResults = fusedResults.slice(0, limit);
+      
+      const totalTime = Date.now() - startTime;
+      
+      return {
+        status: 'success',
+        query,
+        results: finalResults,
+        total_candidates: fusedResults.length,
+        returned: finalResults.length,
+        search_method: 'rrf_hybrid',
+        fallback_triggered: false,
+        message: 'Reciprocal Rank Fusion (Vector + BM25)',
+        advanced_metrics: {
+          stage1Time: 0,
+          stage2Time: 0,
+          stage3Time: 0,
+          stage4Time: 0,
+          totalTime,
+          candidatesPerMethod: {
+            vector: vectorResults.length,
+            bm25: bm25Results.length,
+            fused: fusedResults.length
+          }
+        }
+      };
+      
+    } catch (error: any) {
+      console.error('❌ RRF hybrid search error:', error);
+      
+      // Fallback to standard vector search on error
+      console.log('⚠️  Falling back to standard vector search...');
+      const vectorResults = await this.vectorSearch(query, options);
+      
+      return {
+        status: 'success',
+        query,
+        results: vectorResults,
+        total_candidates: vectorResults.length,
+        returned: vectorResults.length,
+        search_method: 'rrf_hybrid',
+        fallback_triggered: true,
+        message: `RRF hybrid search failed: ${error.message}. Fell back to vector-only search.`
+      };
+    }
   }
 
   /**

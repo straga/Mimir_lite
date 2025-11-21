@@ -77,7 +77,11 @@ export interface SearchOptions {
   types?: NodeType[];
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
-  minSimilarity?: number;
+  minSimilarity?: number;  
+  rrfK?: number;              // RRF constant k (default: 60, higher = less emphasis on top ranks)
+  rrfVectorWeight?: number;   // Weight for vector search ranking (default: 1.0)
+  rrfBm25Weight?: number;     // Weight for BM25 keyword ranking (default: 1.0)
+  rrfMinScore?: number;       // Minimum RRF score to include result (default: 0.01)
 }
 
 /**

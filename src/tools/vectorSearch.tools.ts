@@ -81,12 +81,16 @@ export async function handleVectorSearchNodes(
     const depth = Math.max(1, Math.min(3, params.depth || 1)); // Clamp 1-3
     const limit = params.limit || 10;
     
-    // Initial vector search
+    // Initial vector search (with optional advanced search)
     const result = await searchService.search(params.query, {
       types: params.types,
       limit,
       minSimilarity: params.min_similarity || 0.5,
-      offset: 0
+      offset: 0,
+      rrfK: params.rrf_k,
+      rrfVectorWeight: params.rrf_vector_weight,
+      rrfBm25Weight: params.rrf_bm25_weight,
+      rrfMinScore: params.rrf_min_score
     });
     
     // If depth > 1, perform multi-hop graph traversal

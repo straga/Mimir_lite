@@ -130,6 +130,35 @@ export function normalizeAndResolve(filepath: string, basePath?: string): string
  * getHostWorkspaceRoot() // => 'C:/Users/john/Documents'
  * ```
  */
+/**
+ * Check if we're running inside a Docker container
+ * 
+ * @returns true if running in Docker, false otherwise
+ */
+export function isRunningInDocker(): boolean {
+  // Check for common Docker indicators
+  // 1. /.dockerenv file exists (most reliable)
+  // 2. WORKSPACE_ROOT environment variable is set (our Docker convention)
+  
+  try {
+    // Check for .dockerenv file
+    const fs = require('fs');
+    if (fs.existsSync('/.dockerenv')) {
+      return true;
+    }
+  } catch (e) {
+    // Ignore errors
+  }
+  
+  // Check if WORKSPACE_ROOT is set (our Docker convention)
+  // When running locally, this should NOT be set
+  if (process.env.WORKSPACE_ROOT) {
+    return true;
+  }
+  
+  return false;
+}
+
 export function getHostWorkspaceRoot(): string {
   const hostRoot = process.env.HOST_WORKSPACE_ROOT;
   
@@ -170,6 +199,12 @@ export function getHostWorkspaceRoot(): string {
  */
 export function translateHostToContainer(hostPath: string): string {
   if (!hostPath) return hostPath;
+  
+  // Skip translation if running locally (not in Docker)
+  if (!isRunningInDocker()) {
+    console.log(`💻 Running locally - no path translation needed: ${hostPath}`);
+    return normalizeAndResolve(hostPath);
+  }
   
   // Normalize and resolve the input path
   const normalizedPath = normalizeAndResolve(hostPath);
@@ -237,6 +272,12 @@ export function translateHostToContainer(hostPath: string): string {
  */
 export function translateContainerToHost(containerPath: string): string {
   if (!containerPath) return containerPath;
+  
+  // Skip translation if running locally (not in Docker)
+  if (!isRunningInDocker()) {
+    console.log(`💻 Running locally - no path translation needed: ${containerPath}`);
+    return normalizeSlashes(containerPath);
+  }
   
   // Normalize the container path
   const normalizedPath = normalizeSlashes(containerPath);

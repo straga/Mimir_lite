@@ -44,11 +44,17 @@ export class FileIndexer {
    * If not in Docker, both paths are the same
    */
   private translateToHostPath(containerPath: string): string {
-    const workspaceRoot = process.env.WORKSPACE_ROOT || '/workspace';
+    const workspaceRoot = process.env.WORKSPACE_ROOT;
     const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT;
     
-    // If HOST_WORKSPACE_ROOT not set, assume not in Docker
+    // If WORKSPACE_ROOT not set, we're running locally - no translation needed
+    if (!workspaceRoot) {
+      return containerPath;
+    }
+    
+    // If HOST_WORKSPACE_ROOT not set but WORKSPACE_ROOT is, something is misconfigured
     if (!hostWorkspaceRoot) {
+      console.warn('⚠️  WORKSPACE_ROOT is set but HOST_WORKSPACE_ROOT is not - path translation may fail');
       return containerPath;
     }
     

@@ -110,7 +110,10 @@ export class LLMConfigLoader {
 
 
     // Embeddings configuration
-    if (process.env.MIMIR_EMBEDDINGS_ENABLED !== undefined) {
+    // Initialize embeddings config if any embeddings variable is set
+    if (process.env.MIMIR_EMBEDDINGS_ENABLED !== undefined ||
+        process.env.MIMIR_EMBEDDINGS_PROVIDER !== undefined ||
+        process.env.MIMIR_EMBEDDINGS_MODEL !== undefined) {
       config.embeddings = config.embeddings || {
         enabled: false,
         provider: 'ollama',
@@ -119,6 +122,9 @@ export class LLMConfigLoader {
         chunkSize: 512,
         chunkOverlap: 50
       };
+    }
+
+    if (process.env.MIMIR_EMBEDDINGS_ENABLED !== undefined && config.embeddings) {
       config.embeddings.enabled = process.env.MIMIR_EMBEDDINGS_ENABLED === 'true';
       console.log(`🔧 Embeddings Enabled: ${config.embeddings.enabled}`);
     }

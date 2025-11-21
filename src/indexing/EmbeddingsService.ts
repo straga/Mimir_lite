@@ -68,15 +68,23 @@ export class EmbeddingsService {
     this.provider = config.provider;
     this.model = config.model;
     
-    // Get provider base URL from llmConfig (uses LLM_API_URL env var)
-    const llmConfig = await this.configLoader.load();
-    const providerConfig = llmConfig.providers[config.provider];
-    if (providerConfig?.baseUrl) {
-      this.baseUrl = providerConfig.baseUrl;
+    // Use embeddings-specific API URL if provided, otherwise fall back to LLM provider config
+    if (process.env.MIMIR_EMBEDDINGS_API) {
+      this.baseUrl = process.env.MIMIR_EMBEDDINGS_API;
+    } else {
+      // Fallback: Get provider base URL from llmConfig
+      const llmConfig = await this.configLoader.load();
+      const providerConfig = llmConfig.providers[config.provider];
+      if (providerConfig?.baseUrl) {
+        this.baseUrl = providerConfig.baseUrl;
+      }
     }
     
-    // For OpenAI/Copilot, use dummy key (copilot-api handles auth)
-    if (this.provider === 'copilot' || this.provider === 'openai') {
+    // Use embeddings-specific API key if provided
+    if (process.env.MIMIR_EMBEDDINGS_API_KEY) {
+      this.apiKey = process.env.MIMIR_EMBEDDINGS_API_KEY;
+    } else if (this.provider === 'copilot' || this.provider === 'openai') {
+      // Fallback: For OpenAI/Copilot, use dummy key
       this.apiKey = 'dummy-key-not-used';
     }
 

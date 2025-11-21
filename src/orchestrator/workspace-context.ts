@@ -34,7 +34,7 @@ const workspaceStorage = new AsyncLocalStorage<WorkspaceContext>();
 function translatePathToContainer(hostPath: string): string {
   // Get environment variables for path mapping
   const hostWorkspaceRoot = process.env.HOST_WORKSPACE_ROOT || path.join(os.homedir(), 'src');
-  const containerWorkspaceRoot = process.env.WORKSPACE_ROOT || '/workspace';
+  const containerWorkspaceRoot = process.env.WORKSPACE_ROOT || '';
   
   // Expand ~ to home directory if present
   const expandedHostRoot = hostWorkspaceRoot.replace(/^~/, os.homedir());

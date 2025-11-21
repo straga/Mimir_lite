@@ -67,6 +67,12 @@ router.get('/vector-search', async (req: Request, res: Response) => {
     const minSimilarity = parseFloat(req.query.min_similarity as string) || 0.75;
     const depth = parseInt(req.query.depth as string, 10) || 1;
     const typesParam = req.query.types as string;
+    
+    // RRF configuration parameters (optional)
+    const rrfK = req.query.rrf_k ? parseInt(req.query.rrf_k as string, 10) : undefined;
+    const rrfVectorWeight = req.query.rrf_vector_weight ? parseFloat(req.query.rrf_vector_weight as string) : undefined;
+    const rrfBm25Weight = req.query.rrf_bm25_weight ? parseFloat(req.query.rrf_bm25_weight as string) : undefined;
+    const rrfMinScore = req.query.rrf_min_score ? parseFloat(req.query.rrf_min_score as string) : undefined;
 
     if (!query) {
       return res.status(400).json({ error: 'Query parameter is required' });
@@ -95,16 +101,25 @@ router.get('/vector-search', async (req: Request, res: Response) => {
         types,
         limit,
         min_similarity: minSimilarity,
-        depth
+        depth,
+        rrf_k: rrfK,
+        rrf_vector_weight: rrfVectorWeight,
+        rrf_bm25_weight: rrfBm25Weight,
+        rrf_min_score: rrfMinScore
       },
       graphManager.getDriver()
     );
 
+    // Handle both UnifiedSearchResponse format and tool response format
+    const resultArray = results.results || [];
+    
     res.json({
       query,
-      results: results.results,
-      count: results.results.length,
-      total_results: results.total_results
+      results: resultArray,
+      count: resultArray.length,
+      total_results: results.total_results || results.total_candidates || resultArray.length,
+      search_method: results.search_method || 'fulltext',
+      advanced_metrics: results.advanced_metrics
     });
   } catch (error: any) {
     console.error('❌ Error in vector search:', error);
