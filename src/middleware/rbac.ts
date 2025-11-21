@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { getRBACConfig } from '../config/rbac-config.js';
-import { extractClaims } from './claims-extractor.js';
+import { extractRolesWithDefault } from './claims-extractor.js';
 
 /**
  * Get all permissions for a user based on their roles
@@ -14,10 +14,14 @@ export function getUserPermissions(user: any): Set<string> {
   
   const config = getRBACConfig();
   
-  // Extract roles using configurable claim path
-  const roles = extractClaims(user, config.claimPath || 'roles');
+  // Extract roles using configurable claim path with default role fallback
+  const roles = extractRolesWithDefault(
+    user, 
+    config.claimPath || 'roles',
+    config.defaultRole
+  );
   
-  if (!roles || !Array.isArray(roles)) {
+  if (!roles || !Array.isArray(roles) || roles.length === 0) {
     return permissions;
   }
   
