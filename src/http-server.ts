@@ -115,6 +115,56 @@ async function startHttpServer() {
   console.log(`📁 Serving frontend from: ${frontendDistPath}`);
   app.use(express.static(frontendDistPath));
 
+  // SSE endpoint for PCTX and other clients that need event streams
+  app.get('/mcp', async (req, res) => {
+    try {
+      console.warn(`[HTTP] SSE connection request (shared session mode)`);
+      
+      // Initialize shared transport once on first request
+      if (!sharedTransport) {
+        console.warn(`[HTTP] Initializing shared global session: ${SHARED_SESSION_ID}`);
+        
+        sharedTransport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => SHARED_SESSION_ID,
+          enableJsonResponse: true
+        } as any);
+
+        // Connect server to shared transport
+        await server.connect(sharedTransport);
+        console.warn(`[HTTP] Server connected to shared session`);
+      }
+      
+      // Set SSE headers
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Mcp-Session-Id', SHARED_SESSION_ID);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.flushHeaders();
+      
+      console.warn(`[HTTP] SSE stream established for session: ${SHARED_SESSION_ID}`);
+      
+      // Keep connection alive with periodic heartbeat
+      const heartbeatInterval = setInterval(() => {
+        res.write(': heartbeat\n\n');
+      }, 30000);
+      
+      // Clean up on disconnect
+      req.on('close', () => {
+        clearInterval(heartbeatInterval);
+        console.warn(`[HTTP] SSE client disconnected`);
+      });
+      
+      // Handle the SSE request through transport
+      await sharedTransport.handleRequest(req, res, null);
+    } catch (error) {
+      console.error('❌ HTTP /mcp SSE handler error:', error instanceof Error ? error.message : error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    }
+  });
+
   app.post('/mcp', async (req, res) => {
     try {
       let method = req.body?.method || 'unknown';

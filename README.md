@@ -28,6 +28,7 @@ Mimir is a Model Context Protocol (MCP) server that provides AI assistants (Clau
 - [File Indexing](#file-indexing) - Index your codebase for RAG
 - [Architecture](#%EF%B8%8F-architecture) - How it works
 - [Features](#-key-features) - What can it do?
+- [PCTX Integration](#-pctx-integration-code-mode) - 98% token reduction with Code Mode
 - [Troubleshooting](#-troubleshooting) - Common issues
 - [Documentation](#-documentation) - Learn more
 

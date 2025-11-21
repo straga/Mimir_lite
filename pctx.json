@@ -1,0 +1,11 @@
+{
+  "name": "Mimir",
+  "version": "0.1.0",
+  "description": "PCTX proxy for Mimir Graph-RAG MCP server",
+  "servers": [
+    {
+      "name": "mimir",
+      "url": "http://localhost:9042/mcp"
+    }
+  ]
+}
