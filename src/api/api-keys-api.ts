@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { requirePermission } from '../middleware/rbac.js';
-import passport from 'passport';
 
 const router = Router();
 

@@ -232,7 +232,7 @@ router.get('/types/:type', requirePermission('nodes:read'), async (req: Request,
  * GET /api/nodes/types/:type/:id/details
  * Get detailed information about a specific node including edges
  */
-router.get('/types/:type/:id/details', async (req: Request, res: Response) => {
+router.get('/types/:type/:id/details', requirePermission('nodes:read'), async (req: Request, res: Response) => {
   const { type, id } = req.params;
 
   const driver = neo4j.driver(
@@ -700,7 +700,7 @@ router.patch('/:id', requirePermission('nodes:write'), async (req: Request, res:
  * GET /api/nodes/:id
  * Get a single node by ID (catch-all route - must be last)
  */
-router.get('/:id', async (req: Request, res: Response) => {
+router.get('/:id', requirePermission('nodes:read'), async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {

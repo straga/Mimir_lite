@@ -15,6 +15,7 @@ export interface RBACConfig {
 
 let cachedConfig: RBACConfig | null = null;
 let configLoadPromise: Promise<RBACConfig> | null = null;
+let loadingError: Error | null = null;
 
 /**
  * Fetch RBAC config from a remote URI
@@ -129,17 +130,17 @@ function validateConfig(config: any): void {
  * This allows async loading of remote configs
  */
 export async function initRBACConfig(): Promise<RBACConfig> {
-  // If already loading, wait for it
+  // If already loading, wait for it (prevents concurrent loads)
   if (configLoadPromise) {
     return configLoadPromise;
   }
   
-  // If already loaded, return cached
-  if (cachedConfig) {
+  // If already loaded successfully, return cached
+  if (cachedConfig && !loadingError) {
     return cachedConfig;
   }
   
-  // Start loading
+  // Start loading (atomic - only one promise is ever created)
   configLoadPromise = (async () => {
     const configSource = process.env.MIMIR_RBAC_CONFIG || './config/rbac.json';
     
@@ -152,6 +153,7 @@ export async function initRBACConfig(): Promise<RBACConfig> {
         config = JSON.parse(configSource);
         validateConfig(config);
         cachedConfig = config;
+        loadingError = null; // Clear any previous error
         console.log('✅ Loaded RBAC config from inline JSON');
         return config;
       }
@@ -161,6 +163,7 @@ export async function initRBACConfig(): Promise<RBACConfig> {
         config = await fetchRemoteConfig(configSource);
         validateConfig(config);
         cachedConfig = config;
+        loadingError = null; // Clear any previous error
         console.log(`✅ Loaded RBAC config from remote URI: ${configSource}`);
         return config;
       }
@@ -171,6 +174,7 @@ export async function initRBACConfig(): Promise<RBACConfig> {
         config = JSON.parse(configContent);
         validateConfig(config);
         cachedConfig = config;
+        loadingError = null; // Clear any previous error
         console.log(`✅ Loaded RBAC config from file: ${configSource}`);
         return config;
       } else {
@@ -180,12 +184,17 @@ export async function initRBACConfig(): Promise<RBACConfig> {
       console.error(`❌ Error loading RBAC config:`, error.message);
       console.warn('⚠️  Falling back to default RBAC config');
       
-      // Reset promise to allow retry
-      configLoadPromise = null;
+      // Store the error for diagnostics
+      loadingError = error;
+      
+      // IMPORTANT: Don't reset configLoadPromise - keep it so concurrent calls
+      // wait for this same promise and get the same default config
     }
     
-    // Return default config
-    cachedConfig = getDefaultConfig();
+    // Return default config (cached so all callers get the same instance)
+    if (!cachedConfig) {
+      cachedConfig = getDefaultConfig();
+    }
     return cachedConfig;
   })();
   
@@ -197,12 +206,12 @@ export async function initRBACConfig(): Promise<RBACConfig> {
  * Must call initRBACConfig() at server startup first for remote configs
  */
 export function getRBACConfig(): RBACConfig {
-  // Return cached config if available
+  // Return cached config if available (whether from successful load or default)
   if (cachedConfig) {
     return cachedConfig;
   }
 
-  // If config is still loading, warn and return default
+  // If config is still loading, warn and return default (but don't cache it)
   if (configLoadPromise) {
     console.warn('⚠️  RBAC config still loading, using default config temporarily');
     console.warn('⚠️  Call await initRBACConfig() at server startup before using middleware');
@@ -216,10 +225,11 @@ export function getRBACConfig(): RBACConfig {
     
     // Case 1: Inline JSON in environment variable
     if (isInlineJson(configSource)) {
-      console.log('📝 Loading RBAC config from inline JSON');
+      console.log('📝 Loading RBAC config from inline JSON (synchronous fallback)');
       config = JSON.parse(configSource);
       validateConfig(config);
       cachedConfig = config;
+      loadingError = null;
       console.log('✅ Loaded RBAC config from inline JSON');
       return config;
     }
@@ -229,16 +239,21 @@ export function getRBACConfig(): RBACConfig {
       console.warn(`⚠️  Cannot load remote RBAC config synchronously from: ${configSource}`);
       console.warn('⚠️  Call await initRBACConfig() at server startup to load remote configs');
       console.warn('⚠️  Falling back to default RBAC config');
-      cachedConfig = getDefaultConfig();
+      // Cache default config for consistency
+      if (!cachedConfig) {
+        cachedConfig = getDefaultConfig();
+      }
       return cachedConfig;
     }
     
     // Case 3: Local file path
     if (fs.existsSync(configSource)) {
+      console.log('📝 Loading RBAC config from file (synchronous fallback)');
       const configContent = fs.readFileSync(configSource, 'utf-8');
       config = JSON.parse(configContent);
       validateConfig(config);
       cachedConfig = config;
+      loadingError = null;
       console.log(`✅ Loaded RBAC config from file: ${configSource}`);
       return config;
     } else {
@@ -247,10 +262,13 @@ export function getRBACConfig(): RBACConfig {
   } catch (error: any) {
     console.error(`❌ Error loading RBAC config:`, error.message);
     console.warn('⚠️  Falling back to default RBAC config');
+    loadingError = error;
   }
   
-  // Return default config
-  cachedConfig = getDefaultConfig();
+  // Return default config (cache it for consistency)
+  if (!cachedConfig) {
+    cachedConfig = getDefaultConfig();
+  }
   return cachedConfig;
 }
 
@@ -258,4 +276,28 @@ export function getRBACConfig(): RBACConfig {
 export function clearConfigCache(): void {
   cachedConfig = null;
   configLoadPromise = null;
+  loadingError = null;
+}
+
+/**
+ * Get RBAC config loading status (for diagnostics)
+ */
+export function getConfigStatus(): {
+  loaded: boolean;
+  loading: boolean;
+  error: Error | null;
+  source: string;
+  usingDefault: boolean;
+} {
+  const configSource = process.env.MIMIR_RBAC_CONFIG || './config/rbac.json';
+  const defaultConfig = getDefaultConfig();
+  
+  return {
+    loaded: cachedConfig !== null,
+    loading: configLoadPromise !== null && cachedConfig === null,
+    error: loadingError,
+    source: configSource,
+    usingDefault: cachedConfig !== null && 
+                  JSON.stringify(cachedConfig) === JSON.stringify(defaultConfig)
+  };
 }

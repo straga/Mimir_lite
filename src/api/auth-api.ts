@@ -1,23 +1,9 @@
 import { Router } from 'express';
-import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import passport from '../config/passport.js';
+import { JWT_SECRET } from '../utils/jwt-secret.js';
 
 const router = Router();
-
-// JWT secret from environment
-// Only required when security is enabled
-const JWT_SECRET: string = process.env.MIMIR_JWT_SECRET || (() => {
-  if (process.env.MIMIR_ENABLE_SECURITY === 'true') {
-    throw new Error('MIMIR_JWT_SECRET must be set when MIMIR_ENABLE_SECURITY=true');
-  }
-  return 'dev-only-secret-not-for-production';
-})();
-
-// Log JWT secret status on startup (first 8 chars for verification)
-if (process.env.MIMIR_ENABLE_SECURITY === 'true') {
-  console.log(`[Auth] JWT_SECRET configured: ${JWT_SECRET.substring(0, 8)}... (${JWT_SECRET.length} chars)`);
-}
 
 /**
  * POST /auth/token
@@ -351,9 +337,38 @@ router.get('/auth/status', async (req, res) => {
       console.log('[Auth] Attempting OAuth token validation...');
       
       try {
-        const response = await fetch(OAUTH_USERINFO_URL, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+        // SECURITY: Validate token format to prevent SSRF and injection attacks
+        const { validateOAuthTokenFormat, validateOAuthUserinfoUrl, createSecureFetchOptions } = await import('../utils/fetch-helper.js');
+        
+        try {
+          validateOAuthTokenFormat(token);
+        } catch (validationError: any) {
+          console.error('[Auth] Invalid token format:', validationError.message);
+          return res.json({ authenticated: false, error: 'Invalid token format' });
+        }
+        
+        // SECURITY: Validate userinfo URL to prevent SSRF attacks
+        try {
+          validateOAuthUserinfoUrl(OAUTH_USERINFO_URL);
+        } catch (validationError: any) {
+          console.error('[Auth] Invalid userinfo URL:', validationError.message);
+          return res.json({ authenticated: false, error: 'Invalid OAuth configuration' });
+        }
+        
+        // Configure timeout for OAuth validation (default 10s, configurable via env)
+        const timeoutMs = parseInt(process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000', 10);
+        
+        // Use createSecureFetchOptions for timeout support
+        const fetchOptions = createSecureFetchOptions(
+          OAUTH_USERINFO_URL,
+          {
+            headers: { 'Authorization': `Bearer ${token}` }
+          },
+          undefined, // no API key env var
+          timeoutMs  // explicit timeout
+        );
+        
+        const response = await fetch(OAUTH_USERINFO_URL, fetchOptions);
         
         if (!response.ok) {
           console.log(`[Auth] OAuth token validation failed: ${response.status}`);
@@ -373,7 +388,14 @@ router.get('/auth/status', async (req, res) => {
           }
         });
       } catch (oauthError: any) {
-        return res.json({ authenticated: false, error: 'Token validation failed' });
+        // Handle timeout specifically
+        if (oauthError.name === 'AbortError') {
+          console.error(`[Auth] OAuth token validation timed out after ${process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000'}ms`);
+          return res.json({ authenticated: false, error: 'OAuth validation timed out' });
+        }
+        
+        console.error('[Auth] OAuth token validation error:', oauthError);
+        return res.json({ authenticated: false, error: 'OAuth validation failed', details: oauthError.message });
       }
     }
   } catch (error: any) {

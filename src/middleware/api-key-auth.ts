@@ -1,16 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { createSecureFetchOptions } from '../utils/fetch-helper.js';
-
-// JWT secret from environment
-// Only required when security is enabled
-const JWT_SECRET: string = process.env.MIMIR_JWT_SECRET || (() => {
-  if (process.env.MIMIR_ENABLE_SECURITY === 'true') {
-    throw new Error('MIMIR_JWT_SECRET must be set when MIMIR_ENABLE_SECURITY=true');
-  }
-  return 'dev-only-secret-not-for-production';
-})();
+import { createSecureFetchOptions, validateOAuthTokenFormat, validateOAuthUserinfoUrl } from '../utils/fetch-helper.js';
+import { JWT_SECRET } from '../utils/jwt-secret.js';
 
 // OAuth userinfo endpoint for token validation (stateless)
 const OAUTH_USERINFO_URL = process.env.MIMIR_OAUTH_USERINFO_URL || 
@@ -83,12 +74,36 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
     try {
       console.log('[OAuth Auth] Validating OAuth token with provider...');
       
-      // Validate token by calling OAuth provider's userinfo endpoint
-      const fetchOptions = createSecureFetchOptions(OAUTH_USERINFO_URL, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      // SECURITY: Validate token format to prevent SSRF and injection attacks
+      try {
+        validateOAuthTokenFormat(token);
+      } catch (validationError: any) {
+        console.error('[OAuth Auth] Invalid token format:', validationError.message);
+        return res.status(401).json({ error: 'Invalid token format' });
+      }
+      
+      // SECURITY: Validate userinfo URL to prevent SSRF attacks
+      try {
+        validateOAuthUserinfoUrl(OAUTH_USERINFO_URL);
+      } catch (validationError: any) {
+        console.error('[OAuth Auth] Invalid userinfo URL:', validationError.message);
+        return res.status(500).json({ error: 'Invalid OAuth configuration' });
+      }
+      
+      // Configure timeout for OAuth validation (default 10s, configurable via env)
+      const timeoutMs = parseInt(process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000', 10);
+      
+      // Validate token by calling OAuth provider's userinfo endpoint with timeout
+      const fetchOptions = createSecureFetchOptions(
+        OAUTH_USERINFO_URL,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        },
+        undefined, // no API key env var
+        timeoutMs  // explicit timeout
+      );
       
       const response = await fetch(OAUTH_USERINFO_URL, fetchOptions);
       
@@ -112,6 +127,12 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
       
       return next();
     } catch (oauthError: any) {
+      // Handle timeout specifically
+      if (oauthError.name === 'AbortError') {
+        console.error(`[OAuth Auth] Token validation timed out after ${process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000'}ms`);
+        return res.status(401).json({ error: 'OAuth token validation timed out' });
+      }
+      
       console.error('[OAuth Auth] OAuth validation error:', oauthError.message);
       return res.status(401).json({ error: 'Authentication failed' });
     }

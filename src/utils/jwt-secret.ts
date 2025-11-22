@@ -1,18 +1,18 @@
-import crypto from 'crypto';
-
 /**
  * JWT secret for signing and validating tokens
- * IMPORTANT: Set MIMIR_JWT_SECRET in production to persist across restarts
- * If not set, a random secret is generated (tokens won't survive server restarts)
+ * IMPORTANT: Set MIMIR_JWT_SECRET when MIMIR_ENABLE_SECURITY=true
+ * For development with security disabled, a default secret is used
  */
-let JWT_SECRET: string;
+const JWT_SECRET: string = process.env.MIMIR_JWT_SECRET || (() => {
+  if (process.env.MIMIR_ENABLE_SECURITY === 'true') {
+    throw new Error('MIMIR_JWT_SECRET must be set when MIMIR_ENABLE_SECURITY=true');
+  }
+  return 'dev-only-secret-not-for-production';
+})();
 
-if (process.env.MIMIR_JWT_SECRET) {
-  JWT_SECRET = process.env.MIMIR_JWT_SECRET;
-  console.log('[JWT] Using JWT secret from environment variable');
-} else {
-  JWT_SECRET = crypto.randomBytes(64).toString('hex');
-  console.warn('[JWT] ⚠️  No MIMIR_JWT_SECRET set - using random secret (tokens will be invalidated on restart)');
+// Log JWT secret status on startup (first 8 chars for verification)
+if (process.env.MIMIR_ENABLE_SECURITY === 'true') {
+  console.log(`[JWT] JWT_SECRET configured: ${JWT_SECRET.substring(0, 8)}... (${JWT_SECRET.length} chars)`);
 }
 
 export { JWT_SECRET };

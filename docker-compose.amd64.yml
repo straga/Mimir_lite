@@ -128,7 +128,7 @@ services:
       # Server Configuration
       - NODE_ENV=production
       - PORT=3000
-      - NODE_TLS_REJECT_UNAUTHORIZED=${NODE_TLS_REJECT_UNAUTHORIZED:-1}
+      # - NODE_TLS_REJECT_UNAUTHORIZED=${NODE_TLS_REJECT_UNAUTHORIZED:-1}
       
       # Workspace Configuration
       - WORKSPACE_ROOT=/workspace

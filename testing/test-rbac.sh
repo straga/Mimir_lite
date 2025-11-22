@@ -174,7 +174,7 @@ echo "   Testing nodes:write permission (should be DENIED)..."
 write_response=$(curl -s -b "/tmp/analyst-cookies.txt" -w "\nHTTP_CODE:%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   -d '{"type":"memory","properties":{"title":"RBAC Test Analyst","content":"Testing analyst access"}}' \
-  "http://localhost:3000/api/nodes")
+  "$MIMIR_URL/api/nodes")
 write_code=$(echo "$write_response" | grep "HTTP_CODE:" | cut -d: -f2)
 if [ "$write_code" = "403" ]; then
   echo "   ✅ HTTP 403 (expected 403) - Write permission correctly denied"
@@ -205,7 +205,7 @@ echo "   Testing nodes:write permission (should be DENIED)..."
 write_response=$(curl -s -b "/tmp/viewer-cookies.txt" -w "\nHTTP_CODE:%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   -d '{"type":"memory","properties":{"title":"RBAC Test Viewer","content":"Testing viewer access"}}' \
-  "http://localhost:3000/api/nodes")
+  "$MIMIR_URL/api/nodes")
 write_code=$(echo "$write_response" | grep "HTTP_CODE:" | cut -d: -f2)
 if [ "$write_code" = "403" ]; then
   echo "   ✅ HTTP 403 (expected 403) - Write permission correctly denied"

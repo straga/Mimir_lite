@@ -5,7 +5,7 @@ dotenv.config();
 import passport from 'passport';
 import { Strategy as LocalStrategy } from 'passport-local';
 import { Strategy as OAuth2Strategy } from 'passport-oauth2';
-import { createSecureFetchOptions } from '../utils/fetch-helper.js';
+import { createSecureFetchOptions, validateOAuthTokenFormat, validateOAuthUserinfoUrl } from '../utils/fetch-helper.js';
 
 // Development: Local username/password (configurable via env vars)
 // Supports multiple dev users with different roles for RBAC testing
@@ -71,31 +71,80 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
   console.log(`[Auth] Public issuer (browser): ${publicIssuer}`);
   console.log(`[Auth] Internal issuer (server): ${internalIssuer}`);
   
-  // Custom stateless state store for OAuth
-  // This allows us to pass custom data through the OAuth flow without sessions
-  class StatelessStateStore {
+  // Custom state store for OAuth with proper CSRF protection
+  // Stores state parameters in memory with expiration for validation
+  class SecureStateStore {
+    private states: Map<string, { timestamp: number; vscodeData?: any }> = new Map();
+    private readonly STATE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+    
+    constructor() {
+      // Clean up expired states every minute
+      setInterval(() => this.cleanupExpiredStates(), 60 * 1000);
+    }
+    
+    private cleanupExpiredStates() {
+      const now = Date.now();
+      for (const [state, data] of this.states.entries()) {
+        if (now - data.timestamp > this.STATE_EXPIRY_MS) {
+          this.states.delete(state);
+        }
+      }
+    }
+    
     store(req: any, callbackOrMeta: any, maybeCallback?: any) {
       // Handle both signatures: store(req, callback) and store(req, meta, callback)
       const callback = maybeCallback || callbackOrMeta;
       
+      // Generate cryptographically secure random state
+      const crypto = require('crypto');
+      const state = crypto.randomBytes(32).toString('hex');
+      
       // Check if this is a VSCode redirect request
       const vscodeState = (req as any)._vscodeState;
-      if (vscodeState) {
-        // Use the VSCode state that was pre-set
-        callback(null, vscodeState);
-      } else {
-        // Generate a simple random state for CSRF protection
-        const state = Math.random().toString(36).substring(7);
-        callback(null, state);
-      }
+      
+      // Store state with timestamp for validation
+      this.states.set(state, {
+        timestamp: Date.now(),
+        vscodeData: vscodeState
+      });
+      
+      console.log(`[OAuth] Generated state: ${state.substring(0, 8)}... (expires in ${this.STATE_EXPIRY_MS / 1000}s)`);
+      callback(null, state);
     }
     
     verify(req: any, state: string, callbackOrMeta: any, maybeCallback?: any) {
       // Handle both signatures: verify(req, state, callback) and verify(req, state, meta, callback)
       const callback = maybeCallback || callbackOrMeta;
       
-      // For stateless flow, we just accept any state
-      // The state is primarily for CSRF which is less of a concern in our setup
+      if (!state) {
+        console.error('[OAuth] CSRF: No state parameter provided');
+        return callback(new Error('Missing state parameter'), false);
+      }
+      
+      const storedState = this.states.get(state);
+      
+      if (!storedState) {
+        console.error(`[OAuth] CSRF: Invalid or expired state: ${state.substring(0, 8)}...`);
+        return callback(new Error('Invalid or expired state parameter'), false);
+      }
+      
+      // Check if state has expired
+      const now = Date.now();
+      if (now - storedState.timestamp > this.STATE_EXPIRY_MS) {
+        console.error(`[OAuth] CSRF: Expired state: ${state.substring(0, 8)}...`);
+        this.states.delete(state);
+        return callback(new Error('Expired state parameter'), false);
+      }
+      
+      // State is valid - remove it (one-time use)
+      this.states.delete(state);
+      
+      // If this was a VSCode redirect, restore the data
+      if (storedState.vscodeData) {
+        (req as any)._vscodeState = storedState.vscodeData;
+      }
+      
+      console.log(`[OAuth] State validated successfully: ${state.substring(0, 8)}...`);
       callback(null, true);
     }
   }
@@ -106,23 +155,51 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
     clientID: process.env.MIMIR_OAUTH_CLIENT_ID!,
     clientSecret: process.env.MIMIR_OAUTH_CLIENT_SECRET!,
     callbackURL: process.env.MIMIR_OAUTH_CALLBACK_URL!,
-    store: new StatelessStateStore(),
+    store: new SecureStateStore(),
     passReqToCallback: false,
   }, async (accessToken: string, refreshToken: string, profile: any, done: any) => {
     try {
       // Fetch user profile from userinfo endpoint (use internal issuer for server-to-server)
       const userinfoURL = process.env.MIMIR_OAUTH_USERINFO_URL || `${internalIssuer}/oauth2/v1/userinfo`;
       
-      const fetchOptions = createSecureFetchOptions(userinfoURL, {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        }
-      });
+      // SECURITY: Validate access token format to prevent SSRF and injection attacks
+      try {
+        validateOAuthTokenFormat(accessToken);
+      } catch (validationError: any) {
+        console.error('[OAuth] Invalid access token format:', validationError.message);
+        return done(new Error('Invalid access token format'));
+      }
+      
+      // SECURITY: Validate userinfo URL to prevent SSRF attacks
+      try {
+        validateOAuthUserinfoUrl(userinfoURL);
+      } catch (validationError: any) {
+        console.error('[OAuth] Invalid userinfo URL:', validationError.message);
+        return done(new Error('Invalid OAuth configuration'));
+      }
+      
+      // Configure timeout for userinfo fetch (default 10s, configurable via env)
+      const timeoutMs = parseInt(process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000', 10);
+      
+      const fetchOptions = createSecureFetchOptions(
+        userinfoURL,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          }
+        },
+        undefined, // no API key env var
+        timeoutMs  // explicit timeout
+      );
+      
+      console.log(`[OAuth] Fetching userinfo from ${userinfoURL} (timeout: ${timeoutMs}ms)`);
       
       const response = await fetch(userinfoURL, fetchOptions);
       
       if (!response.ok) {
-        return done(new Error(`Failed to fetch user profile: ${response.statusText}`));
+        const errorMsg = `Failed to fetch user profile: ${response.status} ${response.statusText}`;
+        console.error(`[OAuth] ${errorMsg}`);
+        return done(new Error(errorMsg));
       }
       
       const userProfile = await response.json();
@@ -139,9 +216,20 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
         ...userProfile
       };
       
+      console.log(`[OAuth] User profile fetched successfully: ${user.email}`);
+      
       // Pass access token as authInfo so it's available in the callback route
       return done(null, user, { accessToken });
-    } catch (error) {
+    } catch (error: any) {
+      // Handle timeout specifically
+      if (error.name === 'AbortError') {
+        const timeoutMsg = `OAuth userinfo request timed out after ${process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000'}ms`;
+        console.error(`[OAuth] ${timeoutMsg}`);
+        return done(new Error(timeoutMsg));
+      }
+      
+      // Handle other fetch errors
+      console.error('[OAuth] Error fetching user profile:', error.message || error);
       return done(error);
     }
   }));

@@ -1,4 +1,4 @@
-import { useState, FormEvent, useEffect } from 'react';
+import { useState, FormEvent, useEffect, useId } from 'react';
 import { EyeOfMimirLogo } from '../components/EyeOfMimirLogo';
 
 interface AuthConfig {
@@ -16,6 +16,8 @@ export function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const usernameId = useId();
+  const passwordId = useId();
 
   useEffect(() => {
     // Check if already authenticated by testing auth status
@@ -105,11 +107,11 @@ export function Login() {
           <form onSubmit={handleDevLogin} className="mt-8 space-y-6">
             <div className="space-y-4">
               <div>
-                <label htmlFor="username" className="block text-sm font-medium text-gray-300 mb-2">
+                <label htmlFor={usernameId} className="block text-sm font-medium text-gray-300 mb-2">
                   Username
                 </label>
                 <input
-                  id={`username-${Math.random()}`}
+                  id={usernameId}
                   name="username"
                   type="text"
                   required
@@ -121,11 +123,11 @@ export function Login() {
               </div>
 
               <div>
-                <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
+                <label htmlFor={passwordId} className="block text-sm font-medium text-gray-300 mb-2">
                   Password
                 </label>
                 <input
-                  id={`password-${Math.random()}`}
+                  id={passwordId}
                   name="password"
                   type="password"
                   required
