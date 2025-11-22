@@ -77,6 +77,11 @@ export function NodeManager() {
   });
 
   const loadTypes = useCallback(async () => {
+    if (!apiUrl) {
+      console.warn('[NodeManager] Cannot load types - apiUrl not set');
+      return;
+    }
+    
     setLoading(true);
     setError('');
     
@@ -104,6 +109,11 @@ export function NodeManager() {
 
 
   const loadNodesForType = useCallback(async (type: string, page: number = 1) => {
+    if (!apiUrl) {
+      console.warn('[NodeManager] Cannot load nodes - apiUrl not set');
+      return;
+    }
+    
     setLoading(true);
     setError('');
     
@@ -183,15 +193,18 @@ export function NodeManager() {
         if (message.authHeaders && Object.keys(message.authHeaders).length > 0) {
           console.log('[NodeManager] Auth header keys:', Object.keys(message.authHeaders));
         }
-        setApiUrl(message.config.apiUrl);
+        const newApiUrl = message.config.apiUrl;
+        setApiUrl(newApiUrl);
         setAuthHeaders(message.authHeaders || {});
         
         // Manually trigger loadTypes after setting both apiUrl and authHeaders
         // This ensures authHeadersRef is updated before the fetch call
         setTimeout(() => {
-          if (message.config.apiUrl && message.authHeaders) {
-            console.log('[NodeManager] Triggering loadTypes with auth headers');
+          if (newApiUrl) {
+            console.log('[NodeManager] Triggering loadTypes with URL:', newApiUrl);
             loadTypes();
+          } else {
+            console.warn('[NodeManager] No apiUrl provided, skipping loadTypes');
           }
         }, 0);
       } else if (message.command === 'deleteConfirmed') {

@@ -295,6 +295,33 @@ async function startHttpServer() {
 
   app.post('/mcp', async (req, res) => {
     try {
+      // CENTRALIZED AUTH CHECK: If security enabled, require authentication (stateless JWT/OAuth)
+      if (process.env.MIMIR_ENABLE_SECURITY === 'true') {
+        const authHeader = req.headers['authorization'] as string;
+        const hasAuth = authHeader || 
+                        req.headers['x-api-key'] || 
+                        req.cookies?.mimir_oauth_token ||
+                        req.query.access_token ||
+                        req.query.api_key;
+        
+        if (!hasAuth) {
+          return res.status(401).json({
+            jsonrpc: '2.0',
+            error: { code: -32001, message: 'Unauthorized: Authentication required' },
+            id: req.body?.id || null
+          });
+        }
+        
+        // Validate token using stateless apiKeyAuth (JWT/OAuth - NO SESSIONS)
+        await new Promise<void>((resolve, reject) => {
+          apiKeyAuth(req, res, (err?: any) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      }
+      // If security disabled: BYPASS ALL AUTH CHECKS
+      
       let method = req.body?.method || 'unknown';
       console.warn(`[HTTP] Request method: ${method} (shared session mode)`);
       
@@ -458,7 +485,7 @@ async function startHttpServer() {
   });
 
   const port = parseInt(process.env.PORT || process.env.MCP_HTTP_PORT || '3000', 10);
-  const server = app.listen(port, () => {
+  const httpServer = app.listen(port, () => {
     console.error(`✅ HTTP server listening on http://localhost:${port}/mcp`);
     console.error(`✅ Health check: http://localhost:${port}/health`);
     console.error(`🎨 Mimir Portal UI: http://localhost:${port}/portal`);
@@ -478,7 +505,7 @@ async function startHttpServer() {
     }
     
     // Close server
-    server.close(() => {
+    httpServer.close(() => {
       console.log('✅ HTTP server closed');
       process.exit(0);
     });

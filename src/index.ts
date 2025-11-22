@@ -87,6 +87,7 @@ export const server = new Server(
 // ============================================================================
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+  console.error(`[MCP] tools/list called, returning ${allTools.length} tools`);
   return { tools: allTools };
 });
 

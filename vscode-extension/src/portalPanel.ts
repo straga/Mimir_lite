@@ -118,7 +118,7 @@ export class PortalPanel {
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; 
           script-src 'nonce-${nonce}' 'unsafe-eval'; 
           style-src ${webview.cspSource} 'unsafe-inline'; 
-          connect-src http: https:;
+          connect-src ${webview.cspSource} http://localhost:* http://127.0.0.1:*;
           font-src ${webview.cspSource};">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Mimir Chat</title>
