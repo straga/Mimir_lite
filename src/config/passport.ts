@@ -86,16 +86,34 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
   
   // Custom state store for OAuth with proper CSRF protection
   // Stores state parameters in memory with expiration for validation
+  // Defined at module level to enable singleton pattern and cleanup
   class SecureStateStore {
     private states: Map<string, { timestamp: number; vscodeData?: any }> = new Map();
     private readonly STATE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
     private cleanupTimer: NodeJS.Timeout | null = null;
+    private static instance: SecureStateStore | null = null;
     
     constructor() {
       // Clean up expired states every minute
       // Use unref() to allow process to exit cleanly and prevent memory leak
       this.cleanupTimer = setInterval(() => this.cleanupExpiredStates(), 60 * 1000);
       this.cleanupTimer.unref();
+    }
+    
+    // Singleton pattern to prevent multiple instances during hot reload
+    static getInstance(): SecureStateStore {
+      if (!SecureStateStore.instance) {
+        SecureStateStore.instance = new SecureStateStore();
+      }
+      return SecureStateStore.instance;
+    }
+    
+    // Module-level cleanup for hot reload scenarios
+    static destroyInstance() {
+      if (SecureStateStore.instance) {
+        SecureStateStore.instance.destroy();
+        SecureStateStore.instance = null;
+      }
     }
     
     private cleanupExpiredStates() {
@@ -178,13 +196,19 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
     }
   }
   
+  // Store class reference globally for cleanup
+  (global as any).__SecureStateStore = SecureStateStore;
+  
+  // Use singleton instance to prevent memory leaks during hot reload
+  const stateStore = SecureStateStore.getInstance();
+  
   passport.use('oauth', new OAuth2Strategy({
     authorizationURL: authorizationURL,
     tokenURL: tokenURL,
     clientID: process.env.MIMIR_OAUTH_CLIENT_ID!,
     clientSecret: process.env.MIMIR_OAUTH_CLIENT_SECRET!,
     callbackURL: process.env.MIMIR_OAUTH_CALLBACK_URL!,
-    store: new SecureStateStore(),
+    store: stateStore,
     passReqToCallback: false,
   }, async (accessToken: string, refreshToken: string, profile: any, done: any) => {
     try {
@@ -277,5 +301,41 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
 // Serialize user to session
 passport.serializeUser((user: any, done) => done(null, user));
 passport.deserializeUser((user: any, done) => done(null, user));
+
+// Export cleanup function for graceful shutdown and hot reload scenarios
+export function cleanupSecureStateStore() {
+  if (process.env.MIMIR_ENABLE_SECURITY === 'true' && process.env.MIMIR_AUTH_PROVIDER) {
+    console.log('[Auth] Cleaning up SecureStateStore');
+    // The SecureStateStore class is defined inside the OAuth if block
+    // We need to access it through a module-level reference
+    if ((global as any).__SecureStateStore) {
+      (global as any).__SecureStateStore.destroyInstance();
+    }
+  }
+}
+
+// Graceful shutdown handler for development hot reload
+// Cleans up the SecureStateStore singleton to prevent memory leaks
+if (process.env.NODE_ENV === 'development') {
+  // Store reference to cleanup function for hot reload
+  if ((global as any).__mimirPassportCleanup) {
+    // Clean up previous instance before creating new one
+    (global as any).__mimirPassportCleanup();
+  }
+  
+  // Register new cleanup function
+  (global as any).__mimirPassportCleanup = cleanupSecureStateStore;
+}
+
+// Process-level cleanup handlers
+process.on('SIGTERM', () => {
+  console.log('[Auth] SIGTERM received, cleaning up SecureStateStore');
+  cleanupSecureStateStore();
+});
+
+process.on('SIGINT', () => {
+  console.log('[Auth] SIGINT received, cleaning up SecureStateStore');
+  cleanupSecureStateStore();
+});
 
 export default passport;

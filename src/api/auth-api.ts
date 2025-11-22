@@ -195,20 +195,22 @@ router.get('/auth/oauth/callback',
       });
       
       // Check if this is a VSCode extension OAuth flow
-      // Decode the state parameter to check for VSCode redirect info
+      // The SecureStateStore.verify() method restores VSCode data to req._vscodeState
       let vscodeRedirect = false;
       let originalState = '';
       
-      const stateParam = req.query.state as string;
-      if (stateParam) {
+      const vscodeState = (req as any)._vscodeState;
+      if (vscodeState) {
         try {
-          const decoded = JSON.parse(Buffer.from(stateParam, 'base64url').toString());
+          // VSCode state was stored as base64url-encoded JSON by the login endpoint
+          const decoded = JSON.parse(Buffer.from(vscodeState, 'base64url').toString());
           if (decoded.vscode === true) {
             vscodeRedirect = true;
             originalState = decoded.state;
           }
         } catch (e) {
-          // Not a VSCode state, continue as normal browser flow
+          // Not a valid VSCode state, continue as normal browser flow
+          console.warn('[Auth] Failed to decode VSCode state:', e);
         }
       }
       
@@ -230,20 +232,22 @@ router.get('/auth/oauth/callback',
     } catch (error: any) {
       console.error('[Auth] OAuth callback error:', error);
       
-      // Check if VSCode redirect from state parameter
+      // Check if VSCode redirect from restored state
       let vscodeRedirect = false;
       let originalState = '';
       
-      const stateParam = req.query.state as string;
-      if (stateParam) {
+      const vscodeState = (req as any)._vscodeState;
+      if (vscodeState) {
         try {
-          const decoded = JSON.parse(Buffer.from(stateParam, 'base64url').toString());
+          // VSCode state was stored as base64url-encoded JSON by the login endpoint
+          const decoded = JSON.parse(Buffer.from(vscodeState, 'base64url').toString());
           if (decoded.vscode === true) {
             vscodeRedirect = true;
             originalState = decoded.state;
           }
         } catch (e) {
-          // Not a VSCode state
+          // Not a valid VSCode state
+          console.warn('[Auth] Failed to decode VSCode state in error handler:', e);
         }
       }
       
