@@ -65,6 +65,7 @@ export function Portal() {
       switch (message.command) {
         case 'config':
           setApiUrl(message.apiUrl || 'http://localhost:9042');
+          setModel(message.model || 'gpt-4.1');
           setAuthHeaders(message.authHeaders || {});
           break;
       }

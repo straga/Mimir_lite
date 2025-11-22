@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useId } from 'react';
 import './styles.css';
 
 // VSCode API is acquired globally in main.tsx
@@ -75,6 +75,11 @@ export function NodeManager() {
     limit: 50,
     types: [] as string[]
   });
+
+  // Generate stable IDs for form inputs
+  const minSimilarityId = useId();
+  const searchLimitId = useId();
+  const nodeTypesId = useId();
 
   const loadTypes = useCallback(async () => {
     if (!apiUrl) {
@@ -530,9 +535,9 @@ export function NodeManager() {
         {showSearchSettings && (
           <div className="search-settings">
             <div className="setting-item">
-              <label htmlFor="min-similarity">Min Similarity:</label>
+              <label htmlFor={minSimilarityId}>Min Similarity:</label>
               <input
-                id={`min-similarity-${Math.random()}`}
+                id={minSimilarityId}
                 type="number"
                 min="0"
                 max="1"
@@ -546,9 +551,9 @@ export function NodeManager() {
               <span className="setting-value">{searchSettings.minSimilarity}</span>
             </div>
             <div className="setting-item">
-              <label htmlFor="search-limit">Max Results:</label>
+              <label htmlFor={searchLimitId}>Max Results:</label>
               <input
-                id={`search-limit-${Math.random()}`}
+                id={searchLimitId}
                 type="number"
                 min="1"
                 max="100"
@@ -561,9 +566,9 @@ export function NodeManager() {
               <span className="setting-value">{searchSettings.limit}</span>
             </div>
             <div className="setting-item">
-              <label htmlFor="node-types">Node Types:</label>
+              <label htmlFor={nodeTypesId}>Node Types:</label>
               <select
-                id={`node-types-${Math.random()}`}
+                id={nodeTypesId}
                 multiple
                 value={searchSettings.types}
                 onChange={(e) => {

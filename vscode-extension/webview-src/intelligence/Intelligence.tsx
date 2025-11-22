@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useId } from 'react';
 import './styles.css';
 
 declare const vscode: any;
@@ -79,6 +79,10 @@ export function Intelligence() {
     minSimilarity: 0.75,
     limit: 20
   });
+
+  // Generate stable IDs for form inputs
+  const minSimilarityId = useId();
+  const searchLimitId = useId();
 
   const loadFolders = useCallback(async () => {
     try {
@@ -506,9 +510,9 @@ export function Intelligence() {
         {showSearchSettings && (
           <div className="search-settings">
             <div className="setting-item">
-              <label htmlFor="min-similarity">Min Similarity:</label>
+              <label htmlFor={minSimilarityId}>Min Similarity:</label>
               <input
-                id={`min-similarity-${Math.random()}`}
+                id={minSimilarityId}
                 type="range"
                 min="0.5"
                 max="1.0"
@@ -522,9 +526,9 @@ export function Intelligence() {
               <span className="setting-value">{searchSettings.minSimilarity.toFixed(2)}</span>
             </div>
             <div className="setting-item">
-              <label htmlFor="search-limit">Max Results:</label>
+              <label htmlFor={searchLimitId}>Max Results:</label>
               <input
-                id={`search-limit-${Math.random()}`}
+                id={searchLimitId}
                 type="number"
                 min="5"
                 max="100"

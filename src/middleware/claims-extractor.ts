@@ -26,9 +26,7 @@ export function extractClaims(user: any, claimPath: string): string[] {
   if (Array.isArray(value)) {
     const claims: string[] = [];
     
-    for (let i = 0; i < value.length; i++) {
-      const item = value[i];
-      
+    for (const [i, item] of value.entries()) {
       // Accept strings directly
       if (typeof item === 'string') {
         claims.push(item);

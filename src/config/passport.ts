@@ -89,19 +89,36 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
   class SecureStateStore {
     private states: Map<string, { timestamp: number; vscodeData?: any }> = new Map();
     private readonly STATE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+    private cleanupTimer: NodeJS.Timeout | null = null;
     
     constructor() {
       // Clean up expired states every minute
-      setInterval(() => this.cleanupExpiredStates(), 60 * 1000);
+      // Use unref() to allow process to exit cleanly and prevent memory leak
+      this.cleanupTimer = setInterval(() => this.cleanupExpiredStates(), 60 * 1000);
+      this.cleanupTimer.unref();
     }
     
     private cleanupExpiredStates() {
       const now = Date.now();
+      let cleanedCount = 0;
       for (const [state, data] of this.states.entries()) {
         if (now - data.timestamp > this.STATE_EXPIRY_MS) {
           this.states.delete(state);
+          cleanedCount++;
         }
       }
+      if (cleanedCount > 0) {
+        console.log(`[OAuth] Cleaned up ${cleanedCount} expired state(s)`);
+      }
+    }
+    
+    // Cleanup method to clear interval and states (for testing or shutdown)
+    destroy() {
+      if (this.cleanupTimer) {
+        clearInterval(this.cleanupTimer);
+        this.cleanupTimer = null;
+      }
+      this.states.clear();
     }
     
     store(req: any, callbackOrMeta: any, maybeCallback?: any) {
