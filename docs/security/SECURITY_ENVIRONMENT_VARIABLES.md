@@ -1001,6 +1001,49 @@ echo "✅ All required security variables are set"
 
 ---
 
+## File Indexing Security
+
+### `MIMIR_SENSITIVE_FILES`
+
+**Type:** Comma-separated list  
+**Default:** See default list below  
+**Phase:** 1+ (Security best practice)
+
+**Description:**  
+Configures which files should be excluded from indexing to prevent accidental exposure of sensitive data. The file indexer will skip any files matching these exact names.
+
+**Default Value:**
+```
+.env,.env.local,.env.development,.env.production,.env.test,.env.staging,.env.example,.npmrc,.yarnrc,.pypirc,.netrc,_netrc,id_rsa,id_dsa,id_ecdsa,id_ed25519,credentials,secrets.yml,secrets.yaml,secrets.json,master.key,production.key
+```
+
+**Examples:**
+
+Add custom sensitive files:
+```bash
+# Extend defaults with custom files
+MIMIR_SENSITIVE_FILES=".env,.env.local,.npmrc,id_rsa,my-secrets.txt,api-keys.json"
+```
+
+Minimal configuration (only environment files):
+```bash
+# Only skip environment files
+MIMIR_SENSITIVE_FILES=".env,.env.local,.env.production"
+```
+
+**Security Note:**  
+This protects against accidental indexing of sensitive data. Files matching these names are excluded from:
+- File indexing and chunking
+- Vector embeddings
+- Neo4j knowledge graph storage
+- Search results
+
+**See Also:**
+- File indexer also checks for sensitive patterns in filenames (e.g., "password", "secret", "token")
+- `.gitignore` patterns are respected separately
+
+---
+
 ## 📚 Related Documentation
 
 - [Reverse Proxy Security Guide](./REVERSE_PROXY_SECURITY_GUIDE.md) - Phase 1 implementation

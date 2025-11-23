@@ -187,8 +187,8 @@ export async function initRBACConfig(): Promise<RBACConfig> {
       // Store the error for diagnostics
       loadingError = error;
       
-      // IMPORTANT: Don't reset configLoadPromise - keep it so concurrent calls
-      // wait for this same promise and get the same default config
+      // Reset promise to allow retry on next call
+      configLoadPromise = null;
     }
     
     // Return default config (cached so all callers get the same instance)

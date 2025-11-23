@@ -7,6 +7,7 @@ import passport from 'passport';
 import { Strategy as LocalStrategy } from 'passport-local';
 import { Strategy as OAuth2Strategy } from 'passport-oauth2';
 import { createSecureFetchOptions, validateOAuthTokenFormat, validateOAuthUserinfoUrl } from '../utils/fetch-helper.js';
+import { getOAuthTimeout } from './oauth-constants.js';
 
 // Development: Local username/password (configurable via env vars)
 // Supports multiple dev users with different roles for RBAC testing
@@ -242,7 +243,7 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
       }
       
       // Configure timeout for userinfo fetch (default 10s, configurable via env)
-      const timeoutMs = parseInt(process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000', 10);
+      const timeoutMs = getOAuthTimeout();
       
       const fetchOptions = createSecureFetchOptions(
         userinfoURL,
@@ -286,7 +287,7 @@ if (process.env.MIMIR_ENABLE_SECURITY === 'true' &&
     } catch (error: any) {
       // Handle timeout specifically
       if (error.name === 'AbortError') {
-        const timeoutMsg = `OAuth userinfo request timed out after ${process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000'}ms`;
+        const timeoutMsg = `OAuth userinfo request timed out after ${getOAuthTimeout()}ms`;
         console.error(`[OAuth] ${timeoutMsg}`);
         return done(new Error(timeoutMsg));
       }

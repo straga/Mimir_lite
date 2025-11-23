@@ -411,14 +411,21 @@ export class FileIndexer {
     }
     
     // Skip sensitive files by name (Industry Standard Security)
-    const sensitiveFileNames = new Set([
-      '.env', '.env.local', '.env.development', '.env.production', '.env.test', '.env.staging',
+    // Configurable via MIMIR_SENSITIVE_FILES environment variable (comma-separated)
+    const defaultSensitiveFiles = [
+      '.env', '.env.local', '.env.development', '.env.production', '.env.test', '.env.staging', '.env.example', // Environment files
       '.npmrc', '.yarnrc', '.pypirc', // Package manager configs with tokens
       '.netrc', '_netrc', // FTP/HTTP credentials
       'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', // SSH private keys
       'credentials', 'secrets.yml', 'secrets.yaml', 'secrets.json',
       'master.key', 'production.key' // Rails secrets
-    ]);
+    ];
+    
+    const sensitiveFileNames = new Set(
+      process.env.MIMIR_SENSITIVE_FILES 
+        ? process.env.MIMIR_SENSITIVE_FILES.split(',').map(f => f.trim()).filter(f => f.length > 0)
+        : defaultSensitiveFiles
+    );
     
     if (sensitiveFileNames.has(fileName)) {
       return true;

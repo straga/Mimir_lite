@@ -91,7 +91,7 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
       }
       
       // Configure timeout for OAuth validation (default 10s, configurable via env)
-      const timeoutMs = parseInt(process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000', 10);
+      const timeoutMs = getOAuthTimeout();
       
       // Validate token by calling OAuth provider's userinfo endpoint with timeout
       const fetchOptions = createSecureFetchOptions(
@@ -129,7 +129,7 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
     } catch (oauthError: any) {
       // Handle timeout specifically
       if (oauthError.name === 'AbortError') {
-        console.error(`[OAuth Auth] Token validation timed out after ${process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000'}ms`);
+        console.error(`[OAuth Auth] Token validation timed out after ${getOAuthTimeout()}ms`);
         return res.status(401).json({ error: 'OAuth token validation timed out' });
       }
       

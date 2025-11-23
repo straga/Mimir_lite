@@ -2,6 +2,7 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import passport from '../config/passport.js';
 import { JWT_SECRET } from '../utils/jwt-secret.js';
+import { getOAuthTimeout } from '../config/oauth-constants.js';
 
 const router = Router();
 
@@ -406,7 +407,7 @@ router.get('/auth/status', async (req, res) => {
         }
         
         // Configure timeout for OAuth validation (default 10s, configurable via env)
-        const timeoutMs = parseInt(process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000', 10);
+        const timeoutMs = getOAuthTimeout();
         
         // Use createSecureFetchOptions for timeout support
         const fetchOptions = createSecureFetchOptions(
@@ -440,7 +441,7 @@ router.get('/auth/status', async (req, res) => {
       } catch (oauthError: any) {
         // Handle timeout specifically
         if (oauthError.name === 'AbortError') {
-          console.error(`[Auth] OAuth token validation timed out after ${process.env.MIMIR_OAUTH_TIMEOUT_MS || '10000'}ms`);
+          console.error(`[Auth] OAuth token validation timed out after ${getOAuthTimeout()}ms`);
           return res.json({ authenticated: false, error: 'OAuth validation timed out' });
         }
         
