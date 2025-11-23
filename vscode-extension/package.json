@@ -2,8 +2,8 @@
   "name": "mimir-chat",
   "displayName": "Mimir - AI Platform for Code Intelligence",
   "description": "Complete AI platform with Graph-RAG chat, visual multi-agent workflow orchestration, and intelligent code indexing. Build complex agent workflows, chat with your codebase, and gain deep insights into your projects.",
-  "version": "0.1.0",
-  "publisher": "mimir",
+  "version": "0.1.1",
+  "publisher": "OrneryD",
   "icon": "images/icon.png",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
