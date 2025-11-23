@@ -79,13 +79,14 @@ Mimir has successfully completed **Phase 1 & 2 Security Implementation**, achiev
 **Stateless Token Management**
 - ✅ HTTP-only cookies (prevents XSS)
 - ✅ Secure flag in production (HTTPS only)
-- ✅ JWT tokens for dev login (no sessions)
+- ✅ JWT tokens for dev login (stateless, no sessions)
 - ✅ OAuth access tokens for external providers
 - ✅ No server-side session storage
+- ✅ Token expiration: 7 days (login), 90 days (OAuth refresh)
 
 **Implementation:**
 - `src/http-server.ts` - Cookie configuration
-- `src/api/auth-api.ts` - JWT/OAuth token handling
+- `src/api/auth-api.ts` - JWT/OAuth token handling with hardcoded expiration
 
 ### 4. Protected Routes
 

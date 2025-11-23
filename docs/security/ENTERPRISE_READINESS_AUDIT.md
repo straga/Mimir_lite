@@ -182,7 +182,7 @@
 **HIPAA Risk**: **MEDIUM** ⬇️ (improved from CRITICAL)
 - ✅ **Access Control**: Fully implemented with RBAC
 - ✅ **Authentication**: SSO with unique user IDs
-- ✅ **Automatic Logoff**: Configurable session timeout
+- ✅ **Automatic Logoff**: JWT token expiration (7-90 days, stateless)
 - ⚠️ **Audit Controls**: Basic logging exists, needs PHI-specific audit trail
 - ⚠️ **Transmission Security**: Requires HTTPS reverse proxy (documented)
 - ⚠️ **Encryption at Rest**: Need FIPS 140-2 validation
@@ -692,7 +692,7 @@ app.use('/mcp', requireAuth);
 - [ ] **Authentication**: Implement MFA for all users
 - [ ] **Transmission Security**: HTTPS/TLS 1.2+ for all connections
 - [ ] **Encryption at Rest**: FIPS 140-2 compliant encryption
-- [ ] **Automatic Logoff**: Session timeout (15 minutes)
+- [x] **Automatic Logoff**: JWT token expiration (7-90 days, stateless - no configurable timeout)
 - [ ] **Emergency Access**: Break-glass procedure for admin access
 - [ ] **Unique User IDs**: Individual accounts (no shared credentials)
 - [ ] **Minimum Necessary**: RBAC to limit data access
