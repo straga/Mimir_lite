@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Mimir - The Memory OS for Developers and Autonomous Agents. Open-source graph-powered memory with multi-agent orchestration.">
+    <meta name="keywords" content="AI memory, graph database, multi-agent, RAG, semantic search, developer tools, open source">
+    <title>Mimir - Memory OS for AI Agents</title>
+    
+    <!-- Open Graph / Social Media -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Mimir - Memory OS for AI Agents">
+    <meta property="og:description" content="Graph-powered persistent memory for autonomous agents. Free, open-source, and enterprise-ready.">
+    <meta property="og:image" content="https://github.com/user-attachments/assets/f4e3be80-79fe-4e10-b010-9a39b5f70584">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --primary: #FFD700;
+            --primary-dark: #B8941F;
+            --secondary: #00D9FF;
+            --dark-bg: #0A0E1A;
+            --darker-bg: #060911;
+            --card-bg: #111827;
+            --text-primary: #F9FAFB;
+            --text-secondary: #9CA3AF;
+            --border: #1F2937;
+            --gradient-start: #FFD700;
+            --gradient-end: #00D9FF;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--dark-bg);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+        
+        /* Animated background */
+        .animated-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            opacity: 0.4;
+            background: 
+                radial-gradient(circle at 20% 50%, rgba(255, 215, 0, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(0, 217, 255, 0.1) 0%, transparent 50%);
+            animation: float 20s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+        
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+        
+        /* Header */
+        header {
+            padding: 2rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--primary);
+            text-decoration: none;
+        }
+        
+        .logo img {
+            width: 48px;
+            height: 48px;
+            filter: drop-shadow(0 0 10px rgba(255, 215, 0, 0.3));
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+        
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: var(--primary);
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: var(--darker-bg);
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(255, 215, 0, 0.3);
+        }
+        
+        .btn-secondary {
+            border: 2px solid var(--primary);
+            color: var(--primary);
+            background: transparent;
+        }
+        
+        .btn-secondary:hover {
+            background: var(--primary);
+            color: var(--darker-bg);
+        }
+        
+        /* Hero Section */
+        .hero {
+            padding: 6rem 0;
+            text-align: center;
+        }
+        
+        .hero h1 {
+            font-size: 4rem;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero .subtitle {
+            font-size: 1.5rem;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+            font-weight: 300;
+        }
+        
+        .hero .tagline {
+            font-size: 1.25rem;
+            color: var(--text-primary);
+            margin-bottom: 3rem;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .badges {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-bottom: 3rem;
+        }
+        
+        .badges img {
+            height: 20px;
+        }
+        
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        /* Features Section */
+        .section {
+            padding: 5rem 0;
+        }
+        
+        .section-title {
+            text-align: center;
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+        
+        .section-subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 1.25rem;
+            margin-bottom: 4rem;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+        
+        .feature-card {
+            background: var(--card-bg);
+            padding: 2rem;
+            border-radius: 1rem;
+            border: 1px solid var(--border);
+            transition: all 0.3s;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--primary);
+            box-shadow: 0 10px 40px rgba(255, 215, 0, 0.1);
+        }
+        
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .feature-card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: var(--primary);
+        }
+        
+        .feature-card p {
+            color: var(--text-secondary);
+        }
+        
+        /* Competitive Edge */
+        .competitive-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .edge-card {
+            background: linear-gradient(135deg, rgba(255, 215, 0, 0.1) 0%, rgba(0, 217, 255, 0.1) 100%);
+            padding: 1.5rem;
+            border-radius: 1rem;
+            border: 1px solid var(--border);
+        }
+        
+        .edge-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.75rem;
+            color: var(--secondary);
+        }
+        
+        .edge-card p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        /* Comparison Table */
+        .comparison-table {
+            background: var(--card-bg);
+            border-radius: 1rem;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        
+        .comparison-table table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .comparison-table th,
+        .comparison-table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .comparison-table th {
+            background: var(--darker-bg);
+            font-weight: 600;
+            color: var(--primary);
+        }
+        
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .check {
+            color: #10B981;
+        }
+        
+        .cross {
+            color: #EF4444;
+        }
+        
+        .warning {
+            color: #F59E0B;
+        }
+        
+        /* Code Block */
+        .code-block {
+            background: var(--darker-bg);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 2rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            overflow-x: auto;
+            margin-top: 2rem;
+        }
+        
+        .code-block pre {
+            color: var(--text-primary);
+            line-height: 1.8;
+        }
+        
+        .code-comment {
+            color: var(--text-secondary);
+        }
+        
+        .code-keyword {
+            color: #C678DD;
+        }
+        
+        .code-string {
+            color: #98C379;
+        }
+        
+        .code-function {
+            color: var(--secondary);
+        }
+        
+        /* Stats */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 2rem;
+            text-align: center;
+        }
+        
+        .stat {
+            padding: 2rem;
+            background: var(--card-bg);
+            border-radius: 1rem;
+            border: 1px solid var(--border);
+        }
+        
+        .stat-number {
+            font-size: 3rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .stat-label {
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+        
+        /* Footer */
+        footer {
+            padding: 3rem 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-secondary);
+        }
+        
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .footer-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+        
+        .footer-links a:hover {
+            color: var(--primary);
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+            
+            .hero .subtitle {
+                font-size: 1.25rem;
+            }
+            
+            .hero .tagline {
+                font-size: 1rem;
+            }
+            
+            .nav-links {
+                gap: 1rem;
+            }
+            
+            .section-title {
+                font-size: 2rem;
+            }
+            
+            .features-grid,
+            .competitive-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="animated-bg"></div>
+    
+    <header>
+        <nav class="container">
+            <a href="#" class="logo">
+                <img src="https://github.com/user-attachments/assets/f4e3be80-79fe-4e10-b010-9a39b5f70584" alt="Mimir Logo">
+                <span>MIMIR</span>
+            </a>
+            <div class="nav-links">
+                <a href="https://github.com/orneryd/Mimir">GitHub</a>
+                <a href="https://github.com/orneryd/Mimir/tree/main/docs">Docs</a>
+                <a href="https://marketplace.visualstudio.com/items?itemName=OrneryD.mimir-chat">VS Code Extension</a>
+            </div>
+        </nav>
+    </header>
+    
+    <main>
+        <!-- Hero Section -->
+        <section class="hero">
+            <div class="container">
+                <h1>The Memory OS for<br>Autonomous Agents</h1>
+                <p class="subtitle">Graph-Powered Persistent Memory + Multi-Agent Orchestration</p>
+                <p class="tagline">Give your AI a brain that remembers, learns, and builds knowledge over time. Free, open-source, and enterprise-ready.</p>
+                
+                <div class="badges">
+                    <a href="https://github.com/orneryd/Mimir"><img src="https://img.shields.io/github/stars/orneryd/Mimir?style=for-the-badge&logo=github&color=FFD700" alt="GitHub Stars"></a>
+                    <a href="https://github.com/orneryd/Mimir/fork"><img src="https://img.shields.io/github/forks/orneryd/Mimir?style=for-the-badge&logo=github&color=00D9FF" alt="GitHub Forks"></a>
+                    <a href="https://github.com/orneryd/Mimir/issues"><img src="https://img.shields.io/github/issues/orneryd/Mimir?style=for-the-badge&logo=github&color=FFD700" alt="GitHub Issues"></a>
+                    <a href="https://github.com/orneryd/Mimir/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License"></a>
+                    <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/docker-ready-blue?style=for-the-badge&logo=docker" alt="Docker Ready"></a>
+                    <a href="https://neo4j.com/"><img src="https://img.shields.io/badge/neo4j-5.15-008CC1?style=for-the-badge&logo=neo4j" alt="Neo4j"></a>
+                </div>
+                
+                <div class="cta-buttons">
+                    <a href="https://github.com/orneryd/Mimir" class="btn btn-primary">
+                        <span>⭐ Star on GitHub</span>
+                    </a>
+                    <a href="https://github.com/orneryd/Mimir/tree/main/docs/getting-started" class="btn btn-secondary">
+                        <span>📚 Get Started</span>
+                    </a>
+                    <a href="https://marketplace.visualstudio.com/items?itemName=OrneryD.mimir-chat" class="btn btn-secondary">
+                        <span>🔌 VS Code Extension</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Problem/Solution -->
+        <section class="section">
+            <div class="container">
+                <h2 class="section-title">Why Mimir Exists</h2>
+                <p class="section-subtitle">Most AI agents forget everything between conversations. Mimir changes that.</p>
+                
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">🧠</div>
+                        <h3>Graph-Powered Memory</h3>
+                        <p>Not just a vector store—a living knowledge graph that understands relationships between tasks, files, and concepts. ACID transactions guarantee your data is always consistent.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">🤖</div>
+                        <h3>Multi-Agent Coordination</h3>
+                        <p>PM → Worker → QC workflows out of the box. Multiple agents share a single brain, preventing conflicts with built-in locking and coordination.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">💻</div>
+                        <h3>Code-Aware Intelligence</h3>
+                        <p>Automatically indexes your codebase, tracks architecture decisions, and surfaces relevant context. Perfect for developers managing complex projects.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">🔍</div>
+                        <h3>Semantic Search</h3>
+                        <p>Find tasks by meaning, not keywords. Vector embeddings + graph traversal = discover connections you didn't know existed.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">🔐</div>
+                        <h3>Enterprise-Ready Security</h3>
+                        <p>RBAC, OAuth 2.0, audit logs, multi-tenant isolation. Built on Neo4j's battle-tested transactional guarantees.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">🏠</div>
+                        <h3>100% Self-Hosted</h3>
+                        <p>Your data stays on your infrastructure. No vendor lock-in, no usage limits, no subscription fees. MIT licensed and truly free.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Competitive Edge -->
+        <section class="section" style="background: var(--darker-bg);">
+            <div class="container">
+                <h2 class="section-title">What Makes Mimir Different</h2>
+                <p class="section-subtitle">The only open-source solution combining Graph-RAG with multi-agent orchestration</p>
+                
+                <div class="competitive-grid">
+                    <div class="edge-card">
+                        <h3>🕸️ Native Graph Intelligence</h3>
+                        <p>Competitors store isolated vectors. Mimir understands how everything relates—tasks, files, concepts, and decisions.</p>
+                    </div>
+                    
+                    <div class="edge-card">
+                        <h3>🤝 Multi-Agent by Design</h3>
+                        <p>Built-in PM/Worker/QC patterns. Most frameworks have no concept of shared agent memory or coordination.</p>
+                    </div>
+                    
+                    <div class="edge-card">
+                        <h3>💾 ACID Transactions</h3>
+                        <p>Neo4j guarantees data consistency. Vector databases don't—your data could be corrupted and you'd never know.</p>
+                    </div>
+                    
+                    <div class="edge-card">
+                        <h3>🔌 MCP Protocol Native</h3>
+                        <p>Direct integration with Claude, ChatGPT, and any MCP-compatible assistant. No custom adapters needed.</p>
+                    </div>
+                    
+                    <div class="edge-card">
+                        <h3>📊 Visual Debugging</h3>
+                        <p>Mimir Studio lets you see agent memory, task dependencies, and knowledge graphs in real-time. Competitors give you logs.</p>
+                    </div>
+                    
+                    <div class="edge-card">
+                        <h3>💰 Truly Free Forever</h3>
+                        <p>MIT licensed with no catches. Pinecone starts at $70/mo, Weaviate at $25/mo. Mimir: $0.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Comparison Table -->
+        <section class="section">
+            <div class="container">
+                <h2 class="section-title">Feature Comparison</h2>
+                <p class="section-subtitle">See how Mimir stacks up against other solutions</p>
+                
+                <div class="comparison-table">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Feature</th>
+                                <th>Mimir</th>
+                                <th>Pinecone</th>
+                                <th>Weaviate</th>
+                                <th>Milvus</th>
+                                <th>Qdrant</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Graph Relationships</strong></td>
+                                <td class="check">✅ Native</td>
+                                <td class="cross">❌ None</td>
+                                <td class="warning">⚠️ Limited</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Vector Search</strong></td>
+                                <td class="check">✅ Yes</td>
+                                <td class="check">✅ Yes</td>
+                                <td class="check">✅ Yes</td>
+                                <td class="check">✅ Yes</td>
+                                <td class="check">✅ Yes</td>
+                            </tr>
+                            <tr>
+                                <td><strong>ACID Transactions</strong></td>
+                                <td class="check">✅ Full</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Multi-Agent Support</strong></td>
+                                <td class="check">✅ Built-in</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                            </tr>
+                            <tr>
+                                <td><strong>MCP Integration</strong></td>
+                                <td class="check">✅ Native</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                                <td class="cross">❌ None</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Self-Hosting</strong></td>
+                                <td class="check">✅ Free</td>
+                                <td class="cross">❌ Cloud-only</td>
+                                <td class="check">✅ Yes</td>
+                                <td class="check">✅ Yes</td>
+                                <td class="check">✅ Yes</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Open Source</strong></td>
+                                <td class="check">✅ MIT</td>
+                                <td class="cross">❌ No</td>
+                                <td class="check">✅ Yes</td>
+                                <td class="check">✅ Yes</td>
+                                <td class="check">✅ Yes</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Starting Cost</strong></td>
+                                <td class="check">💰 $0</td>
+                                <td class="cross">💰 $70/mo</td>
+                                <td class="warning">💰 $25/mo</td>
+                                <td class="check">💰 $0</td>
+                                <td class="check">💰 $0</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Quick Start -->
+        <section class="section" style="background: var(--darker-bg);">
+            <div class="container">
+                <h2 class="section-title">Get Started in 60 Seconds</h2>
+                <p class="section-subtitle">One command to launch. That's it.</p>
+                
+                <div class="code-block">
+                    <pre><code><span class="code-comment"># Clone the repository</span>
+<span class="code-keyword">git clone</span> <span class="code-string">https://github.com/orneryd/Mimir.git</span>
+<span class="code-keyword">cd</span> Mimir
+
+<span class="code-comment"># Copy environment template</span>
+<span class="code-keyword">cp</span> env.example .env
+
+<span class="code-comment"># Start all services (auto-detects your platform)</span>
+npm run start
+
+<span class="code-comment"># Open Mimir Web UI</span>
+<span class="code-comment"># Visit: http://localhost:9042</span>
+
+<span class="code-comment"># You're done! 🎉</span>
+<span class="code-comment"># - Portal: http://localhost:9042/portal</span>
+<span class="code-comment"># - Studio: http://localhost:9042/studio</span>
+<span class="code-comment"># - Neo4j: http://localhost:7474</span></code></pre>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Stats -->
+        <section class="section">
+            <div class="container">
+                <h2 class="section-title">Built for Scale</h2>
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-number">13</div>
+                        <div class="stat-label">MCP Tools</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">0</div>
+                        <div class="stat-label">Monthly Cost</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">100%</div>
+                        <div class="stat-label">Open Source</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">∞</div>
+                        <div class="stat-label">Scale Limit</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Use Cases -->
+        <section class="section" style="background: var(--darker-bg);">
+            <div class="container">
+                <h2 class="section-title">Perfect For</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">👨‍💻</div>
+                        <h3>Software Development Teams</h3>
+                        <p>Track decisions, link tasks to code, maintain architectural knowledge, and never lose context across sprints.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">🤖</div>
+                        <h3>AI Researchers</h3>
+                        <p>Build multi-agent systems with persistent memory. Study how agents collaborate and learn over time.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">🏢</div>
+                        <h3>Enterprise Automation</h3>
+                        <p>Deploy self-hosted AI with RBAC, audit logs, and transactional guarantees. No data leaves your network.</p>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">🎓</div>
+                        <h3>Knowledge Management</h3>
+                        <p>Build living knowledge graphs that grow smarter over time. Perfect for research teams and consultants.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- CTA -->
+        <section class="section">
+            <div class="container" style="text-align: center;">
+                <h2 class="section-title">Ready to Give Your AI a Brain?</h2>
+                <p class="section-subtitle">Join the community building the future of AI memory</p>
+                
+                <div class="cta-buttons">
+                    <a href="https://github.com/orneryd/Mimir" class="btn btn-primary">
+                        <span>⭐ Star on GitHub</span>
+                    </a>
+                    <a href="https://github.com/orneryd/Mimir/tree/main/docs" class="btn btn-secondary">
+                        <span>📖 Read the Docs</span>
+                    </a>
+                    <a href="https://github.com/orneryd/Mimir/issues" class="btn btn-secondary">
+                        <span>💬 Join Discussion</span>
+                    </a>
+                </div>
+                
+                <p style="margin-top: 3rem; color: var(--text-secondary);">
+                    <strong>MIT Licensed</strong> • Free Forever • No Strings Attached<br>
+                    <a href="https://github.com/orneryd/Mimir/blob/main/LICENSE" style="color: var(--primary);">View License →</a>
+                </p>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="https://github.com/orneryd/Mimir">GitHub</a>
+                <a href="https://github.com/orneryd/Mimir/tree/main/docs">Documentation</a>
+                <a href="https://github.com/orneryd/Mimir/issues">Issues</a>
+                <a href="https://github.com/orneryd/Mimir/blob/main/LICENSE">MIT License</a>
+                <a href="https://marketplace.visualstudio.com/items?itemName=OrneryD.mimir-chat">VS Code Extension</a>
+            </div>
+            <p>&copy; 2025 Mimir. Open source under MIT License.</p>
+            <p style="margin-top: 1rem; font-size: 0.9rem;">
+                Built with ❤️ by the open-source community
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
