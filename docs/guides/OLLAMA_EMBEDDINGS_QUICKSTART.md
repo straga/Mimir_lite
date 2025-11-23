@@ -18,7 +18,7 @@ This guide helps you quickly enable **vector embeddings** with **Ollama** in Doc
 **1. Create `.env` file:**
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
 **2. Edit `.env` and enable embeddings:**

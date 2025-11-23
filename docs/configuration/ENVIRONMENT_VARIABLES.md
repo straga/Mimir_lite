@@ -10,7 +10,7 @@
 Create a `.env` file in the project root with your configuration:
 
 ```bash
-cp .env.example .env
+cp env.example .env
 # Edit .env with your settings
 ```
 

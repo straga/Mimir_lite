@@ -317,7 +317,7 @@ docker exec mcp_server node setup-file-watch.js
 
 ### 4. Environment Variables for Teams
 
-**Team setup (`.env.example`):**
+**Team setup (`env.example`):**
 ```bash
 # Docker configuration
 HOST_WORKSPACE_ROOT=/path/to/team/project
@@ -330,7 +330,7 @@ WATCH_PATH=/workspace/src
 **Individual developer:**
 ```bash
 # Copy and customize
-cp .env.example .env
+cp env.example .env
 # Edit .env with your local paths
 ```
 

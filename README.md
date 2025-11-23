@@ -273,7 +273,7 @@ To disable auto-indexing, set in `.env`:
 MIMIR_AUTO_INDEX_DOCS=false
 ```
 
-See `.env.example` or `docker-compose.yml` for complete list of configuration options.
+See `env.example` or `docker-compose.yml` for complete list of configuration options.
 
 ### Optional Services
 

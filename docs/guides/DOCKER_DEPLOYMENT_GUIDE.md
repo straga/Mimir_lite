@@ -63,7 +63,7 @@ cd GRAPH-RAG-TODO-main
 ### Step 2: Create Environment File
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
 **Optional**: Edit `.env` to customize settings (defaults work for most cases)

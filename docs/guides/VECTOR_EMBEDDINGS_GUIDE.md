@@ -46,7 +46,7 @@ The MCP server includes **optional vector embeddings** support for semantic file
 
 ```bash
 # Copy example file if you don't have .env yet
-cp .env.example .env
+cp env.example .env
 
 # Edit .env and set:
 MIMIR_FEATURE_VECTOR_EMBEDDINGS=true
@@ -80,7 +80,7 @@ Feature flags are now configured via **environment variables** for easier Docker
 
 ```bash
 # Copy example file if you don't have .env yet
-cp .env.example .env
+cp env.example .env
 
 # Edit .env and set these variables:
 MIMIR_FEATURE_VECTOR_EMBEDDINGS=true
