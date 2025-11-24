@@ -673,25 +673,83 @@
                 <h2 class="section-title">Get Started in 60 Seconds</h2>
                 <p class="section-subtitle">One command to launch. That's it.</p>
                 
-                <div class="code-block">
-                    <pre><code><span class="code-comment"># Clone the repository</span>
+                <!-- Platform Toggle -->
+                <div style="display: flex; justify-content: center; gap: 1rem; margin-bottom: 2rem;">
+                    <button id="btn-macos" class="btn btn-primary" style="padding: 0.5rem 1.5rem;" onclick="showPlatform('macos')">macOS / Linux</button>
+                    <button id="btn-windows" class="btn btn-secondary" style="padding: 0.5rem 1.5rem;" onclick="showPlatform('windows')">Windows</button>
+                </div>
+                
+                <!-- macOS/Linux Installation -->
+                <div id="install-macos" class="code-block">
+                    <pre><code><span class="code-comment"># One-Command Remote Installation (Recommended)</span>
+<span class="code-keyword">curl -fsSL</span> <span class="code-string">https://raw.githubusercontent.com/orneryd/Mimir/main/install.sh</span> | bash
+
+<span class="code-comment"># Or Manual Installation:</span>
+<span class="code-comment"># Clone the repository</span>
 <span class="code-keyword">git clone</span> <span class="code-string">https://github.com/orneryd/Mimir.git</span>
 <span class="code-keyword">cd</span> Mimir
 
-<span class="code-comment"># Copy environment template</span>
-<span class="code-keyword">cp</span> env.example .env
+<span class="code-comment"># Run setup script (checks dependencies, creates .env)</span>
+<span class="code-keyword">./scripts/setup.sh</span>
 
 <span class="code-comment"># Start all services (auto-detects your platform)</span>
 npm run start
-
-<span class="code-comment"># Open Mimir Web UI</span>
-<span class="code-comment"># Visit: http://localhost:9042</span>
 
 <span class="code-comment"># You're done! 🎉</span>
 <span class="code-comment"># - Portal: http://localhost:9042/portal</span>
 <span class="code-comment"># - Studio: http://localhost:9042/studio</span>
 <span class="code-comment"># - Neo4j: http://localhost:7474</span></code></pre>
                 </div>
+                
+                <!-- Windows Installation -->
+                <div id="install-windows" class="code-block" style="display: none;">
+                    <pre><code><span class="code-comment"># One-Command Remote Installation (Recommended)</span>
+<span class="code-keyword">iwr -useb</span> <span class="code-string">https://raw.githubusercontent.com/orneryd/Mimir/main/install.ps1</span> | iex
+
+<span class="code-comment"># Or Manual Installation:</span>
+<span class="code-comment"># Clone the repository</span>
+<span class="code-keyword">git clone</span> <span class="code-string">https://github.com/orneryd/Mimir.git</span>
+<span class="code-keyword">cd</span> Mimir
+
+<span class="code-comment"># Copy environment template</span>
+<span class="code-keyword">Copy-Item</span> env.example .env
+
+<span class="code-comment"># Install dependencies</span>
+npm install
+
+<span class="code-comment"># Start all services (auto-detects AMD64/ARM64)</span>
+npm run start
+
+<span class="code-comment"># You're done! 🎉</span>
+<span class="code-comment"># - Portal: http://localhost:9042/portal</span>
+<span class="code-comment"># - Studio: http://localhost:9042/studio</span>
+<span class="code-comment"># - Neo4j: http://localhost:7474</span></code></pre>
+                </div>
+                
+                <script>
+                    function showPlatform(platform) {
+                        const macosBtn = document.getElementById('btn-macos');
+                        const windowsBtn = document.getElementById('btn-windows');
+                        const macosCode = document.getElementById('install-macos');
+                        const windowsCode = document.getElementById('install-windows');
+                        
+                        if (platform === 'macos') {
+                            macosBtn.classList.remove('btn-secondary');
+                            macosBtn.classList.add('btn-primary');
+                            windowsBtn.classList.remove('btn-primary');
+                            windowsBtn.classList.add('btn-secondary');
+                            macosCode.style.display = 'block';
+                            windowsCode.style.display = 'none';
+                        } else {
+                            windowsBtn.classList.remove('btn-secondary');
+                            windowsBtn.classList.add('btn-primary');
+                            macosBtn.classList.remove('btn-primary');
+                            macosBtn.classList.add('btn-secondary');
+                            windowsCode.style.display = 'block';
+                            macosCode.style.display = 'none';
+                        }
+                    }
+                </script>
             </div>
         </section>
         
