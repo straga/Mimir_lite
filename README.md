@@ -93,13 +93,14 @@ The **ONLY required configuration** is `HOST_WORKSPACE_ROOT` in `.env`:
 ```bash
 # Your main source code directory (default: ~/src)
 # This gives Mimir access to your code for file indexing
-HOST_WORKSPACE_ROOT=~/src
+HOST_WORKSPACE_ROOT=~/src  # ✅ Tilde (~) works automatically!
 ```
 
 **What this does:**
 - Mounts your source directory to the container (default: read-write)
 - You manually choose which folders to index via UI or VSCode plugin
 - **Don't panic!** Indexing is per-folder and requires your explicit action
+- **Tilde expansion**: `~/src` automatically expands to your home directory (e.g., `/Users/john/src`)
 
 **For read-only access**, edit `docker-compose.yml`:
 ```yaml

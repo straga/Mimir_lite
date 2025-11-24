@@ -92,25 +92,30 @@ describe('Path Utilities', () => {
   });
 
   describe('normalizeAndResolve', () => {
-    it('should resolve tilde paths to absolute paths', () => {
+    it('should expand tilde and normalize', () => {
       const result = normalizeAndResolve('~/project');
       expect(result).toBe('/Users/testuser/project');
     });
 
-    it('should normalize Windows paths to Unix style', () => {
-      const result = normalizeAndResolve('C:\\Users\\john\\project');
-      expect(result).toContain('/');
-      expect(result).not.toContain('\\');
-    });
-
     it('should resolve relative paths', () => {
-      const result = normalizeAndResolve('../../other', '/home/user/current/sub');
+      const result = normalizeAndResolve('../other', '/home/user/project');
       expect(result).toBe('/home/user/other');
     });
 
+    it('should normalize Windows paths', () => {
+      const result = normalizeAndResolve('C:\\Users\\john\\file.txt');
+      expect(result).toBe('C:/Users/john/file.txt');
+    });
+
     it('should remove trailing slashes', () => {
-      expect(normalizeAndResolve('/home/user/project/')).toBe('/home/user/project');
-      expect(normalizeAndResolve('/home/user/project///')).toBe('/home/user/project');
+      // Test with already absolute paths (no path.resolve needed)
+      const path1 = normalizeAndResolve('/home/user/project/');
+      const path2 = normalizeAndResolve('/home/user/project///');
+      
+      expect(path1).toBe('/home/user/project');
+      expect(path2).toBe('/home/user/project');
+      expect(path1).not.toMatch(/\/$/);
+      expect(path2).not.toMatch(/\/$/);
     });
 
     it('should preserve root slash', () => {
@@ -122,9 +127,12 @@ describe('Path Utilities', () => {
       expect(result).toBe('/Users/testuser/My Documents/project');
     });
 
-    it('should normalize multiple slashes', () => {
+    it('should normalize multiple slashes in absolute paths', () => {
       const result = normalizeAndResolve('/home//user///project');
-      expect(result).not.toContain('//');
+      // Should not contain consecutive slashes
+      expect(result).not.toMatch(/\/\//);
+      // Should start with single slash
+      expect(result).toMatch(/^\/[^/]/);
     });
   });
 

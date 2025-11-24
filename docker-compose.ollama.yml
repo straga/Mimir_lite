@@ -158,6 +158,7 @@ services:
       # Workspace Configuration
       - WORKSPACE_ROOT=/workspace
       - HOST_WORKSPACE_ROOT=${HOST_WORKSPACE_ROOT:-~/src}  # Pass through from host
+      - HOST_HOME=${HOME}  # Host's home directory for expanding ~ in HOST_WORKSPACE_ROOT
       
       # LLM API Configuration (Copilot - OpenAI-compatible)
       - MIMIR_DEFAULT_PROVIDER=${MIMIR_DEFAULT_PROVIDER:-ollama}

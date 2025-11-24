@@ -99,11 +99,135 @@ We use Vitest for testing. Please:
 
 ### Documentation
 
-If your change affects how users interact with Mimir:
+**CRITICAL REQUIREMENT**: All exported classes, methods, and functions MUST have TSDoc comments with real-world examples.
 
-- Update relevant documentation in `docs/`
-- Update the README if needed
-- Add code comments for complex logic
+#### TSDoc Requirements
+
+Every exported class member and public method must include:
+
+1. **Description** - What it does
+2. **Parameters** - All parameters with types and descriptions
+3. **Returns** - Return type and description
+4. **Examples** - At least 1-3 REAL-WORLD usage examples
+5. **Throws** (if applicable) - Error conditions
+
+#### TSDoc Template
+
+```typescript
+/**
+ * Brief description of what this does
+ * 
+ * Longer explanation if needed, including:
+ * - Key behaviors
+ * - Important notes
+ * - Performance considerations
+ * 
+ * @param paramName - Description of parameter
+ * @param optionalParam - Description (optional)
+ * @returns Description of return value
+ * @throws {ErrorType} When this error occurs
+ * 
+ * @example
+ * // Example 1: Basic usage
+ * const result = await myFunction('value');
+ * console.log(result); // { success: true }
+ * 
+ * @example
+ * // Example 2: With options
+ * const result = await myFunction('value', { 
+ *   recursive: true,
+ *   maxDepth: 3 
+ * });
+ * 
+ * @example
+ * // Example 3: Error handling
+ * try {
+ *   await myFunction('invalid');
+ * } catch (error) {
+ *   console.error('Failed:', error.message);
+ * }
+ */
+export async function myFunction(
+  paramName: string,
+  optionalParam?: Options
+): Promise<Result> {
+  // Implementation
+}
+```
+
+#### Real-World Example Requirements
+
+Examples must be:
+- ✅ **Realistic** - Show actual use cases, not toy examples
+- ✅ **Complete** - Include necessary imports and setup
+- ✅ **Tested** - Actually work when copy-pasted
+- ✅ **Diverse** - Cover common scenarios, edge cases, and error handling
+
+**Bad Example:**
+```typescript
+/**
+ * Adds a node
+ * @example
+ * addNode('todo', {})
+ */
+```
+
+**Good Example:**
+```typescript
+/**
+ * Add a node to the knowledge graph
+ * 
+ * Creates a new node with the specified type and properties.
+ * Automatically generates embeddings if content is provided.
+ * 
+ * @param type - Node type (todo, file, concept, memory, etc.)
+ * @param properties - Node properties (title, description, content, etc.)
+ * @returns Created node with generated ID
+ * 
+ * @example
+ * // Create a TODO task
+ * const todo = await graphManager.addNode('todo', {
+ *   title: 'Implement user authentication',
+ *   description: 'Add JWT-based auth with refresh tokens',
+ *   status: 'pending',
+ *   priority: 'high'
+ * });
+ * console.log(todo.id); // 'node-1234'
+ * 
+ * @example
+ * // Create a memory with automatic embedding
+ * const memory = await graphManager.addNode('memory', {
+ *   title: 'API Design Pattern',
+ *   content: 'Use RESTful conventions with versioned endpoints',
+ *   tags: ['api', 'architecture']
+ * });
+ * // Embedding generated automatically from content
+ * 
+ * @example
+ * // Create a file node during indexing
+ * const file = await graphManager.addNode('file', {
+ *   path: '/src/auth/login.ts',
+ *   name: 'login.ts',
+ *   language: 'typescript',
+ *   size: 2048,
+ *   lastModified: new Date().toISOString()
+ * });
+ */
+```
+
+#### Documentation Checklist
+
+Before submitting code:
+
+- [ ] All exported classes have TSDoc comments
+- [ ] All public methods have TSDoc comments
+- [ ] All examples are real-world scenarios
+- [ ] Examples include error handling where applicable
+- [ ] Complex logic has inline comments
+- [ ] Update `docs/` if user-facing changes
+- [ ] Update README if needed
+
+**Failure to document code will result in PR rejection.** This is non-negotiable for code quality and maintainability.
 
 ## 🔄 Submitting a Pull Request
 

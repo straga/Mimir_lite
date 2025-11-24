@@ -54,14 +54,88 @@ export class GraphManager implements IGraphManager {
   }
 
   /**
-   * Get the Neo4j driver instance
+   * Get the Neo4j driver instance for direct database access
+   * 
+   * Use this when you need to execute custom Cypher queries or manage
+   * transactions that aren't covered by the GraphManager API.
+   * 
+   * @returns Neo4j driver instance
+   * 
+   * @example
+   * // Execute custom Cypher query
+   * const driver = graphManager.getDriver();
+   * const session = driver.session();
+   * try {
+   *   const result = await session.run(
+   *     'MATCH (n:Node) WHERE n.created > $date RETURN count(n)',
+   *     { date: '2024-01-01' }
+   *   );
+   *   console.log('Nodes created:', result.records[0].get(0));
+   * } finally {
+   *   await session.close();
+   * }
+   * 
+   * @example
+   * // Create custom transaction
+   * const driver = graphManager.getDriver();
+   * const session = driver.session();
+   * const tx = session.beginTransaction();
+   * try {
+   *   await tx.run('CREATE (n:CustomNode {id: $id})', { id: 'custom-1' });
+   *   await tx.run('CREATE (n:CustomNode {id: $id})', { id: 'custom-2' });
+   *   await tx.commit();
+   * } catch (error) {
+   *   await tx.rollback();
+   *   throw error;
+   * } finally {
+   *   await session.close();
+   * }
    */
   getDriver(): Driver {
     return this.driver;
   }
 
   /**
-   * Initialize database: create indexes and constraints
+   * Initialize database schema: create indexes, constraints, and vector indexes
+   * 
+   * This method sets up the Neo4j database with all necessary indexes and constraints
+   * for optimal performance. It's idempotent and safe to call multiple times.
+   * 
+   * Creates:
+   * - Unique constraint on node IDs
+   * - Full-text search indexes
+   * - Vector indexes for semantic search
+   * - File indexing schema
+   * - Type indexes for fast filtering
+   * 
+   * @returns Promise that resolves when initialization is complete
+   * @throws {Error} If database connection fails or schema creation fails
+   * 
+   * @example
+   * // Initialize on server startup
+   * const graphManager = new GraphManager(
+   *   'bolt://localhost:7687',
+   *   'neo4j',
+   *   'password'
+   * );
+   * await graphManager.initialize();
+   * console.log('Database schema initialized');
+   * 
+   * @example
+   * // Initialize with error handling
+   * try {
+   *   await graphManager.initialize();
+   *   console.log('✅ Database ready');
+   * } catch (error) {
+   *   console.error('Failed to initialize database:', error);
+   *   process.exit(1);
+   * }
+   * 
+   * @example
+   * // Safe to call multiple times (idempotent)
+   * await graphManager.initialize(); // First call creates schema
+   * await graphManager.initialize(); // Second call is no-op
+   * await graphManager.initialize(); // Still safe
    */
   async initialize(): Promise<void> {
     const session = this.driver.session();
@@ -315,6 +389,73 @@ export class GraphManager implements IGraphManager {
     }
   }
 
+  /**
+   * Add a new node to the knowledge graph with automatic embedding generation
+   * 
+   * Creates a node with the specified type and properties. Automatically generates
+   * vector embeddings from text content (title, description, content fields) for
+   * semantic search. Supports chunking for large content (>768 chars by default).
+   * 
+   * @param type - Node type (todo, file, concept, memory, etc.) or properties object
+   * @param properties - Node properties (title, description, content, status, etc.)
+   * @returns Created node with generated ID and embeddings
+   * @throws {Error} If node creation fails
+   * 
+   * @example
+   * // Create a TODO task
+   * const todo = await graphManager.addNode('todo', {
+   *   title: 'Implement user authentication',
+   *   description: 'Add JWT-based auth with refresh tokens and role-based access',
+   *   status: 'pending',
+   *   priority: 'high',
+   *   assignee: 'worker-agent-1'
+   * });
+   * console.log('Created:', todo.id); // 'todo-1-1732456789'
+   * console.log('Has embedding:', todo.properties.has_embedding); // true
+   * 
+   * @example
+   * // Create a memory node with automatic embedding
+   * const memory = await graphManager.addNode('memory', {
+   *   title: 'API Design Pattern',
+   *   content: 'Use RESTful conventions with versioned endpoints (/v1/users). ' +
+   *            'Always return consistent error formats with status codes.',
+   *   tags: ['api', 'architecture', 'best-practices'],
+   *   source: 'team-discussion',
+   *   confidence: 0.95
+   * });
+   * // Embedding generated from title + content for semantic search
+   * 
+   * @example
+   * // Create a file node during indexing
+   * const file = await graphManager.addNode('file', {
+   *   path: '/src/auth/login.ts',
+   *   name: 'login.ts',
+   *   language: 'typescript',
+   *   size: 2048,
+   *   lines: 87,
+   *   lastModified: new Date().toISOString(),
+   *   content: '// File content here...'
+   * });
+   * // Large files automatically chunked for embeddings
+   * 
+   * @example
+   * // Create concept node for knowledge graph
+   * const concept = await graphManager.addNode('concept', {
+   *   title: 'Microservices Architecture',
+   *   description: 'Architectural pattern where application is composed of small, ' +
+   *                'independent services that communicate via APIs',
+   *   category: 'architecture',
+   *   related_concepts: ['API Gateway', 'Service Discovery', 'Event-Driven']
+   * });
+   * 
+   * @example
+   * // Flexible API: pass properties as first argument
+   * const node = await graphManager.addNode({
+   *   type: 'memory',
+   *   title: 'Quick note',
+   *   content: 'Remember to update docs'
+   * });
+   */
   async addNode(type?: NodeType | Record<string, any>, properties?: Record<string, any>): Promise<Node> {
     const session = this.driver.session();
     try {
@@ -413,6 +554,45 @@ export class GraphManager implements IGraphManager {
     }
   }
 
+  /**
+   * Retrieve a node by its ID with full properties
+   * 
+   * Fetches a single node from the graph database. Returns null if not found.
+   * Includes all properties except embedding vectors (for performance).
+   * 
+   * @param id - Unique node identifier
+   * @returns Node object with all properties, or null if not found
+   * 
+   * @example
+   * // Get a TODO by ID
+   * const todo = await graphManager.getNode('todo-1-1732456789');
+   * if (todo) {
+   *   console.log('Title:', todo.properties.title);
+   *   console.log('Status:', todo.properties.status);
+   *   console.log('Created:', todo.properties.created);
+   * } else {
+   *   console.log('TODO not found');
+   * }
+   * 
+   * @example
+   * // Check if node exists before updating
+   * const existing = await graphManager.getNode('memory-123');
+   * if (!existing) {
+   *   throw new Error('Memory node not found');
+   * }
+   * await graphManager.updateNode('memory-123', { 
+   *   content: 'Updated content' 
+   * });
+   * 
+   * @example
+   * // Get file node and check metadata
+   * const file = await graphManager.getNode('file-src-auth-login-ts');
+   * if (file && file.properties.lastModified) {
+   *   const lastMod = new Date(file.properties.lastModified);
+   *   const hoursSinceUpdate = (Date.now() - lastMod.getTime()) / (1000 * 60 * 60);
+   *   console.log(`File last modified ${hoursSinceUpdate.toFixed(1)} hours ago`);
+   * }
+   */
   async getNode(id: string): Promise<Node | null> {
     const session = this.driver.session();
     try {
@@ -432,6 +612,64 @@ export class GraphManager implements IGraphManager {
     }
   }
 
+  /**
+   * Update an existing node's properties with automatic embedding regeneration
+   * 
+   * Merges new properties into existing node. Automatically regenerates embeddings
+   * if content-related fields (content, title, description) are modified.
+   * Updates the 'updated' timestamp automatically.
+   * 
+   * @param id - Node ID to update
+   * @param properties - Properties to update (partial update, merges with existing)
+   * @returns Updated node with new properties
+   * @throws {Error} If node not found or update fails
+   * 
+   * @example
+   * // Update TODO status
+   * const updated = await graphManager.updateNode('todo-1-1732456789', {
+   *   status: 'in_progress',
+   *   assignee: 'worker-agent-2',
+   *   started_at: new Date().toISOString()
+   * });
+   * console.log('Status changed to:', updated.properties.status);
+   * 
+   * @example
+   * // Update memory content (triggers embedding regeneration)
+   * const memory = await graphManager.updateNode('memory-123', {
+   *   content: 'Updated API design: Use GraphQL instead of REST for complex queries',
+   *   confidence: 0.98,
+   *   last_verified: new Date().toISOString()
+   * });
+   * // Embedding automatically regenerated from new content
+   * 
+   * @example
+   * // Add metadata without changing content
+   * await graphManager.updateNode('file-src-utils-ts', {
+   *   lastAccessed: new Date().toISOString(),
+   *   accessCount: 42,
+   *   tags: ['utility', 'helper', 'core']
+   * });
+   * // No embedding regeneration (content unchanged)
+   * 
+   * @example
+   * // Partial update - only specified fields change
+   * const todo = await graphManager.getNode('todo-1');
+   * console.log('Before:', todo.properties); // { title: 'Task', status: 'pending', priority: 'high' }
+   * 
+   * await graphManager.updateNode('todo-1', { status: 'completed' });
+   * 
+   * const updated = await graphManager.getNode('todo-1');
+   * console.log('After:', updated.properties); // { title: 'Task', status: 'completed', priority: 'high' }
+   * // Only status changed, other fields preserved
+   * 
+   * @example
+   * // Error handling
+   * try {
+   *   await graphManager.updateNode('nonexistent-id', { status: 'done' });
+   * } catch (error) {
+   *   console.error('Update failed:', error.message); // 'Node not found: nonexistent-id'
+   * }
+   */
   async updateNode(id: string, properties: Partial<Record<string, any>>): Promise<Node> {
     const session = this.driver.session();
     try {

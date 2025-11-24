@@ -46,6 +46,53 @@ HOST_WORKSPACE_ROOT=/Users/timothysweet docker compose up
 HOST_WORKSPACE_ROOT=/Users/timothysweet/Documents/projects docker compose up
 ```
 
+### Tilde (`~`) Expansion Support
+
+**✅ Tilde paths work automatically!**
+
+```bash
+# Use tilde for home directory (automatically expanded)
+HOST_WORKSPACE_ROOT=~/src docker compose up
+
+# Expands to: /Users/timothysweet/src (on macOS)
+# Expands to: /home/user/src (on Linux)
+```
+
+**How it works:**
+
+1. **Docker Compose** automatically passes `HOST_HOME=${HOME}` to the container
+2. **Path Translation** expands `~` using `HOST_HOME` inside the container
+3. **Cross-Platform**: Works on macOS, Linux, and Windows (WSL)
+
+**Environment Variables:**
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `HOST_WORKSPACE_ROOT` | `~/src` | User-friendly tilde path |
+| `HOST_HOME` | `/Users/john` | Host's home directory (auto-injected) |
+| `WORKSPACE_ROOT` | `/workspace` | Container's workspace path (fixed) |
+
+**What if `HOST_HOME` is missing?**
+
+If `HOST_HOME` is not set, you'll see a helpful warning:
+
+```
+⚠️  HOST_WORKSPACE_ROOT contains tilde (~) but HOST_HOME is not set.
+    Tilde expressions cannot be automatically expanded.
+
+    Solutions:
+    1. Pass HOST_HOME to container: docker run -e HOST_HOME=$HOME ...
+    2. Expand tilde in Docker config: HOST_WORKSPACE_ROOT=$HOME/src
+    3. Use absolute path: HOST_WORKSPACE_ROOT=/Users/john/src
+```
+
+**Manual Override (advanced):**
+
+```bash
+# Override HOST_HOME manually (rarely needed)
+HOST_HOME=/Users/john HOST_WORKSPACE_ROOT=~/src docker compose up
+```
+
 ## Using File Indexing Tools
 
 ### ❌ WRONG: Using Host Paths

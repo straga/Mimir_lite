@@ -1,7 +1,7 @@
 # Mimir Environment Variables Reference
 
-**Last Updated:** 2025-01-18  
-**Version:** 2.0 (Unified API Configuration)
+**Last Updated:** 2025-11-24  
+**Version:** 2.1 (Unified API + Vision Intelligence)
 
 ## Overview
 
@@ -207,6 +207,196 @@ MIMIR_DEFAULT_MODEL=gpt-4-turbo
 
 ---
 
+## Image/Vision Configuration
+
+### Overview
+
+Mimir supports **Vision-Language (VL) models** for indexing images by generating text descriptions, which are then embedded alongside text content. This enables semantic search across both text and images.
+
+**Architecture:**
+```
+Image File → llama.cpp (qwen2.5-vl) → Text Description → 
+nomic-embed-text (embed description) → Neo4j (vector + description)
+```
+
+### `MIMIR_EMBEDDINGS_IMAGES`
+**Type**: Boolean  
+**Default**: `false`  
+**⚠️ Security**: Disabled by default (requires explicit opt-in)
+
+**Enable image indexing and embeddings.**
+
+```bash
+MIMIR_EMBEDDINGS_IMAGES=true   # Enable
+MIMIR_EMBEDDINGS_IMAGES=false  # Disable (default)
+```
+
+**Why disabled by default?**
+- Image processing is resource-intensive (2-8GB RAM for VL models)
+- Prevents accidental indexing of personal/sensitive images
+- Requires separate VL model server setup
+
+### `MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE`
+**Type**: Boolean  
+**Default**: `true`
+
+**Use VL model to generate text descriptions (recommended).**
+
+```bash
+MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE=true   # VL description mode
+MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE=false  # Direct image embedding (not supported)
+```
+
+**Note:** Direct image embedding is not supported. Always use `true` for VL description mode.
+
+---
+
+## Vision-Language Model Configuration
+
+### `MIMIR_EMBEDDINGS_VL_PROVIDER`
+**Type**: String  
+**Default**: `llama.cpp`  
+**Options**: `llama.cpp` | `ollama`
+
+**VL model provider.**
+
+```bash
+MIMIR_EMBEDDINGS_VL_PROVIDER=llama.cpp
+```
+
+### `MIMIR_EMBEDDINGS_VL_API`
+**Type**: String (Base URL)  
+**Default**: `http://llama-vl-server:8080`
+
+**Base URL of the VL server.**
+
+```bash
+# Docker internal
+MIMIR_EMBEDDINGS_VL_API=http://llama-vl-server:8080
+
+# External VL server
+MIMIR_EMBEDDINGS_VL_API=http://host.docker.internal:8081
+```
+
+### `MIMIR_EMBEDDINGS_VL_API_PATH`
+**Type**: String (Path)  
+**Default**: `/v1/chat/completions`
+
+**Path to VL chat completions endpoint (OpenAI-compatible).**
+
+### `MIMIR_EMBEDDINGS_VL_API_KEY`
+**Type**: String  
+**Default**: `dummy-key`
+
+**API key for VL server (not required for local llama.cpp).**
+
+### `MIMIR_EMBEDDINGS_VL_MODEL`
+**Type**: String  
+**Default**: `qwen2.5-vl`
+
+**VL model name.**
+
+```bash
+# Recommended models
+MIMIR_EMBEDDINGS_VL_MODEL=qwen2.5-vl-2b  # 2B parameters (~2GB RAM)
+MIMIR_EMBEDDINGS_VL_MODEL=qwen2.5-vl-7b  # 7B parameters (~6GB RAM) ⭐ Best balance
+MIMIR_EMBEDDINGS_VL_MODEL=qwen2.5-vl     # Generic name
+```
+
+### `MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE`
+**Type**: Number  
+**Default**: `131072` (128K tokens)
+
+**Maximum context window for VL model.**
+
+```bash
+MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE=32768   # 32K tokens (2B model)
+MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE=131072  # 128K tokens (7B/72B models)
+```
+
+### `MIMIR_EMBEDDINGS_VL_MAX_TOKENS`
+**Type**: Number  
+**Default**: `2048`
+
+**Maximum tokens to generate for image descriptions.**
+
+```bash
+MIMIR_EMBEDDINGS_VL_MAX_TOKENS=512   # Brief descriptions
+MIMIR_EMBEDDINGS_VL_MAX_TOKENS=2048  # Detailed descriptions (recommended)
+MIMIR_EMBEDDINGS_VL_MAX_TOKENS=4096  # Very detailed descriptions
+```
+
+### `MIMIR_EMBEDDINGS_VL_TEMPERATURE`
+**Type**: Number (0.0-1.0)  
+**Default**: `0.7`
+
+**Sampling temperature for VL generation.**
+
+```bash
+MIMIR_EMBEDDINGS_VL_TEMPERATURE=0.0  # Deterministic (factual)
+MIMIR_EMBEDDINGS_VL_TEMPERATURE=0.7  # Balanced (recommended)
+MIMIR_EMBEDDINGS_VL_TEMPERATURE=1.0  # Creative (more varied)
+```
+
+### `MIMIR_EMBEDDINGS_VL_DIMENSIONS`
+**Type**: Number  
+**Default**: Falls back to `MIMIR_EMBEDDINGS_DIMENSIONS`
+
+**Embedding dimensions for VL descriptions (falls back to text embedding dimensions).**
+
+---
+
+## Image Processing Configuration
+
+### `MIMIR_IMAGE_MAX_PIXELS`
+**Type**: Number  
+**Default**: `3211264` (~1792×1792 pixels, 3.2 MP)
+
+**Maximum pixel count for images before auto-resizing.**
+
+**Qwen2.5-VL native limit**: 3,211,264 pixels
+
+```bash
+MIMIR_IMAGE_MAX_PIXELS=3211264  # Qwen2.5-VL limit (recommended)
+MIMIR_IMAGE_MAX_PIXELS=2073600  # Full HD limit (1920×1080)
+```
+
+**Supported Image Sizes:**
+- ✅ **1920×1080 (Full HD)** = 2.07 MP → No resize needed
+- ✅ **1792×1792 (Square)** = 3.21 MP → No resize needed
+- ⚠️ **2560×1440 (2K)** = 3.69 MP → Auto-resized to fit
+- ⚠️ **3840×2160 (4K)** = 8.29 MP → Auto-resized to fit
+
+### `MIMIR_IMAGE_TARGET_SIZE`
+**Type**: Number (pixels)  
+**Default**: `1536`
+
+**Target dimension for longest edge when resizing.**
+
+```bash
+MIMIR_IMAGE_TARGET_SIZE=1024  # Conservative
+MIMIR_IMAGE_TARGET_SIZE=1536  # Recommended (preserves detail)
+MIMIR_IMAGE_TARGET_SIZE=2048  # Maximum detail (slower processing)
+```
+
+**Example resizing:**
+- Input: 3840×2160 (4K) → Output: 1536×864 (aspect ratio preserved)
+- Input: 2560×1440 (2K) → Output: 1536×864
+
+### `MIMIR_IMAGE_RESIZE_QUALITY`
+**Type**: Number (1-100)  
+**Default**: `90`
+
+**JPEG quality after resizing (higher = better quality, larger file).**
+
+```bash
+MIMIR_IMAGE_RESIZE_QUALITY=80  # Good quality
+MIMIR_IMAGE_RESIZE_QUALITY=90  # Excellent quality (recommended)
+MIMIR_IMAGE_RESIZE_QUALITY=95  # Maximum quality
+```
+
+---
+
 ## Database Configuration
 
 ### `NEO4J_URI`
@@ -235,9 +425,46 @@ MIMIR_DEFAULT_MODEL=gpt-4-turbo
 ### `WORKSPACE_ROOT`
 **Default**: `/workspace`
 
+**Container's internal workspace path.** All file operations inside the container use this path.
+
 ### `HOST_WORKSPACE_ROOT`
 **Required**: Yes (for file operations)  
-**Example**: `~/src` or `C:\Users\you\code`
+**Type**: String (absolute or tilde path)  
+**Example**: `~/src`, `/Users/john/code`, or `C:\Users\you\code`
+
+**Host machine's workspace directory.** This is automatically mounted to `WORKSPACE_ROOT` in the container.
+
+**Tilde Expansion Support:**
+- ✅ **Automatic**: `~/src` is expanded using `HOST_HOME` (passed from host's `$HOME`)
+- ✅ **Cross-Platform**: Works on macOS, Linux, and Windows (WSL)
+- ⚠️ **Requires**: `HOST_HOME` must be set (automatically injected by docker-compose)
+
+### `HOST_HOME`
+**Required**: No (automatically set by docker-compose)  
+**Type**: String (absolute path)  
+**Default**: `${HOME}` (from host environment)  
+**Example**: `/Users/john`, `/home/user`, `C:\Users\you`
+
+**Host machine's home directory for expanding tilde (`~`) in `HOST_WORKSPACE_ROOT`.**
+
+**Purpose:**
+- Enables automatic tilde expansion in Docker containers
+- Without this, `~/src` cannot be resolved (container's home ≠ host's home)
+
+**Behavior:**
+- ✅ **If set**: `HOST_WORKSPACE_ROOT=~/src` → expands to `/Users/john/src`
+- ⚠️ **If missing**: Warning logged with helpful solutions, path translation disabled
+
+**Docker Compose automatically sets this:**
+```yaml
+environment:
+  - HOST_HOME=${HOME}  # Passes host's home to container
+```
+
+**Manual Override (if needed):**
+```bash
+HOST_HOME=/Users/john docker compose up
+```
 
 ---
 
@@ -331,6 +558,53 @@ MIMIR_DEFAULT_PROVIDER=ollama
 MIMIR_DEFAULT_MODEL=qwen2.5-coder:14b
 ```
 
+### Vision-Language Setup (Image Indexing)
+
+**Prerequisites:**
+1. Uncomment `llama-vl-server` service in `docker-compose.yml`
+2. Choose model size: 2B (faster, 2GB RAM) or 7B (best quality, 6GB RAM)
+
+```bash
+# LLM
+MIMIR_LLM_API=http://ollama:11434
+MIMIR_LLM_API_PATH=/v1/chat/completions
+MIMIR_LLM_API_KEY=dummy-key
+
+# Text Embeddings
+MIMIR_EMBEDDINGS_API=http://ollama:11434
+MIMIR_EMBEDDINGS_API_PATH=/api/embeddings
+MIMIR_EMBEDDINGS_PROVIDER=ollama
+MIMIR_EMBEDDINGS_MODEL=mxbai-embed-large
+MIMIR_EMBEDDINGS_DIMENSIONS=1024
+
+# Image Embeddings (Enable)
+MIMIR_EMBEDDINGS_IMAGES=true
+MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE=true
+
+# Vision-Language Model (Qwen2.5-VL 7B)
+MIMIR_EMBEDDINGS_VL_PROVIDER=llama.cpp
+MIMIR_EMBEDDINGS_VL_API=http://llama-vl-server:8080
+MIMIR_EMBEDDINGS_VL_API_PATH=/v1/chat/completions
+MIMIR_EMBEDDINGS_VL_API_KEY=dummy-key
+MIMIR_EMBEDDINGS_VL_MODEL=qwen2.5-vl-7b
+MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE=131072  # 128K tokens
+MIMIR_EMBEDDINGS_VL_MAX_TOKENS=2048      # Detailed descriptions
+MIMIR_EMBEDDINGS_VL_TEMPERATURE=0.7      # Balanced
+
+# Image Processing
+MIMIR_IMAGE_MAX_PIXELS=3211264    # Qwen2.5-VL limit (3.2 MP)
+MIMIR_IMAGE_TARGET_SIZE=1536      # Resize target (longest edge)
+MIMIR_IMAGE_RESIZE_QUALITY=90     # JPEG quality
+
+# Provider
+MIMIR_DEFAULT_PROVIDER=ollama
+MIMIR_DEFAULT_MODEL=qwen2.5-coder:14b
+```
+
+**For 2B model (less RAM):** Change to `MIMIR_EMBEDDINGS_VL_MODEL=qwen2.5-vl-2b` and `MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE=32768`
+
+**See also:** [Qwen VL Setup Guide](./configuration/QWEN_VL_SETUP.md)
+
 ---
 
 ## Migration from v1.x
@@ -401,3 +675,5 @@ MIMIR_EMBEDDINGS_API_MODELS_PATH=/api/tags
 - [LLM Provider Guide](./guides/LLM_PROVIDER_GUIDE.md)
 - [Pipeline Configuration](./guides/PIPELINE_CONFIGURATION.md)
 - [Docker Compose Examples](../docker-compose.yml)
+- [Qwen VL Setup Guide](./configuration/QWEN_VL_SETUP.md) - Vision-Language models
+- [Metadata Enriched Embeddings](./guides/METADATA_ENRICHED_EMBEDDINGS.md) - Image indexing details

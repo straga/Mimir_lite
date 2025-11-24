@@ -44,7 +44,44 @@ export class FileWatchManager {
   }
   
   /**
-   * Register a callback for real-time progress updates
+   * Register a callback for real-time progress updates during file indexing
+   * 
+   * Subscribe to indexing progress events to display real-time status in UI.
+   * Returns an unsubscribe function to clean up when done.
+   * 
+   * @param callback - Function called with progress updates
+   * @returns Unsubscribe function to remove the callback
+   * 
+   * @example
+   * // Display progress in console
+   * const unsubscribe = fileWatchManager.onProgress((progress) => {
+   *   console.log(`${progress.path}: ${progress.indexed}/${progress.totalFiles} files`);
+   *   console.log(`Status: ${progress.status}`);
+   * });
+   * // Later: unsubscribe();
+   * 
+   * @example
+   * // Update UI progress bar
+   * const unsubscribe = fileWatchManager.onProgress((progress) => {
+   *   if (progress.totalFiles > 0) {
+   *     const percent = (progress.indexed / progress.totalFiles) * 100;
+   *     updateProgressBar(progress.path, percent);
+   *   }
+   *   if (progress.status === 'completed') {
+   *     showNotification(`Indexing complete: ${progress.path}`);
+   *     unsubscribe();
+   *   }
+   * });
+   * 
+   * @example
+   * // Server-Sent Events (SSE) streaming
+   * app.get('/api/indexing/progress', (req, res) => {
+   *   res.setHeader('Content-Type', 'text/event-stream');
+   *   const unsubscribe = fileWatchManager.onProgress((progress) => {
+   *     res.write(`data: ${JSON.stringify(progress)}\n\n`);
+   *   });
+   *   req.on('close', unsubscribe);
+   * });
    */
   onProgress(callback: (progress: IndexingProgress) => void): () => void {
     this.progressCallbacks.push(callback);
@@ -74,14 +111,77 @@ export class FileWatchManager {
   }
 
   /**
-   * Get indexing progress for a specific folder
+   * Get current indexing progress for a specific folder
+   * 
+   * Returns progress information including file counts, status, and timing.
+   * Returns undefined if folder is not being indexed or has no tracked progress.
+   * 
+   * @param path - Folder path to check
+   * @returns Progress object or undefined if not found
+   * 
+   * @example
+   * // Check if indexing is complete
+   * const progress = fileWatchManager.getProgress('/workspace/src');
+   * if (progress && progress.status === 'completed') {
+   *   console.log(`Indexed ${progress.indexed} files in ${progress.path}`);
+   *   console.log(`Skipped: ${progress.skipped}, Errors: ${progress.errored}`);
+   * }
+   * 
+   * @example
+   * // Calculate indexing duration
+   * const progress = fileWatchManager.getProgress('/workspace/docs');
+   * if (progress && progress.startTime && progress.endTime) {
+   *   const durationSec = (progress.endTime - progress.startTime) / 1000;
+   *   console.log(`Indexing took ${durationSec.toFixed(1)} seconds`);
+   * }
+   * 
+   * @example
+   * // Poll for completion
+   * const checkProgress = setInterval(() => {
+   *   const progress = fileWatchManager.getProgress('/workspace/api');
+   *   if (progress?.status === 'completed' || progress?.status === 'error') {
+   *     clearInterval(checkProgress);
+   *     console.log('Indexing finished:', progress.status);
+   *   }
+   * }, 1000);
    */
   getProgress(path: string): IndexingProgress | undefined {
     return this.progressTrackers.get(path);
   }
 
   /**
-   * Get all active indexing progress
+   * Get progress for all folders currently being indexed or recently completed
+   * 
+   * Returns array of progress objects for all tracked indexing operations.
+   * Useful for dashboard views showing multiple concurrent indexing jobs.
+   * 
+   * @returns Array of progress objects for all tracked folders
+   * 
+   * @example
+   * // Display all active indexing jobs
+   * const allProgress = fileWatchManager.getAllProgress();
+   * console.log(`Active indexing jobs: ${allProgress.length}`);
+   * for (const progress of allProgress) {
+   *   console.log(`${progress.path}: ${progress.status}`);
+   * }
+   * 
+   * @example
+   * // Calculate total indexing statistics
+   * const allProgress = fileWatchManager.getAllProgress();
+   * const stats = allProgress.reduce((acc, p) => ({
+   *   totalFiles: acc.totalFiles + p.totalFiles,
+   *   indexed: acc.indexed + p.indexed,
+   *   skipped: acc.skipped + p.skipped,
+   *   errored: acc.errored + p.errored
+   * }), { totalFiles: 0, indexed: 0, skipped: 0, errored: 0 });
+   * console.log('Total stats:', stats);
+   * 
+   * @example
+   * // Filter by status
+   * const allProgress = fileWatchManager.getAllProgress();
+   * const active = allProgress.filter(p => p.status === 'indexing');
+   * const completed = allProgress.filter(p => p.status === 'completed');
+   * console.log(`Active: ${active.length}, Completed: ${completed.length}`);
    */
   getAllProgress(): IndexingProgress[] {
     return Array.from(this.progressTrackers.values());
@@ -125,7 +225,46 @@ export class FileWatchManager {
   }
 
   /**
-   * Start watching a folder (manual indexing only - no file system events)
+   * Start indexing a folder with automatic file watching
+   * 
+   * Begins indexing all files in the specified folder according to the config.
+   * Respects .gitignore patterns and custom ignore rules. Supports recursive
+   * directory traversal and file pattern filtering. Indexing runs with
+   * concurrency control to avoid overwhelming the system.
+   * 
+   * @param config - Watch configuration with path, patterns, and options
+   * @returns Promise that resolves when indexing is queued (not completed)
+   * 
+   * @example
+   * // Index a source code directory
+   * await fileWatchManager.startWatch({
+   *   path: '/workspace/src',
+   *   recursive: true,
+   *   file_patterns: ['*.ts', '*.tsx', '*.js', '*.jsx'],
+   *   ignore_patterns: ['node_modules/**', 'dist/**', '*.test.ts']
+   * });
+   * console.log('Indexing started for /workspace/src');
+   * 
+   * @example
+   * // Index documentation with progress tracking
+   * const unsubscribe = fileWatchManager.onProgress((progress) => {
+   *   console.log(`Progress: ${progress.indexed}/${progress.totalFiles}`);
+   * });
+   * await fileWatchManager.startWatch({
+   *   path: '/workspace/docs',
+   *   recursive: true,
+   *   file_patterns: ['*.md', '*.mdx'],
+   *   ignore_patterns: ['node_modules/**']
+   * });
+   * 
+   * @example
+   * // Index specific file types only
+   * await fileWatchManager.startWatch({
+   *   path: '/workspace/config',
+   *   recursive: false,
+   *   file_patterns: ['*.json', '*.yaml', '*.yml'],
+   *   ignore_patterns: []
+   * });
    */
   async startWatch(config: WatchConfig): Promise<void> {
     // Don't start if already watching
@@ -230,7 +369,43 @@ export class FileWatchManager {
   }
 
   /**
-   * Abort active indexing for a folder
+   * Abort active indexing operation for a folder
+   * 
+   * Sends abort signal to stop indexing immediately. Does not wait for
+   * completion. Returns true if abort signal was sent, false if no
+   * active indexing was found.
+   * 
+   * @param path - Folder path to abort indexing for
+   * @returns True if abort signal sent, false if not indexing
+   * 
+   * @example
+   * // Cancel indexing if taking too long
+   * setTimeout(() => {
+   *   const aborted = fileWatchManager.abortIndexing('/workspace/large-repo');
+   *   if (aborted) {
+   *     console.log('Indexing cancelled due to timeout');
+   *   }
+   * }, 60000); // 1 minute timeout
+   * 
+   * @example
+   * // User-initiated cancellation
+   * app.post('/api/indexing/cancel', async (req, res) => {
+   *   const { path } = req.body;
+   *   const aborted = fileWatchManager.abortIndexing(path);
+   *   res.json({ 
+   *     success: aborted,
+   *     message: aborted ? 'Indexing cancelled' : 'No active indexing found'
+   *   });
+   * });
+   * 
+   * @example
+   * // Cancel all active indexing
+   * const allProgress = fileWatchManager.getAllProgress();
+   * const activeIndexing = allProgress.filter(p => p.status === 'indexing');
+   * for (const progress of activeIndexing) {
+   *   fileWatchManager.abortIndexing(progress.path);
+   * }
+   * console.log(`Cancelled ${activeIndexing.length} indexing operations`);
    */
   abortIndexing(path: string): boolean {
     const abortController = this.abortControllers.get(path);
@@ -244,14 +419,78 @@ export class FileWatchManager {
   }
 
   /**
-   * Check if a folder is currently being indexed
+   * Check if a folder is currently being actively indexed
+   * 
+   * Returns true if indexing is in progress, false otherwise.
+   * Does not include queued or completed indexing operations.
+   * 
+   * @param path - Folder path to check
+   * @returns True if currently indexing, false otherwise
+   * 
+   * @example
+   * // Wait for indexing to complete
+   * while (fileWatchManager.isIndexing('/workspace/src')) {
+   *   await new Promise(resolve => setTimeout(resolve, 1000));
+   *   console.log('Still indexing...');
+   * }
+   * console.log('Indexing complete!');
+   * 
+   * @example
+   * // Prevent duplicate indexing
+   * if (fileWatchManager.isIndexing('/workspace/docs')) {
+   *   console.log('Already indexing this folder');
+   * } else {
+   *   await fileWatchManager.startWatch({
+   *     path: '/workspace/docs',
+   *     recursive: true,
+   *     file_patterns: ['*.md'],
+   *     ignore_patterns: []
+   *   });
+   * }
+   * 
+   * @example
+   * // API endpoint to check status
+   * app.get('/api/indexing/status/:path', (req, res) => {
+   *   const isActive = fileWatchManager.isIndexing(req.params.path);
+   *   const progress = fileWatchManager.getProgress(req.params.path);
+   *   res.json({ isIndexing: isActive, progress });
+   * });
    */
   isIndexing(path: string): boolean {
     return this.abortControllers.has(path);
   }
 
   /**
-   * Stop watching a folder
+   * Stop watching and indexing a folder
+   * 
+   * Stops any active indexing for the folder and removes it from the watch list.
+   * If indexing is in progress, sends abort signal and waits for graceful shutdown.
+   * Safe to call even if folder is not being watched.
+   * 
+   * @param path - Folder path to stop watching
+   * @returns Promise that resolves when watching has stopped
+   * 
+   * @example
+   * // Stop watching a folder
+   * await fileWatchManager.stopWatch('/workspace/src');
+   * console.log('Stopped watching /workspace/src');
+   * 
+   * @example
+   * // Stop all active watches
+   * const allProgress = fileWatchManager.getAllProgress();
+   * for (const progress of allProgress) {
+   *   await fileWatchManager.stopWatch(progress.path);
+   * }
+   * console.log('All watches stopped');
+   * 
+   * @example
+   * // Stop with error handling
+   * try {
+   *   await fileWatchManager.stopWatch('/workspace/docs');
+   *   console.log('Successfully stopped watching');
+   * } catch (error) {
+   *   console.error('Failed to stop watch:', error);
+   * }
    */
   async stopWatch(path: string): Promise<void> {
     console.log(`🛑 Stopping watch for: ${path}`);

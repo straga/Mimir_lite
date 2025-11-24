@@ -111,9 +111,10 @@ export function createFileIndexingTools(
 export async function handleIndexFolder(
   params: any,
   driver: Driver,
-  watchManager: FileWatchManager
+  watchManager: FileWatchManager,
+  configManager?: WatchConfigManager  // Optional parameter for testing
 ): Promise<IndexFolderResponse> {
-  const configManager = new WatchConfigManager(driver);
+  const manager = configManager || new WatchConfigManager(driver);
   const startTime = Date.now();
 
   // Sanitize and validate path input using new path utilities
@@ -159,7 +160,7 @@ export async function handleIndexFolder(
   console.log(`🔍 Embeddings: global=${globalEmbeddingsEnabled}, requested=${params.generate_embeddings}, final=${generateEmbeddings}`);
 
   // Check if already watching (using container path)
-  let config = await configManager.getByPath(containerPath);
+  let config = await manager.getByPath(containerPath);
   
   if (!config) {
     // Create watch config if it doesn't exist
@@ -172,7 +173,7 @@ export async function handleIndexFolder(
       generate_embeddings: generateEmbeddings
     };
 
-    config = await configManager.createWatch(input);
+    config = await manager.createWatch(input);
     
     // Start watching
     await watchManager.startWatch(config);
@@ -212,9 +213,10 @@ export async function handleIndexFolder(
 export async function handleRemoveFolder(
   params: any,
   driver: Driver,
-  watchManager: FileWatchManager
+  watchManager: FileWatchManager,
+  configManager?: WatchConfigManager  // Optional parameter for testing
 ): Promise<any> {
-  const configManager = new WatchConfigManager(driver);
+  const manager = configManager || new WatchConfigManager(driver);
   
   // Sanitize and validate path input using new path utilities
   let resolvedPath: string;
@@ -235,7 +237,7 @@ export async function handleRemoveFolder(
   
   console.log(`📍 Path translation for removal: ${resolvedPath} -> ${containerPath}`);
   
-  const config = await configManager.getByPath(containerPath);
+  const config = await manager.getByPath(containerPath);
   if (!config) {
     return {
       status: 'error',
@@ -246,22 +248,28 @@ export async function handleRemoveFolder(
   // Stop watcher (using container path)
   await watchManager.stopWatch(containerPath);
 
-  // Mark inactive in Neo4j
-  await configManager.markInactive(config.id);
+  // Delete watch configuration from Neo4j
+  await manager.delete(config.id);
 
   // Remove all indexed files and chunks from this folder (using container path)
   const session = driver.session();
   try {
+    // Ensure path ends with separator to avoid false matches (e.g., /src matching /src-other)
+    const folderPathWithSep = containerPath.endsWith('/') ? containerPath : containerPath + '/';
+    
     const result = await session.run(`
       MATCH (f:File)
-      WHERE f.path STARTS WITH $pathPrefix OR f.absolute_path STARTS WITH $pathPrefix
+      WHERE f.path STARTS WITH $folderPathWithSep OR f.path = $exactPath
       OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
       WITH f, collect(c) AS chunks, count(c) AS chunk_count
       // Delete chunks FIRST, then file
       FOREACH (chunk IN chunks | DETACH DELETE chunk)
       DETACH DELETE f
       RETURN count(f) AS files_deleted, sum(chunk_count) AS chunks_deleted
-    `, { pathPrefix: containerPath });
+    `, { 
+      folderPathWithSep,
+      exactPath: containerPath
+    });
     
     const record = result.records[0];
     const filesDeleted = record?.get('files_deleted')?.toNumber() || 0;
@@ -284,11 +292,12 @@ export async function handleRemoveFolder(
  * Handle list_folders tool call
  */
 export async function handleListWatchedFolders(
-  driver: Driver
+  driver: Driver,
+  configManager?: WatchConfigManager  // Optional parameter for testing
 ): Promise<ListWatchedFoldersResponse> {
-  const configManager = new WatchConfigManager(driver);
+  const manager = configManager || new WatchConfigManager(driver);
   
-  const configs = await configManager.listAll();
+  const configs = await manager.listAll();
 
   // Ensure configs is an array
   const configArray = Array.isArray(configs) ? configs : [];

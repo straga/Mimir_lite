@@ -288,21 +288,44 @@ describe('Orchestration API - Agent Management', () => {
       const allAgents = await graphManager.queryNodes('preamble');
       expect(allAgents.length).toBe(25);
 
-      // Simulate pagination
-      const firstPage = allAgents.slice(0, 10);
+      // Test pagination logic (mock doesn't support options, so we test the logic)
+      const pageSize = 10;
+      const offset = 0;
+      const firstPage = allAgents.slice(offset, offset + pageSize);
+      
       expect(firstPage.length).toBe(10);
+      expect(firstPage.every(agent => agent.type === 'preamble')).toBe(true);
     });
 
     it('should retrieve second page of agents', async () => {
       const allAgents = await graphManager.queryNodes('preamble');
-      const secondPage = allAgents.slice(10, 20);
+      expect(allAgents.length).toBe(25);
+      
+      // Test pagination logic with offset
+      const pageSize = 10;
+      const offset = 10;
+      const secondPage = allAgents.slice(offset, offset + pageSize);
+      
       expect(secondPage.length).toBe(10);
+      
+      // Verify different agents than first page
+      const firstPage = allAgents.slice(0, 10);
+      const firstPageIds = new Set(firstPage.map(a => a.id));
+      const secondPageHasDifferentAgents = secondPage.some(a => !firstPageIds.has(a.id));
+      expect(secondPageHasDifferentAgents).toBe(true);
     });
 
     it('should retrieve partial last page', async () => {
       const allAgents = await graphManager.queryNodes('preamble');
-      const lastPage = allAgents.slice(20, 30);
-      expect(lastPage.length).toBe(5); // Only 25 total agents
+      expect(allAgents.length).toBe(25);
+      
+      // Test pagination at end of results
+      const pageSize = 10;
+      const offset = 20;
+      const lastPage = allAgents.slice(offset, offset + pageSize);
+      
+      expect(lastPage.length).toBe(5); // Only 5 remaining from 25 total
+      expect(lastPage.every(agent => agent.type === 'preamble')).toBe(true);
     });
   });
 

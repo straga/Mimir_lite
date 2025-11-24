@@ -56,13 +56,14 @@ Edit `.env` and set your source code directory:
 #   Windows: C:\Users\YourName\Documents\GitHub
 #   macOS:   ~/Documents/projects
 #   Linux:   ~/workspace
-HOST_WORKSPACE_ROOT=~/src
+HOST_WORKSPACE_ROOT=~/src  # ✅ Tilde (~) works automatically!
 ```
 
 **What this does:**
 - Gives Mimir access to your source code for file indexing
 - Default mount is **read-write** (allows file editing)
 - You manually choose which folders to index via UI or VSCode plugin
+- **Tilde expansion**: Docker Compose automatically expands `~` to your home directory using `HOST_HOME=${HOME}`
 
 **For read-only access**, edit `docker-compose.yml`:
 
