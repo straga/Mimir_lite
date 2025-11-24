@@ -90,7 +90,7 @@ services:
     container_name: llama_server
     ports:
       - "11434:8080"  # External 11434 -> Internal 8080 (llama.cpp default)
-    # Note: Model is bundled in the image (nomic-embed-text, 261MB)
+    # Note: Model is bundled in the image (mxbai-embed-large, 1024 dims)
     # No volumes needed unless you want to add additional models
     restart: unless-stopped
     healthcheck:
@@ -108,6 +108,60 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  # llama.cpp Vision Server - 2B model (faster, lower memory)
+  # Qwen2.5-VL 2B with vision understanding capabilities
+  # llama-vl-server:
+  #   image: timothyswt/llama-cpp-server-amd64-qwen-vl-2b:latest
+  #   container_name: llama_server_vision_2b
+  #   ports:
+  #     - "8081:8080"  # Vision 2B API endpoint
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s  # Vision models take longer to load
+  #   networks:
+  #     - mcp_network
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 8G  # 2B model + vision projector
+  #       reservations:
+  #         memory: 4G
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+
+  # llama.cpp Vision Server - 7B model (higher quality, more memory)
+  # Qwen2.5-VL 7B with vision understanding capabilities
+  # llama-vl-server:
+  #   image: timothyswt/llama-cpp-server-amd64-qwen-vl-7b:latest
+  #   container_name: llama_server_vision_7b
+  #   ports:
+  #     - "8082:8080"  # Vision 7B API endpoint
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 90s  # Larger models take even longer
+  #   networks:
+  #     - mcp_network
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 16G  # 7B models need more RAM
+  #       reservations:
+  #         memory: 8G
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
 
   mimir-server:
     build:
@@ -173,7 +227,21 @@ services:
       - MIMIR_EMBEDDINGS_CHUNK_OVERLAP=${MIMIR_EMBEDDINGS_CHUNK_OVERLAP:-100}
       - MIMIR_EMBEDDINGS_DELAY_MS=${MIMIR_EMBEDDINGS_DELAY_MS:-0}
       - MIMIR_EMBEDDINGS_MAX_RETRIES=${MIMIR_EMBEDDINGS_MAX_RETRIES:-3}
-      
+      # Image Embeddings Control (disabled by default for safety)
+      - MIMIR_EMBEDDINGS_IMAGES=${MIMIR_EMBEDDINGS_IMAGES:-false}  # Default: disabled
+      - MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE=${MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE:-true}  # Default: VL description mode
+      # Qwen2.5-VL Configuration (for llama.cpp server)
+      - MIMIR_EMBEDDINGS_VL_PROVIDER=${MIMIR_EMBEDDINGS_VL_PROVIDER:-llama.cpp}
+      - MIMIR_EMBEDDINGS_VL_API=${MIMIR_EMBEDDINGS_VL_API:-http://llama-vl-server:8080}
+      - MIMIR_EMBEDDINGS_VL_API_PATH=${MIMIR_EMBEDDINGS_VL_API_PATH:-/v1/chat/completions}
+      - MIMIR_EMBEDDINGS_VL_API_KEY=${MIMIR_EMBEDDINGS_VL_API_KEY:-dummy-key}
+      - MIMIR_EMBEDDINGS_VL_MODEL=${MIMIR_EMBEDDINGS_VL_MODEL:-qwen2.5-vl}
+      - MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE=${MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE:-131072}  # 128K tokens (7b/72b)
+      - MIMIR_EMBEDDINGS_VL_MAX_TOKENS=${MIMIR_EMBEDDINGS_VL_MAX_TOKENS:-2048}  # Max description length
+      - MIMIR_EMBEDDINGS_VL_TEMPERATURE=${MIMIR_EMBEDDINGS_VL_TEMPERATURE:-0.7}
+      - MIMIR_EMBEDDINGS_VL_DIMENSIONS=${MIMIR_EMBEDDINGS_VL_DIMENSIONS:-768}  # Falls back to text model dims
+      - MIMIR_EMBEDDINGS_VL_TIMEOUT=${MIMIR_EMBEDDINGS_VL_TIMEOUT:-180000}  # 3 minutes (VL processing is slow)
+     
       # Indexing Configuration
       - MIMIR_INDEXING_THREADS=${MIMIR_INDEXING_THREADS:-1}
       
@@ -222,6 +290,9 @@ services:
       # llama.cpp server for embeddings
       llama-server:
         condition: service_healthy
+      # llama.cpp server for image embeddings must set 
+      # llama-vl-server:
+        # condition: service_healthy
     networks:
       - mcp_network
 
