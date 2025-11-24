@@ -94,17 +94,26 @@ export function normalizeAndResolve(filepath: string, basePath?: string): string
   // Step 2: Normalize slashes to forward slashes
   normalized = normalizeSlashes(normalized);
   
-  // Step 3: Resolve to absolute path
+  // Step 3: Check if this is already an absolute path
+  // Windows absolute: starts with drive letter (C:/, D:/, etc.)
+  // Unix absolute: starts with /
+  const isWindowsAbsolute = /^[a-zA-Z]:\//.test(normalized);
+  const isUnixAbsolute = normalized.startsWith('/');
+  const isAbsolute = isWindowsAbsolute || isUnixAbsolute;
+  
+  // Step 4: Resolve to absolute path (only if not already absolute or if basePath provided)
   if (basePath) {
     normalized = path.resolve(basePath, normalized);
-  } else {
+  } else if (!isAbsolute) {
+    // Only resolve relative paths - don't resolve absolute paths as they'd get prefixed with cwd
     normalized = path.resolve(normalized);
   }
+  // If already absolute, keep as-is
   
-  // Step 4: Final slash normalization (resolve might add backslashes on Windows)
+  // Step 5: Final slash normalization (resolve might add backslashes on Windows)
   normalized = normalizeSlashes(normalized);
   
-  // Step 5: Remove trailing slash (except for root)
+  // Step 6: Remove trailing slash (except for root)
   if (normalized.length > 1 && normalized.endsWith('/')) {
     normalized = normalized.slice(0, -1);
   }
