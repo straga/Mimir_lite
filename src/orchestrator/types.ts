@@ -25,7 +25,7 @@ export function normalizeProvider(providerName: string | LLMProvider | undefined
   // Map aliases to canonical values
   switch (normalized) {
     case 'ollama':
-      return LLMProvider.OLLAMA; // Native Ollama API (/api/chat)
+      return LLMProvider.OLLAMA; // Native Ollama API (/api/generate)
     case 'llama.cpp':
     case 'openai':
     case 'copilot':

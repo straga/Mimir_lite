@@ -144,7 +144,7 @@ See [scripts/START_SCRIPT.md](scripts/START_SCRIPT.md) for more details.
 - 🎯 **Portal**: Main hub with navigation and file indexing http://localhost:9042/portal
 - 🎨 **Orchestration Studio**: Visual workflow builder (beta) http://localhost:9042/studio
 - 🔌 **MCP API**: RESTful API at `http://localhost:9042/mcp`
-- 💬 **Chat API**: Conversational interface at `http://localhost:9042/api/chat`
+- 💬 **Chat API**: OpenAI-compatible endpoints at `http://localhost:9042/v1/chat/completions` and `/v1/embeddings`
 
 ## ⚙️ Configuration
 
@@ -726,20 +726,23 @@ curl -X POST http://localhost:9042/mcp \
   }'
 ```
 
-**2. Chat API** - For conversational interfaces
+**2. Chat API** - OpenAI-compatible chat completions
 ```bash
-# Send a message (streaming response)
-curl -X POST http://localhost:9042/api/chat \
+# Send a message (OpenAI-compatible format)
+curl -X POST http://localhost:9042/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "Create a todo for implementing authentication",
-    "conversationId": "my-session-123"
+    "model": "gpt-4.1",
+    "messages": [
+      {"role": "user", "content": "Create a todo for implementing authentication"}
+    ],
+    "stream": false
   }'
 ```
 
 ### Chat API with MCP Tools & RAG
 
-The Chat API (`/api/chat`) provides OpenAI-compatible chat completions with **built-in MCP tool support** and **Retrieval-Augmented Generation (RAG)**.
+The Chat API (`/v1/chat/completions`) provides OpenAI-compatible chat completions with **built-in MCP tool support** and **Retrieval-Augmented Generation (RAG)**.
 
 #### Features
 - **Full MCP Tool Support**: Access all 13 Mimir tools (memory, file indexing, semantic search, todos)
@@ -794,7 +797,7 @@ MIMIR_DEFAULT_MODEL=gpt-4-turbo
 #### Chat API Request Format
 
 ```bash
-POST /api/chat
+POST /v1/chat/completions
 Content-Type: application/json
 
 {
@@ -943,9 +946,9 @@ When you run `docker compose up -d`, you get these services:
 │  └─────────────────────────────────┘   │
 │  ┌─────────────────────────────────┐   │
 │  │      Backend (Node.js)          │   │
-│  │  - MCP API  (/mcp)              │   │  ← AI Assistants
-│  │  - Chat API (/api/chat)         │   │  ← Conversational
-│  │  - Orchestration API (/api/...)  │   │  ← Workflows
+│  │  - MCP API  (/mcp)                    │   │  ← AI Assistants
+│  │  - Chat API (/v1/chat/completions)  │   │  ← OpenAI-compatible
+│  │  - Orchestration API (/api/...)      │   │  ← Workflows
 │  └─────────────────────────────────┘   │
 └───────────────┬─────────────────────────┘
                 │

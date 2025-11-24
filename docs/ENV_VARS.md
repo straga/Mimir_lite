@@ -490,6 +490,50 @@ HOST_HOME=/Users/john docker compose up
 
 ---
 
+## Agent Execution Configuration
+
+### `MIMIR_AGENT_RECURSION_LIMIT`
+**Type**: Integer  
+**Default**: `100`
+
+**Maximum number of steps (tool calls + responses) an agent can take before stopping.**
+
+Controls how many iterations the LangGraph agent can execute before hitting the recursion limit. Each step typically includes:
+- Agent thinking/reasoning
+- Tool call execution
+- Tool response processing
+
+**When to adjust:**
+- **Increase (150-200)**: For complex multi-step tasks requiring many tool calls
+- **Decrease (50-75)**: To save costs or prevent runaway agents
+- **Keep default (100)**: Suitable for most GPT-4.1 tasks
+
+**Error handling:**
+If the limit is reached, the UI will display a user-friendly message:
+> "I'm sorry, but this task is too complex for me to complete in one go. Please try breaking it down into smaller, more focused subtasks."
+
+**Cost implications:**
+Higher limits allow more tool calls but consume more tokens. Monitor your usage when increasing this value.
+
+**Example values:**
+```bash
+# Conservative (cost-saving)
+MIMIR_AGENT_RECURSION_LIMIT=50
+
+# Default (recommended for GPT-4.1)
+MIMIR_AGENT_RECURSION_LIMIT=100
+
+# Complex tasks (research, multi-file refactoring)
+MIMIR_AGENT_RECURSION_LIMIT=150
+
+# Very complex tasks (full system analysis)
+MIMIR_AGENT_RECURSION_LIMIT=200
+```
+
+**Note:** This is separate from the circuit breaker limit (MAX_TOOL_CALLS), which is set by the PM agent based on task complexity estimates.
+
+---
+
 ## Quick Start Configurations
 
 ### Local Ollama Setup

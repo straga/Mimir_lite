@@ -15,13 +15,19 @@
  * - Context injection from graph database
  * 
  * **Endpoints:**
- * - `POST /api/chat/v1/chat/completions` - Chat completion with RAG
- * - `GET /api/chat/models` - List available LLM models
+ * - `POST /v1/chat/completions` - Chat completion with RAG (OpenAI-compatible)
+ * - `POST /v1/embeddings` - Generate embeddings (OpenAI-compatible)
+ * - `GET /v1/models` - List available LLM models (OpenAI-compatible)
+ * - `GET /models` - List available LLM models (alias)
+ * - `GET /api/preambles` - List available agent preambles
+ * - `GET /api/preambles/:name` - Get specific preamble
+ * - `GET /api/tools` - List available MCP tools
+ * - `GET /api/models` - List models (legacy endpoint)
  * 
  * @example
  * ```typescript
- * // Chat with RAG context
- * fetch('/api/chat/v1/chat/completions', {
+ * // Chat with RAG context (OpenAI-compatible)
+ * fetch('/v1/chat/completions', {
  *   method: 'POST',
  *   headers: { 'Content-Type': 'application/json' },
  *   body: JSON.stringify({
@@ -612,13 +618,34 @@ ${relevantContext}
     } catch (error: any) {
       console.error('❌ Chat completion error:', error);
       
+      // Check if this is a recursion limit error
+      const isRecursionError = error.message?.includes('Recursion limit') || 
+                               error.lc_error_code === 'GRAPH_RECURSION_LIMIT';
+      
+      let userMessage = error.message;
+      let errorType = 'Chat completion failed';
+      
+      if (isRecursionError) {
+        errorType = 'Task too complex';
+        userMessage = "I'm sorry, but this task is too complex for me to complete in one go. " +
+                      "The task exceeded the maximum number of steps I can take. " +
+                      "Please try breaking it down into smaller, more focused subtasks, or " +
+                      "increase the MIMIR_AGENT_RECURSION_LIMIT environment variable if you need more steps.";
+        
+        console.error('💡 Suggestion: Break task into smaller subtasks or increase MIMIR_AGENT_RECURSION_LIMIT');
+      }
+      
       if (res.headersSent) {
-        res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
+        res.write(`event: error\ndata: ${JSON.stringify({ 
+          error: userMessage,
+          type: errorType 
+        })}\n\n`);
         res.end();
       } else {
-        res.status(500).json({
-          error: 'Chat completion failed',
-          details: error.message,
+        res.status(isRecursionError ? 400 : 500).json({
+          error: errorType,
+          details: userMessage,
+          suggestion: isRecursionError ? 'Break task into smaller subtasks or increase recursion limit' : undefined
         });
       }
     }

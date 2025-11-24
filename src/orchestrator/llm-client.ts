@@ -848,6 +848,10 @@ CONCISE SUMMARY:`;
       // Use PM's estimate (×10) if provided, otherwise default to 100
       const MAX_TOOL_CALLS = circuitBreakerLimit || 100;
       const MAX_MESSAGES = MAX_TOOL_CALLS * 10; // ~10 messages per tool call (generous buffer)
+      
+      // Recursion limit: Configurable via environment variable
+      // Default: 100 for GPT-4.1, can be increased for complex tasks
+      const RECURSION_LIMIT = parseInt(process.env.MIMIR_AGENT_RECURSION_LIMIT || '100', 10);
 
       console.log(
         `🔒 Circuit breaker limit: ${MAX_TOOL_CALLS} tool calls (${
@@ -893,7 +897,7 @@ CONCISE SUMMARY:`;
           messages: initialMessages,
         },
         {
-          recursionLimit: MAX_MESSAGES, // Generous limit to prevent premature cutoff
+          recursionLimit: RECURSION_LIMIT, // Configurable via MIMIR_AGENT_RECURSION_LIMIT
         }
       );
       console.log("📥 Agent invocation complete");

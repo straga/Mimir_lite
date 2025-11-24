@@ -692,7 +692,7 @@ Expected improvements:
 | Embeddings | `POST /api/embeddings` | `POST /v1/embeddings` |
 | Model List | `GET /api/tags` | `GET /v1/models` |
 | Health Check | N/A | `GET /health` |
-| Chat | `POST /api/chat` | `POST /v1/chat/completions` |
+| Chat | `POST /api/generate` | `POST /v1/chat/completions` |
 | Completion | `POST /api/generate` | `POST /v1/completions` |
 | Reranking | N/A | `POST /v1/rerank` |
 

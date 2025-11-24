@@ -143,7 +143,7 @@ http://localhost:9042
 2. **File Indexing** - Add/remove folders to index your codebase
 3. **Orchestration Studio** - Visual workflow builder (coming soon)
 4. **MCP API** - Available at `/mcp` endpoint for AI assistants
-5. **Chat API** - Available at `/api/chat` for conversational interfaces
+5. **Chat API** - OpenAI-compatible endpoints at `/v1/chat/completions` and `/v1/embeddings`
 
 **Try these features:**
 - Add a folder to index your codebase
