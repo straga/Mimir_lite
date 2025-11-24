@@ -594,7 +594,7 @@ export class FileWatchManager {
       }
 
       try {
-        await this.indexer.indexFile(file, containerPath, generateEmbeddings);
+        await this.indexer.indexFile(file, containerPath, generateEmbeddings, config.id);
         indexed++;
         
         // Update progress and emit event after indexing
@@ -652,7 +652,7 @@ export class FileWatchManager {
     console.log(`➕ File added: ${relativePath}`);
     
     try {
-      await this.indexer.indexFile(fullPath, config.path);
+      await this.indexer.indexFile(fullPath, config.path, config.generate_embeddings, config.id);
     } catch (error: any) {
       if (error.message !== 'Binary file') {
         console.error(`Failed to index ${relativePath}:`, error.message);

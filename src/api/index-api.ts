@@ -296,55 +296,76 @@ router.delete('/indexed-folders', async (req: Request, res: Response) => {
     }
 
     const containerPath = config.path;
-    const resolvedPath = config.host_path || config.path;
+    const hostPath = config.host_path || config.path;
 
     console.log(`   Container path: ${containerPath}`);
-    console.log(`   Host path: ${resolvedPath}`);
+    console.log(`   Host path: ${hostPath}`);
 
-    // Stop watching (use container path)
+    // Stop watcher
     const watchManager = getWatchManager();
     await watchManager.stopWatch(containerPath);
 
-    // Delete watch configuration
-    await configManager.delete(config.id);
-
-    // Delete indexed files and chunks for this folder
+    // Execute hybrid cleanup strategy (relationships + path fallback)
     const session = driver.session();
     try {
-      // Ensure path ends with separator to avoid false matches (e.g., /src matching /src-other)
-      const folderPathWithSep = containerPath.endsWith('/') ? containerPath : containerPath + '/';
-      
-      // Delete File nodes and their FileChunk children
-      const fileResult = await session.run(
-        `
-        MATCH (f:File)
-        WHERE f.path STARTS WITH $folderPathWithSep OR f.path = $exactPath
+      // Step 1: Try relationship-based deletion (for files indexed with new code)
+      const relResult = await session.run(`
+        MATCH (wc:WatchConfig {id: $watchConfigId})-[:WATCHES]->(f:File)
         OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
-        DETACH DELETE f, c
-        RETURN count(DISTINCT f) as fileCount, count(DISTINCT c) as chunkCount
-        `,
-        { 
-          folderPathWithSep,
-          exactPath: containerPath
-        }
-      );
+        WITH f, collect(c) AS chunks, count(c) AS chunk_count
+        FOREACH (chunk IN chunks | DETACH DELETE chunk)
+        DETACH DELETE f
+        RETURN count(f) AS files_deleted, sum(chunk_count) AS chunks_deleted
+      `, { 
+        watchConfigId: config.id
+      });
       
-      const stats = fileResult.records[0];
-      const deletedFiles = stats ? stats.get('fileCount').toInt() : 0;
-      const deletedChunks = stats ? stats.get('chunkCount').toInt() : 0;
+      let filesDeleted = relResult.records[0]?.get('files_deleted')?.toNumber() || 0;
+      let chunksDeleted = relResult.records[0]?.get('chunks_deleted')?.toNumber() || 0;
       
-      console.log(`🗑️  Deleted ${deletedFiles} files and ${deletedChunks} file chunks`);
+      // Step 2: Fallback to path-based deletion (for orphaned files from old code)
+      const folderPathWithSep = containerPath.endsWith('/') ? containerPath : containerPath + '/';
+      const pathResult = await session.run(`
+        MATCH (f:File)
+        WHERE (f.path STARTS WITH $folderPathWithSep OR f.path = $exactPath)
+          AND NOT EXISTS { MATCH (f)<-[:WATCHES]-(:WatchConfig) }
+        OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+        WITH f, collect(c) AS chunks, count(c) AS chunk_count
+        FOREACH (chunk IN chunks | DETACH DELETE chunk)
+        DETACH DELETE f
+        RETURN count(f) AS files_deleted, sum(chunk_count) AS chunks_deleted
+      `, { 
+        folderPathWithSep,
+        exactPath: containerPath
+      });
+      
+      const pathFilesDeleted = pathResult.records[0]?.get('files_deleted')?.toNumber() || 0;
+      const pathChunksDeleted = pathResult.records[0]?.get('chunks_deleted')?.toNumber() || 0;
+      
+      filesDeleted += pathFilesDeleted;
+      chunksDeleted += pathChunksDeleted;
+      
+      if (pathFilesDeleted > 0) {
+        console.log(`🧹 Cleaned up ${pathFilesDeleted} orphaned files (no relationships) via path matching`);
+      }
+      
+      // Step 3: Delete the WatchConfig
+      await configManager.delete(config.id);
+      
+      console.log(`🗑️  Deleted ${filesDeleted} files and ${chunksDeleted} file chunks`);
+
+      res.json({ 
+        success: true, 
+        message: `Folder removed from indexing: ${hostPath}`,
+        path: hostPath,
+        containerPath: containerPath,
+        files_removed: filesDeleted,
+        chunks_removed: chunksDeleted
+      });
     } finally {
       await session.close();
       await driver.close();
     }
-
-    res.json({ 
-      success: true, 
-      message: `Folder removed from indexing: ${resolvedPath}`,
-      path: resolvedPath,
-      containerPath: containerPath
-    });
   } catch (error: any) {
     console.error('❌ Error removing folder from indexing:', error);
     res.status(500).json({ 

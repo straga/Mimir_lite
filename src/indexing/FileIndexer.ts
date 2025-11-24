@@ -253,7 +253,7 @@ export class FileIndexer {
    *   }
    * }
    */
-  async indexFile(filePath: string, rootPath: string, generateEmbeddings: boolean = false): Promise<IndexResult> {
+  async indexFile(filePath: string, rootPath: string, generateEmbeddings: boolean = false, watchConfigId?: string): Promise<IndexResult> {
     const session = this.driver.session();
     let content: string = '';
     let isImage = false;
@@ -396,7 +396,28 @@ export class FileIndexer {
       
       // Wrap File node creation with retry logic to handle deadlocks
       const fileResult = await this.retryNeo4jTransaction(async () => {
-        return await session.run(`
+        // Create File node and optionally link to WatchConfig
+        const query = watchConfigId ? `
+          MERGE (f:File:Node {path: $path})
+          ON CREATE SET f.id = 'file-' + toString(timestamp()) + '-' + substring(randomUUID(), 0, 8)
+          SET 
+            f.host_path = $host_path,
+            f.name = $name,
+            f.extension = $extension,
+            f.language = $language,
+            f.size_bytes = $size_bytes,
+            f.line_count = $line_count,
+            f.last_modified = $last_modified,
+            f.indexed_date = datetime(),
+            f.type = 'file',
+            f.has_chunks = $has_chunks,
+            f.content = $content
+          WITH f
+          MATCH (wc:WatchConfig {id: $watchConfigId})
+          MERGE (wc)-[:WATCHES]->(f)
+          MERGE (f)-[:WATCHED_BY]->(wc)
+          RETURN f.path AS path, f.size_bytes AS size_bytes, id(f) AS node_id
+        ` : `
           MERGE (f:File:Node {path: $path})
           ON CREATE SET f.id = 'file-' + toString(timestamp()) + '-' + substring(randomUUID(), 0, 8)
           SET 
@@ -412,7 +433,9 @@ export class FileIndexer {
             f.has_chunks = $has_chunks,
             f.content = $content
           RETURN f.path AS path, f.size_bytes AS size_bytes, id(f) AS node_id
-        `, {
+        `;
+        
+        return await session.run(query, {
           path: filePath,  // Now stores absolute container path
           host_path: hostPath,
           name: path.basename(filePath),
@@ -422,7 +445,8 @@ export class FileIndexer {
           line_count: content.split('\n').length,
           last_modified: stats.mtime.toISOString(),
           has_chunks: needsChunking,
-          content: shouldStoreFullContent ? content : null // Store full content when embeddings disabled OR file is small
+          content: shouldStoreFullContent ? content : null, // Store full content when embeddings disabled OR file is small
+          watchConfigId: watchConfigId || null
         });
       }, `Create/update File node for ${relativePath}`);
 

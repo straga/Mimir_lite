@@ -286,28 +286,10 @@ async function startHttpServer() {
         console.warn(`[HTTP] Server connected to shared session`);
       }
       
-      // Set SSE headers
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Mcp-Session-Id', SHARED_SESSION_ID);
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.flushHeaders();
-      
       console.warn(`[HTTP] SSE stream established for session: ${SHARED_SESSION_ID}`);
       
-      // Keep connection alive with periodic heartbeat
-      const heartbeatInterval = setInterval(() => {
-        res.write(': heartbeat\n\n');
-      }, 30000);
-      
-      // Clean up on disconnect
-      req.on('close', () => {
-        clearInterval(heartbeatInterval);
-        console.warn(`[HTTP] SSE client disconnected`);
-      });
-      
-      // Handle the SSE request through transport
+      // Let the transport handle the entire request/response cycle (including headers)
+      // The transport will set SSE headers, manage the stream, and handle cleanup
       await sharedTransport.handleRequest(req, res, null);
     } catch (error) {
       console.error('❌ HTTP /mcp SSE handler error:', error instanceof Error ? error.message : error);

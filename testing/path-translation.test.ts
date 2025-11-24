@@ -841,11 +841,17 @@ describe('handleRemoveFolder', () => {
       mockConfigManager
     );
 
-    // Verify container path was used in Neo4j query
-    expect(mockSession.run).toHaveBeenCalled();
-    const params = mockSession.run.mock.calls[0][1];
-    expect(params.folderPathWithSep).toBe('/workspace/test-project/');
-    expect(params.exactPath).toBe('/workspace/test-project');
+    // Verify two queries were made (Step 1: relationships, Step 2: path fallback)
+    expect(mockSession.run).toHaveBeenCalledTimes(2);
+    
+    // Step 1: Relationship-based query
+    const step1Params = mockSession.run.mock.calls[0][1];
+    expect(step1Params.watchConfigId).toBe('watch-test');
+    
+    // Step 2: Path-based fallback query
+    const step2Params = mockSession.run.mock.calls[1][1];
+    expect(step2Params.folderPathWithSep).toBe('/workspace/test-project/');
+    expect(step2Params.exactPath).toBe('/workspace/test-project');
   });
 
   it('should return error when path is not being watched', async () => {
@@ -888,10 +894,13 @@ describe('handleRemoveFolder', () => {
       mockConfigManager
     );
 
-    // Verify Neo4j query used container path, not user path
-    const params = mockSession.run.mock.calls[0][1];
-    expect(params.folderPathWithSep).toBe('/workspace/my-project/');
-    expect(params.folderPathWithSep).not.toContain('C:\\');
+    // Verify two queries were made
+    expect(mockSession.run).toHaveBeenCalledTimes(2);
+    
+    // Step 2: Path-based fallback query should use container path
+    const step2Params = mockSession.run.mock.calls[1][1];
+    expect(step2Params.folderPathWithSep).toBe('/workspace/my-project/');
+    expect(step2Params.folderPathWithSep).not.toContain('C:\\');
   });
 
   it('should return user-provided path in response', async () => {
@@ -917,8 +926,9 @@ describe('handleRemoveFolder', () => {
     // Result should contain original user path AND container path
     expect(result.path).toBe(userPath);
     expect(result.containerPath).toBe('/workspace/my-project');
-    expect(result.files_removed).toBe(5);
-    expect(result.chunks_removed).toBe(50);
+    // Mock returns 5 files from each step, so total is 10
+    expect(result.files_removed).toBe(10);
+    expect(result.chunks_removed).toBe(100);
   });
 
   it('should pass correct parameters to Neo4j DELETE query', async () => {
@@ -940,16 +950,22 @@ describe('handleRemoveFolder', () => {
       mockConfigManager
     );
 
-    // Verify the Cypher query parameters
-    expect(mockSession.run).toHaveBeenCalled();
-    const cypher = mockSession.run.mock.calls[0][0];
-    const params = mockSession.run.mock.calls[0][1];
-
-    // Should use folderPathWithSep and exactPath (BUG FIX)
-    expect(params.folderPathWithSep).toBe('/workspace/my-project/');
-    expect(params.exactPath).toBe('/workspace/my-project');
-    expect(cypher).toContain('f.path STARTS WITH $folderPathWithSep');
-    expect(cypher).toContain('f.path = $exactPath');
+    // Verify two queries were made
+    expect(mockSession.run).toHaveBeenCalledTimes(2);
+    
+    // Step 1: Relationship-based query
+    const cypher1 = mockSession.run.mock.calls[0][0];
+    const params1 = mockSession.run.mock.calls[0][1];
+    expect(params1.watchConfigId).toBe('watch-params-test');
+    expect(cypher1).toContain('MATCH (wc:WatchConfig {id: $watchConfigId})-[:WATCHES]->(f:File)');
+    
+    // Step 2: Path-based fallback query
+    const cypher2 = mockSession.run.mock.calls[1][0];
+    const params2 = mockSession.run.mock.calls[1][1];
+    expect(params2.folderPathWithSep).toBe('/workspace/my-project/');
+    expect(params2.exactPath).toBe('/workspace/my-project');
+    expect(cypher2).toContain('f.path STARTS WITH $folderPathWithSep');
+    expect(cypher2).toContain('NOT EXISTS { MATCH (f)<-[:WATCHES]-(:WatchConfig) }');
   });
 
   // ========================================================================

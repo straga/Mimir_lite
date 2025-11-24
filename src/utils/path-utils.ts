@@ -367,8 +367,13 @@ export function translateHostToContainer(hostPath: string): string {
       relativePath = '/' + relativePath;
     }
     
-    // Build container path
-    const containerPath = `${containerRoot}${relativePath}`;
+    // Build container path and normalize (remove trailing slashes)
+    let containerPath = `${containerRoot}${relativePath}`;
+    
+    // Remove trailing slashes (except for root)
+    if (containerPath.length > 1) {
+      containerPath = containerPath.replace(/\/+$/, '');
+    }
     
     console.log(`📍 Host -> Container: ${hostPath} -> ${containerPath}`);
     return containerPath;
@@ -386,9 +391,15 @@ export function translateHostToContainer(hostPath: string): string {
     throw new Error(`Path is outside workspace root: ${normalizedPath} (root: ${hostRoot})`);
   }
   
-  const containerPath = `${containerRoot}/${relativePath}`;
+  let containerPath = `${containerRoot}/${relativePath}`;
+  
+  // Remove trailing slashes (except for root)
+  if (containerPath.length > 1) {
+    containerPath = containerPath.replace(/\/+$/, '');
+  }
+  
   console.log(`📍 Host -> Container (relative): ${hostPath} -> ${containerPath}`);
-  return normalizeSlashes(containerPath);
+  return containerPath;
 }
 
 /**

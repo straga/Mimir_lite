@@ -221,6 +221,7 @@ export async function handleIndexFolder(
     // Create watch config if it doesn't exist
     const input: WatchConfigInput = {
       path: containerPath,  // Store container path
+      host_path: resolvedPath,  // Store host path for reference
       recursive: params.recursive ?? true,
       debounce_ms: params.debounce_ms ?? 500,
       file_patterns: params.file_patterns ?? null,
@@ -334,21 +335,34 @@ export async function handleRemoveFolder(
   // Stop watcher (using container path)
   await watchManager.stopWatch(containerPath);
 
-  // Delete watch configuration from Neo4j
-  await manager.delete(config.id);
-
-  // Remove all indexed files and chunks from this folder (using container path)
+  // Remove all indexed files and chunks
+  // Strategy: Try relationship-based deletion first (preferred), then fall back to path-based
   const session = driver.session();
   try {
-    // Ensure path ends with separator to avoid false matches (e.g., /src matching /src-other)
-    const folderPathWithSep = containerPath.endsWith('/') ? containerPath : containerPath + '/';
-    
-    const result = await session.run(`
-      MATCH (f:File)
-      WHERE f.path STARTS WITH $folderPathWithSep OR f.path = $exactPath
+    // Step 1: Try relationship-based deletion (for files indexed with new code)
+    const relResult = await session.run(`
+      MATCH (wc:WatchConfig {id: $watchConfigId})-[:WATCHES]->(f:File)
       OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
       WITH f, collect(c) AS chunks, count(c) AS chunk_count
-      // Delete chunks FIRST, then file
+      FOREACH (chunk IN chunks | DETACH DELETE chunk)
+      DETACH DELETE f
+      RETURN count(f) AS files_deleted, sum(chunk_count) AS chunks_deleted
+    `, { 
+      watchConfigId: config.id
+    });
+    
+    let filesDeleted = relResult.records[0]?.get('files_deleted')?.toNumber() || 0;
+    let chunksDeleted = relResult.records[0]?.get('chunks_deleted')?.toNumber() || 0;
+    
+    // Step 2: Fallback to path-based deletion (for orphaned files from old code)
+    // This catches files that were indexed before we implemented relationships
+    const folderPathWithSep = containerPath.endsWith('/') ? containerPath : containerPath + '/';
+    const pathResult = await session.run(`
+      MATCH (f:File)
+      WHERE (f.path STARTS WITH $folderPathWithSep OR f.path = $exactPath)
+        AND NOT EXISTS { MATCH (f)<-[:WATCHES]-(:WatchConfig) }
+      OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+      WITH f, collect(c) AS chunks, count(c) AS chunk_count
       FOREACH (chunk IN chunks | DETACH DELETE chunk)
       DETACH DELETE f
       RETURN count(f) AS files_deleted, sum(chunk_count) AS chunks_deleted
@@ -357,9 +371,18 @@ export async function handleRemoveFolder(
       exactPath: containerPath
     });
     
-    const record = result.records[0];
-    const filesDeleted = record?.get('files_deleted')?.toNumber() || 0;
-    const chunksDeleted = record?.get('chunks_deleted')?.toNumber() || 0;
+    const pathFilesDeleted = pathResult.records[0]?.get('files_deleted')?.toNumber() || 0;
+    const pathChunksDeleted = pathResult.records[0]?.get('chunks_deleted')?.toNumber() || 0;
+    
+    filesDeleted += pathFilesDeleted;
+    chunksDeleted += pathChunksDeleted;
+    
+    if (pathFilesDeleted > 0) {
+      console.log(`🧹 Cleaned up ${pathFilesDeleted} orphaned files (no relationships) via path matching`);
+    }
+    
+    // Step 3: Now delete the WatchConfig itself
+    await manager.delete(config.id);
     
     return {
       status: 'success',
