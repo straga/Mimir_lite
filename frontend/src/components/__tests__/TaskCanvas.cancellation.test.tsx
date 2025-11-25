@@ -140,6 +140,7 @@ describe('TaskCanvas SSE Event Handling', () => {
       // Add a test task
       act(() => {
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-0',
           title: 'Test Task',
           agentRoleDescription: 'Test Agent',
@@ -170,6 +171,7 @@ describe('TaskCanvas SSE Event Handling', () => {
       
       act(() => {
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-0',
           title: 'Test Task',
           agentRoleDescription: 'Test Agent',
@@ -201,6 +203,7 @@ describe('TaskCanvas SSE Event Handling', () => {
       
       act(() => {
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-0',
           title: 'Test Task',
           agentRoleDescription: 'Test Agent',
@@ -259,6 +262,7 @@ describe('TaskCanvas SSE Event Handling', () => {
       // Set up execution state
       act(() => {
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-0',
           title: 'Test Task',
           agentRoleDescription: 'Test Agent',
@@ -365,6 +369,7 @@ describe('TaskCanvas SSE Event Handling', () => {
       
       act(() => {
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-0',
           title: 'Test Task',
           agentRoleDescription: 'Test Agent',
@@ -443,6 +448,7 @@ describe('TaskCanvas SSE Event Handling', () => {
       // Add test tasks
       act(() => {
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-0',
           title: 'Setup',
           agentRoleDescription: 'DevOps',
@@ -459,6 +465,7 @@ describe('TaskCanvas SSE Event Handling', () => {
           maxRetries: 2,
         });
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-1',
           title: 'Deploy',
           agentRoleDescription: 'DevOps',
@@ -539,6 +546,7 @@ describe('TaskCanvas SSE Event Handling', () => {
       // Add test tasks
       act(() => {
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-0',
           title: 'Task 0',
           agentRoleDescription: 'Agent',
@@ -555,6 +563,7 @@ describe('TaskCanvas SSE Event Handling', () => {
           maxRetries: 2,
         });
         result.current.addTask({
+          taskType: 'agent',
           id: 'task-1',
           title: 'Task 1',
           agentRoleDescription: 'Agent',

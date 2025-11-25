@@ -609,20 +609,55 @@ export class UnifiedSearchService {
     } catch (error: any) {
       console.error('❌ RRF hybrid search error:', error);
       
-      // Fallback to standard vector search on error
-      console.log('⚠️  Falling back to standard vector search...');
-      const vectorResults = await this.vectorSearch(query, options);
-      
-      return {
-        status: 'success',
-        query,
-        results: vectorResults,
-        total_candidates: vectorResults.length,
-        returned: vectorResults.length,
-        search_method: 'rrf_hybrid',
-        fallback_triggered: true,
-        message: `RRF hybrid search failed: ${error.message}. Fell back to vector-only search.`
-      };
+      // Try vector search fallback first
+      try {
+        console.log('⚠️  Falling back to standard vector search...');
+        const vectorResults = await this.vectorSearch(query, options);
+        
+        return {
+          status: 'success',
+          query,
+          results: vectorResults,
+          total_candidates: vectorResults.length,
+          returned: vectorResults.length,
+          search_method: 'rrf_hybrid',
+          fallback_triggered: true,
+          message: `RRF hybrid search failed: ${error.message}. Fell back to vector-only search.`
+        };
+      } catch (vectorError: any) {
+        // Vector search also failed - try full-text search as last resort
+        console.error('❌ Vector search fallback also failed:', vectorError.message);
+        
+        try {
+          console.log('⚠️  Falling back to full-text search...');
+          const fulltextResults = await this.fullTextSearch(query, options);
+          
+          return {
+            status: 'success',
+            query,
+            results: fulltextResults,
+            total_candidates: fulltextResults.length,
+            returned: fulltextResults.length,
+            search_method: 'fulltext',
+            fallback_triggered: true,
+            message: `Vector search unavailable. Using full-text search only.`
+          };
+        } catch (fulltextError: any) {
+          // All search methods failed - return empty results gracefully
+          console.error('❌ All search methods failed:', fulltextError.message);
+          
+          return {
+            status: 'success', // Still return success to not crash the caller
+            query,
+            results: [],
+            total_candidates: 0,
+            returned: 0,
+            search_method: 'fulltext', // Use fulltext as default type even though search failed
+            fallback_triggered: true,
+            message: `Search unavailable: ${error.message}. Returning empty results.`
+          };
+        }
+      }
     }
   }
 

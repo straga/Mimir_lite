@@ -1,76 +1,62 @@
-import { useState, useRef, useEffect } from 'react';
-import { useDrag, useDrop } from 'react-dnd';
+import { useState, useEffect } from 'react';
+import { useDrop } from 'react-dnd';
 import { usePlanStore } from '../store/planStore';
-import { Task, ParallelGroup, AgentTemplate } from '../types/task';
-import { TaskCard } from './TaskCard';
-import { ParallelGroupContainer } from './ParallelGroupContainer';
-import { Plus, Download, Play, ListPlus, GripVertical, FileDown, XCircle } from 'lucide-react';
+import { AgentTemplate, AgentTask, Lambda, TransformerTask } from '../types/task';
+import { WorkflowGraph } from './WorkflowGraph';
+import { Download, Play, ListPlus, FileDown, XCircle, ArrowRightLeft, Upload } from 'lucide-react';
+import { ImportWorkflowModal } from './ImportWorkflowModal';
 
-// Unified reorderable canvas item (task or group)
-interface ReorderableItemProps {
-  itemId: string;
-  itemType: 'task' | 'group';
-  index: number;
-  onReorder: (itemId: string, itemType: 'task' | 'group', newIndex: number) => void;
-  children: React.ReactNode;
-}
-
-function ReorderableItem({ itemId, itemType, index, onReorder, children }: ReorderableItemProps) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  const [{ isDragging }, drag] = useDrag({
-    type: 'canvas-item',
-    item: { type: 'canvas-item', itemId, itemType, index },
-    collect: (monitor) => ({
-      isDragging: monitor.isDragging(),
-    }),
-  });
-
-  const [{ isOver }, drop] = useDrop({
-    accept: 'canvas-item',
-    hover: (item: { itemId: string; itemType: 'task' | 'group'; index: number }, monitor) => {
-      if (!ref.current) return;
+// Wrapper to catch agent/lambda drops in graph view
+function GraphDropWrapper({ isExecuting }: { isExecuting: boolean }) {
+  const { addTask } = usePlanStore();
+  
+  const [{ isOver, isOverLambda }, dropRef] = useDrop(() => ({
+    accept: ['agent', 'lambda'],
+    // Handle drops on the graph background
+    drop: (item: AgentTemplate | Lambda, monitor) => {
+      // Only intercept if no nested zone handled it
+      if (monitor.didDrop()) {
+        return undefined;
+      }
       
-      const dragIndex = item.index;
-      const hoverIndex = index;
+      const itemType = monitor.getItemType();
       
-      if (dragIndex === hoverIndex) return;
+      if (itemType === 'lambda') {
+        // Lambda dropped on graph background - create new transformer
+        const lambda = item as Lambda;
+        const newTransformer: TransformerTask = {
+          id: `transformer-${Date.now()}`,
+          taskType: 'transformer',
+          title: `${lambda.name} Transform`,
+          description: lambda.description,
+          lambdaId: lambda.id,
+          dependencies: [],
+          parallelGroup: null,
+        };
+        addTask(newTransformer);
+        console.log('Lambda dropped on graph - created transformer:', newTransformer.title);
+      } else {
+        // Agent dropped on graph background - ignore (must drop on task node to assign)
+        console.log('Agent dropped on graph background - ignored (drop on a task node to assign)');
+      }
       
-      // Don't trigger on first hover to avoid jitter
-      const hoverBoundingRect = ref.current?.getBoundingClientRect();
-      const hoverMiddleY = (hoverBoundingRect.bottom - hoverBoundingRect.top) / 2;
-      const clientOffset = monitor.getClientOffset();
-      const hoverClientY = clientOffset!.y - hoverBoundingRect.top;
-      
-      // Only perform the move when the mouse has crossed half of the items height
-      if (dragIndex < hoverIndex && hoverClientY < hoverMiddleY) return;
-      if (dragIndex > hoverIndex && hoverClientY > hoverMiddleY) return;
-      
-      onReorder(item.itemId, item.itemType, hoverIndex);
-      item.index = hoverIndex;
+      return undefined;
     },
     collect: (monitor) => ({
-      isOver: monitor.isOver(),
+      isOver: monitor.isOver({ shallow: true }),
+      isOverLambda: monitor.isOver({ shallow: true }) && monitor.getItemType() === 'lambda',
     }),
-  });
-
-  drag(drop(ref));
+  }), [addTask]);
 
   return (
-    <div
-      ref={ref}
-      className={`transition-opacity ${
-        isDragging ? 'opacity-50' : 'opacity-100'
-      } ${isOver ? 'border-l-4 border-valhalla-gold pl-2' : ''}`}
+    <div 
+      ref={dropRef}
+      className={`flex-1 min-h-0 rounded-lg overflow-hidden border transition-all ${
+        isOverLambda ? 'border-violet-500/50 bg-violet-950/10' : 
+        isOver ? 'border-valhalla-gold/50 bg-valhalla-gold/5' : 'border-norse-rune'
+      }`}
     >
-      <div className="flex items-stretch gap-2">
-        <div className="flex items-center cursor-move text-gray-500 hover:text-valhalla-gold transition-colors pt-3">
-        <GripVertical className="w-5 h-5" />
-      </div>
-      <div className="flex-1">
-          {children}
-        </div>
-      </div>
+      <WorkflowGraph isExecuting={isExecuting} />
     </div>
   );
 }
@@ -79,11 +65,10 @@ export function TaskCanvas() {
   const { 
     tasks, 
     parallelGroups, 
-    addTask, 
-    addParallelGroup, 
-    assignTaskToGroup, 
-    reorderCanvasItem, 
+    addTask,
+    addTransformer,
     agentTemplates, 
+    lambdas,
     projectPlan,
     updateTaskExecutionStatus,
     setActiveExecution,
@@ -95,6 +80,7 @@ export function TaskCanvas() {
   const [currentExecutionId, setCurrentExecutionId] = useState<string | null>(null);
   const [completedExecutionId, setCompletedExecutionId] = useState<string | null>(null);
   const [deliverables, setDeliverables] = useState<Array<{ filename: string; size: number; mimeType: string }>>([]);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   
   // Reconnect to SSE on mount if there's an active execution
   useEffect(() => {
@@ -249,8 +235,24 @@ export function TaskCanvas() {
     setActiveExecution('starting', true);
     
     try {
+      // Resolve Lambda scripts for transformer tasks
+      const resolvedTasks = tasks.map(task => {
+        if (task.taskType === 'transformer' && task.lambdaId) {
+          const lambda = lambdas.find(l => l.id === task.lambdaId);
+          if (lambda) {
+            return {
+              ...task,
+              lambdaScript: lambda.script,
+              lambdaLanguage: lambda.language,
+              lambdaName: lambda.name,
+            };
+          }
+        }
+        return task;
+      });
+
       const workflowData = {
-        tasks,
+        tasks: resolvedTasks,
         parallelGroups,
         agentTemplates,
         projectPlan,
@@ -356,50 +358,10 @@ export function TaskCanvas() {
     }
   };
 
-  // Helper function to extract task number from ID as fallback (e.g., "task-0" -> 0)
-  const getTaskNumber = (taskId: string): number => {
-    const match = taskId.match(/task-(\d+)/);
-    return match ? parseInt(match[1], 10) : Infinity;
-  };
-
-  // Create unified canvas items (tasks and parallel groups interleaved)
-  type CanvasItem = 
-    | { type: 'task'; task: Task; order: number }
-    | { type: 'group'; group: ParallelGroup; order: number };
-
-  const canvasItems: CanvasItem[] = [];
-
-  // Add ungrouped tasks (use order property, fallback to task number)
-  tasks
-    .filter((t) => t.parallelGroup === null)
-    .forEach((task) => {
-      canvasItems.push({
-        type: 'task',
-        task,
-        order: task.order ?? getTaskNumber(task.id),
-      });
-    });
-
-  // Add parallel groups (order based on minimum order of tasks in the group)
-  parallelGroups.forEach((group) => {
-    const groupTasks = tasks.filter((t) => t.parallelGroup === group.id);
-    const minOrder = Math.min(
-      ...groupTasks.map((t) => t.order ?? getTaskNumber(t.id)),
-      Infinity
-    );
-    canvasItems.push({
-      type: 'group',
-      group,
-      order: minOrder,
-    });
-  });
-
-  // Sort by order property
-  canvasItems.sort((a, b) => a.order - b.order);
-  
   const handleCreateTask = () => {
-    const newTask: Task = {
+    const newTask: AgentTask = {
       id: `task-${Date.now()}`,
+      taskType: 'agent',
       title: 'New Task',
       agentRoleDescription: '',
       recommendedModel: 'gpt-4.1',
@@ -416,173 +378,112 @@ export function TaskCanvas() {
     addTask(newTask);
   };
   
-  // Drop zone for agents (to create tasks) and tasks (to ungroup them)
-  const [{ isOverAgent, isOverTask }, drop] = useDrop(() => ({
-    accept: ['agent', 'task'],
-    drop: (item: AgentTemplate | Task, monitor) => {
-      // Only handle drop if it's directly on this zone (not a child zone)
-      if (monitor.didDrop()) {
-        return; // Already handled by a nested drop zone
-      }
-      
-      const itemType = monitor.getItemType();
-      
-      if (itemType === 'agent') {
-        // Agent dropped - create new task
-        const agent = item as AgentTemplate;
-        const newTask: Task = {
-          id: `task-${Date.now()}`,
-          title: `New ${agent.name} Task`,
-          agentRoleDescription: agent.agentType === 'worker' ? agent.role : '',
-          workerPreambleId: agent.agentType === 'worker' ? agent.id : undefined,
-          recommendedModel: 'gpt-4.1',
-          prompt: '',
-          successCriteria: [],
-          dependencies: [],
-          estimatedDuration: '30 minutes',
-          estimatedToolCalls: 20,
-          parallelGroup: null,
-          qcRole: agent.agentType === 'qc' ? agent.role : '',
-          qcPreambleId: agent.agentType === 'qc' ? agent.id : undefined,
-          verificationCriteria: [],
-          maxRetries: 3,
-        };
-        addTask(newTask);
-      } else if (itemType === 'task') {
-        // Task dropped - ungroup it (move to canvas)
-        const task = item as Task;
-        if (task.parallelGroup !== null) {
-          assignTaskToGroup(task.id, null);
-        }
-      }
-    },
-    collect: (monitor) => ({
-      isOverAgent: monitor.isOver({ shallow: true }) && monitor.getItemType() === 'agent',
-      isOverTask: monitor.isOver({ shallow: true }) && monitor.getItemType() === 'task',
-    }),
-  }));
-
   return (
-    <div 
-      ref={drop}
-      className={`p-6 space-y-6 min-h-full transition-colors ${
-        isOverAgent || isOverTask ? 'bg-norse-stone' : 'bg-norse-night'
-      }`}
-    >
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold text-valhalla-gold">Task Canvas</h2>
-          <p className="text-sm text-gray-400 mt-1">
-            Organize tasks into parallel execution groups
-          </p>
-        </div>
-        <div className="flex items-center space-x-3">
+    <div className="p-4 h-full flex flex-col bg-norse-night">
+      {/* Header Row */}
+      <div className="flex items-center justify-between flex-shrink-0">
+        <h2 className="text-lg font-bold text-valhalla-gold">Task Canvas</h2>
+        <p className="text-xs text-gray-500">
+          Drag nodes • Connect dependencies • Drop agents
+        </p>
+      </div>
+
+      {/* Action Toolbar - Compact horizontal bar */}
+      <div className="flex items-center justify-between bg-norse-shadow/50 rounded-lg px-3 py-2 border border-norse-rune/50 flex-shrink-0 mt-4">
+        {/* Left: Execute/Stop */}
+        <div className="flex items-center space-x-2">
           <button
             type="button"
             onClick={isExecuting ? handleCancelExecution : handleExecuteWorkflow}
             disabled={!isExecuting && tasks.length === 0}
-            className={`px-4 py-2 rounded-lg flex items-center space-x-2 transition-all font-semibold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`px-3 py-1.5 rounded-lg flex items-center space-x-2 transition-all text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed ${
               isExecuting
-                ? 'bg-red-600 text-white hover:bg-red-700 hover:shadow-red-600/30'
-                : 'bg-frost-ice text-norse-night hover:bg-magic-rune hover:shadow-frost-ice/30'
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'bg-frost-ice text-norse-night hover:bg-magic-rune'
             }`}
           >
             {isExecuting ? (
               <>
-                <XCircle className="w-5 h-5" />
-                <span>Stop Execution</span>
+                <XCircle className="w-4 h-4" />
+                <span>Stop</span>
               </>
             ) : (
               <>
-                <Play className="w-5 h-5" />
-                <span>Execute Workflow</span>
+                <Play className="w-4 h-4" />
+                <span>Execute</span>
               </>
             )}
+          </button>
+          
+          {deliverables.length > 0 && (
+            <button
+              type="button"
+              onClick={handleDownloadDeliverables}
+              className="px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center space-x-1.5 transition-all text-sm font-medium"
+              title={`Download all ${deliverables.length} deliverable${deliverables.length === 1 ? '' : 's'}`}
+            >
+              <FileDown className="w-4 h-4" />
+              <span>ZIP ({deliverables.length})</span>
+            </button>
+          )}
+        </div>
+
+        {/* Center: Add Actions */}
+        <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={handleCreateTask}
+            disabled={isExecuting}
+            className="px-3 py-1.5 bg-valhalla-gold text-norse-night rounded-lg hover:bg-valhalla-amber flex items-center space-x-1.5 transition-all text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <ListPlus className="w-4 h-4" />
+            <span>Task</span>
+          </button>
+          <button
+            type="button"
+            onClick={addTransformer}
+            disabled={isExecuting}
+            className="px-3 py-1.5 bg-violet-600 text-white rounded-lg hover:bg-violet-500 flex items-center space-x-1.5 transition-all text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <ArrowRightLeft className="w-4 h-4" />
+            <span>Transformer</span>
+          </button>
+        </div>
+
+        {/* Right: Import/Export */}
+        <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={() => setIsImportModalOpen(true)}
+            disabled={isExecuting}
+            className="px-3 py-1.5 bg-norse-stone border border-norse-rune text-gray-300 rounded-lg hover:bg-norse-rune hover:text-white flex items-center space-x-1.5 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Import workflow from JSON"
+          >
+            <Upload className="w-4 h-4" />
+            <span>Import</span>
           </button>
           <button
             type="button"
             onClick={handleExportJSON}
             disabled={tasks.length === 0}
-            className="px-4 py-2 bg-norse-stone border-2 border-norse-rune text-gray-100 rounded-lg hover:bg-norse-rune hover:border-valhalla-gold flex items-center space-x-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 bg-norse-stone border border-norse-rune text-gray-300 rounded-lg hover:bg-norse-rune hover:text-white flex items-center space-x-1.5 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Export workflow as JSON"
           >
             <Download className="w-4 h-4" />
-            <span>Export JSON</span>
-          </button>
-          {deliverables.length > 0 && (
-            <button
-              type="button"
-              onClick={handleDownloadDeliverables}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center space-x-2 transition-all font-semibold shadow-lg hover:shadow-green-600/30"
-              title={`Download all ${deliverables.length} deliverable${deliverables.length === 1 ? '' : 's'} as a zip archive`}
-            >
-              <FileDown className="w-4 h-4" />
-              <span>Download ZIP ({deliverables.length} {deliverables.length === 1 ? 'file' : 'files'})</span>
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={handleCreateTask}
-            disabled={isExecuting}
-            className="px-4 py-2 bg-valhalla-gold text-norse-night rounded-lg hover:bg-valhalla-amber flex items-center space-x-2 transition-all font-semibold shadow-lg hover:shadow-valhalla-gold/30 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <ListPlus className="w-5 h-5" />
-            <span>Create Task</span>
-          </button>
-          <button
-            type="button"
-            onClick={addParallelGroup}
-            disabled={isExecuting}
-            className="px-4 py-2 bg-norse-stone border-2 border-norse-rune text-gray-100 rounded-lg hover:bg-norse-rune hover:border-valhalla-gold flex items-center space-x-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Parallel Group</span>
+            <span>Export</span>
           </button>
         </div>
       </div>
 
-      {/* Unified Task Canvas - Tasks and Groups in Execution Order */}
-      {canvasItems.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold text-valhalla-gold uppercase tracking-wide">
-            Execution Plan
-            <span className="ml-2 text-xs text-gray-400 normal-case font-normal">
-              (top-to-bottom execution order • drag tasks to reorder or move between groups)
-            </span>
-          </h3>
-          <div className="space-y-4">
-            {canvasItems.map((item, index) => {
-              if (item.type === 'task') {
-                return (
-                  <ReorderableItem 
-                    key={item.task.id} 
-                    itemId={item.task.id}
-                    itemType="task"
-                    index={index}
-                    onReorder={reorderCanvasItem}
-                  >
-                    <TaskCard task={item.task} disableDrag={true} isExecuting={isExecuting} />
-                  </ReorderableItem>
-                );
-              } else {
-                return (
-                  <ReorderableItem 
-                    key={`group-${item.group.id}`} 
-                    itemId={String(item.group.id)}
-                    itemType="group"
-                index={index}
-                    onReorder={reorderCanvasItem}
-                  >
-                    <ParallelGroupContainer group={item.group} isExecuting={isExecuting} />
-                  </ReorderableItem>
-                );
-              }
-            })}
-          </div>
+      {/* Graph View */}
+      {tasks.length > 0 && (
+        <div className="flex-1 min-h-0 mt-4 flex flex-col">
+          <GraphDropWrapper isExecuting={isExecuting} />
         </div>
       )}
 
       {/* Empty State */}
-      {canvasItems.length === 0 && (
+      {tasks.length === 0 && (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <div className="text-6xl mb-4">🎯</div>
           <h3 className="text-2xl font-bold mb-3 text-gray-200">No tasks yet</h3>
@@ -600,6 +501,12 @@ export function TaskCanvas() {
           </button>
         </div>
       )}
+
+      {/* Import Workflow Modal */}
+      <ImportWorkflowModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+      />
     </div>
   );
 }

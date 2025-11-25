@@ -1,6 +1,6 @@
 import { useDrop } from 'react-dnd';
 import { usePlanStore } from '../store/planStore';
-import { ParallelGroup, Task, AgentTemplate } from '../types/task';
+import { ParallelGroup, Task, AgentTemplate, AgentTask } from '../types/task';
 import { TaskCard } from './TaskCard';
 import { Trash2, Edit2 } from 'lucide-react';
 import { useState } from 'react';
@@ -40,8 +40,9 @@ export function ParallelGroupContainer({ group, isExecuting = false }: ParallelG
       } else if (itemType === 'agent') {
         // Agent being dropped to create new task in this group
         const agent = item as AgentTemplate;
-        const newTask: Task = {
+        const newTask: AgentTask = {
           id: `task-${Date.now()}`,
+          taskType: 'agent',
           title: `New ${agent.name} Task`,
           agentRoleDescription: agent.agentType === 'worker' ? agent.role : '',
           workerPreambleId: agent.agentType === 'worker' ? agent.id : undefined,

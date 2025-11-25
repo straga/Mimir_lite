@@ -56,6 +56,7 @@ import {
   type ExecutionState,
   type Deliverable 
 } from './orchestration/workflow-executor.js';
+import { validateLambdaScript } from '../orchestrator/lambda-executor.js';
 import { handleVectorSearchNodes } from '../tools/vectorSearch.tools.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1388,6 +1389,73 @@ Location: ${process.cwd()}
       res.status(500).json({
         error: 'Failed to start workflow execution',
         details: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  /**
+   * Validate Lambda Script
+   * 
+   * @route POST /api/validate-lambda
+   * @group Lambda - Lambda script management
+   * @param {string} script.body.required - Lambda script source code
+   * @param {string} language.body.required - Script language (typescript, javascript, python)
+   * @returns {object} 200 - Validation result
+   * @returns {object} 400 - Invalid request
+   * 
+   * @example
+   * const response = await fetch('/api/validate-lambda', {
+   *   method: 'POST',
+   *   headers: { 'Content-Type': 'application/json' },
+   *   body: JSON.stringify({
+   *     script: 'function transform(inputs, ctx) { return inputs.join("\\n"); }',
+   *     language: 'javascript'
+   *   })
+   * }).then(r => r.json());
+   * 
+   * console.log('Valid:', response.valid);
+   */
+  router.post('/validate-lambda', async (req: any, res: any) => {
+    try {
+      const { script, language } = req.body;
+
+      if (!script || typeof script !== 'string') {
+        return res.status(400).json({ 
+          valid: false, 
+          errors: ['Script is required and must be a string'] 
+        });
+      }
+
+      if (!language || !['typescript', 'javascript', 'python'].includes(language)) {
+        return res.status(400).json({ 
+          valid: false, 
+          errors: ['Language must be one of: typescript, javascript, python'] 
+        });
+      }
+
+      console.log(`📝 Validating ${language} Lambda script (${script.length} chars)`);
+
+      const result = validateLambdaScript(script, language);
+
+      if (result.valid) {
+        console.log(`✅ Lambda script validation passed`);
+        res.json({
+          valid: true,
+          message: 'Lambda script is valid',
+          compiledCode: result.compiledCode, // Return compiled JS for TS scripts
+        });
+      } else {
+        console.log(`❌ Lambda script validation failed:`, result.errors);
+        res.json({
+          valid: false,
+          errors: result.errors,
+        });
+      }
+    } catch (error) {
+      console.error('Error validating Lambda script:', error);
+      res.status(500).json({
+        valid: false,
+        errors: [error instanceof Error ? error.message : 'Unknown error during validation'],
       });
     }
   });

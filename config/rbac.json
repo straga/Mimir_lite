@@ -17,6 +17,7 @@
         "orchestration:read",
         "orchestration:write",
         "orchestration:execute",
+        "orchestration:cancel",
         "files:index",
         "files:read",
         "chat:use",

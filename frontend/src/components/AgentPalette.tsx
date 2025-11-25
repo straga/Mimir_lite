@@ -2,8 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useDrag } from 'react-dnd';
 import { usePlanStore } from '../store/planStore';
 import { AgentTemplate } from '../types/task';
-import { GripVertical, Plus, Search, Eye, Trash2 } from 'lucide-react';
-import { CreateAgentModal } from './CreateAgentModal';
+import { GripVertical, Plus, Search, Eye, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { CreateModal } from './CreateModal';
 import { AgentDetailsModal } from './AgentDetailsModal';
 
 interface DraggableAgentProps {
@@ -104,6 +104,8 @@ export function AgentPalette() {
   
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [searchInput, setSearchInput] = useState('');
+  const [workersCollapsed, setWorkersCollapsed] = useState(true);  // Collapsed by default
+  const [qcCollapsed, setQcCollapsed] = useState(true);  // Collapsed by default
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const observerTarget = useRef<HTMLDivElement>(null);
   
@@ -163,7 +165,7 @@ export function AgentPalette() {
 
   return (
     <>
-      <div className="flex flex-col h-full">
+      <div className="flex flex-col">
         {/* Loading indicator bar */}
         {isLoadingAgents && (
           <div className="h-1 bg-norse-stone overflow-hidden">
@@ -209,42 +211,70 @@ export function AgentPalette() {
         </div>
 
         {/* Scrollable agent list */}
-        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-6">
+        <div ref={scrollContainerRef} className="p-4 space-y-4">
+          {/* Worker Agents - Collapsible */}
           {workerAgents.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-xs font-bold text-frost-ice uppercase tracking-wide">
-                Worker Agents ({workerAgents.length})
-              </h3>
-              <div className="space-y-2">
-                {workerAgents.map((agent) => (
-                  <DraggableAgent 
-                    key={agent.id} 
-                    agent={agent}
-                    isOperating={!!agentOperations[agent.id]}
-                    onViewDetails={handleViewDetails}
-                    onDelete={handleDelete}
-                  />
-                ))}
-              </div>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setWorkersCollapsed(!workersCollapsed)}
+                className="w-full flex items-center justify-between text-xs font-bold text-frost-ice uppercase tracking-wide hover:text-frost-ice/80 transition-colors py-1"
+              >
+                <span className="flex items-center space-x-2">
+                  {workersCollapsed ? (
+                    <ChevronRight className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                  <span>Worker Agents ({workerAgents.length})</span>
+                </span>
+              </button>
+              {!workersCollapsed && (
+                <div className="space-y-2">
+                  {workerAgents.map((agent) => (
+                    <DraggableAgent 
+                      key={agent.id} 
+                      agent={agent}
+                      isOperating={!!agentOperations[agent.id]}
+                      onViewDetails={handleViewDetails}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
+          {/* QC Agents - Collapsible */}
           {qcAgents.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-xs font-bold text-magic-spell uppercase tracking-wide">
-                QC Agents ({qcAgents.length})
-              </h3>
-              <div className="space-y-2">
-                {qcAgents.map((agent) => (
-                  <DraggableAgent 
-                    key={agent.id} 
-                    agent={agent}
-                    isOperating={!!agentOperations[agent.id]}
-                    onViewDetails={handleViewDetails}
-                    onDelete={handleDelete}
-                  />
-                ))}
-              </div>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setQcCollapsed(!qcCollapsed)}
+                className="w-full flex items-center justify-between text-xs font-bold text-magic-spell uppercase tracking-wide hover:text-magic-spell/80 transition-colors py-1"
+              >
+                <span className="flex items-center space-x-2">
+                  {qcCollapsed ? (
+                    <ChevronRight className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                  <span>QC Agents ({qcAgents.length})</span>
+                </span>
+              </button>
+              {!qcCollapsed && (
+                <div className="space-y-2">
+                  {qcAgents.map((agent) => (
+                    <DraggableAgent 
+                      key={agent.id} 
+                      agent={agent}
+                      isOperating={!!agentOperations[agent.id]}
+                      onViewDetails={handleViewDetails}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -266,9 +296,10 @@ export function AgentPalette() {
         </div>
       </div>
 
-      <CreateAgentModal 
+      <CreateModal 
         isOpen={isCreateModalOpen} 
-        onClose={() => setIsCreateModalOpen(false)} 
+        onClose={() => setIsCreateModalOpen(false)}
+        initialTab="agent"
       />
       
       <AgentDetailsModal 

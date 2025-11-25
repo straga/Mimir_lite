@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Task, ProjectPlan, ParallelGroup, AgentTemplate, CreateAgentRequest, TaskExecutionStatus } from '../types/task';
+import { Task, ProjectPlan, ParallelGroup, AgentTemplate, CreateAgentRequest, TaskExecutionStatus, Lambda, TransformerTask, isAgentTask, isTransformerTask } from '../types/task';
 import { apiClient, ApiError } from '../utils/api';
 
 // SessionStorage keys
@@ -15,6 +15,7 @@ interface PersistedWorkflowState {
   tasks: Task[];
   parallelGroups: ParallelGroup[];
   agentTemplates: AgentTemplate[];
+  lambdas: Lambda[];
 }
 
 // Persistable execution state
@@ -31,12 +32,14 @@ interface PlanState {
   parallelGroups: ParallelGroup[];
   selectedTask: Task | null;
   agentTemplates: AgentTemplate[];
+  lambdas: Lambda[];
   agentSearch: string;
   agentOffset: number;
   hasMoreAgents: boolean;
   isLoadingAgents: boolean;
   isCreatingAgent: boolean; // Track agent creation in progress (including refresh)
   selectedAgent: AgentTemplate | null;
+  selectedLambda: Lambda | null;
   agentOperations: Record<string, boolean>; // Track loading states by agent ID
   globalError: ApiError | null; // Global error state
   
@@ -50,13 +53,17 @@ interface PlanState {
   setProjectPlan: (plan: ProjectPlan) => void;
   setGlobalError: (error: ApiError | null) => void;
   addTask: (task: Task) => void;
+  addTransformer: () => void; // Add a new transformer task
   updateTask: (taskId: string, updates: Partial<Task>) => void;
   deleteTask: (taskId: string) => void;
+  setTasks: (tasks: Task[]) => void; // Replace all tasks (for import)
+  clearTasks: () => void; // Clear all tasks
   reorderTask: (taskId: string, newOrder: number) => void;
   reorderCanvasItem: (itemId: string, itemType: 'task' | 'group', newIndex: number) => void; // NEW: Unified reordering
   addParallelGroup: () => void;
   updateParallelGroup: (groupId: number, updates: Partial<ParallelGroup>) => void;
   deleteParallelGroup: (groupId: number) => void;
+  setParallelGroups: (groups: ParallelGroup[]) => void; // Replace all parallel groups (for import)
   assignTaskToGroup: (taskId: string, groupId: number | null) => void;
   setSelectedTask: (task: Task | null) => void;
   exportToMarkdown: () => string;
@@ -66,8 +73,15 @@ interface PlanState {
   fetchAgents: (search?: string, reset?: boolean) => Promise<void>;
   createAgent: (request: CreateAgentRequest) => Promise<AgentTemplate>;
   deleteAgent: (agentId: string) => Promise<void>;
+  addAgentTemplate: (template: AgentTemplate) => void; // Add agent template locally (for import)
   setAgentSearch: (search: string) => void;
   setSelectedAgent: (agent: AgentTemplate | null) => void;
+  
+  // Lambda management
+  addLambda: (lambda: Lambda) => void;
+  updateLambda: (lambdaId: string, updates: Partial<Lambda>) => void;
+  deleteLambda: (lambdaId: string) => void;
+  setSelectedLambda: (lambda: Lambda | null) => void;
   
   // Execution tracking
   updateTaskExecutionStatus: (taskId: string, status: TaskExecutionStatus) => void;
@@ -166,6 +180,50 @@ const DEFAULT_AGENTS: AgentTemplate[] = [
   },
 ];
 
+// Default Lambda scripts (example transformers)
+const DEFAULT_LAMBDAS: Lambda[] = [
+  {
+    id: 'default-json-filter',
+    name: 'JSON Filter',
+    description: 'Filters JSON output to extract specific fields using JSONPath',
+    language: 'typescript',
+    script: `// Filter JSON output by path
+export function transform(input: any): any {
+  // Default: pass-through
+  return input;
+}`,
+    version: '1.0',
+    created: new Date().toISOString(),
+  },
+  {
+    id: 'default-sanitizer',
+    name: 'Output Sanitizer',
+    description: 'Sanitizes and cleans agent output before passing to next step',
+    language: 'typescript',
+    script: `// Sanitize output
+export function transform(input: any): any {
+  if (typeof input === 'string') {
+    return input.trim();
+  }
+  return input;
+}`,
+    version: '1.0',
+    created: new Date().toISOString(),
+  },
+  {
+    id: 'default-aggregator',
+    name: 'Data Aggregator',
+    description: 'Aggregates multiple inputs into a single structured output',
+    language: 'typescript',
+    script: `// Aggregate inputs
+export function transform(inputs: any[]): any {
+  return { aggregated: inputs };
+}`,
+    version: '1.0',
+    created: new Date().toISOString(),
+  },
+];
+
 export const usePlanStore = create<PlanState>((set, get) => {
   // Initialize API error handler
   apiClient.setErrorHandler((error) => {
@@ -179,12 +237,14 @@ export const usePlanStore = create<PlanState>((set, get) => {
   parallelGroups: [],
   selectedTask: null,
   agentTemplates: [...DEFAULT_AGENTS], // Start with default agents
+  lambdas: [...DEFAULT_LAMBDAS], // Start with default lambdas
   agentSearch: '',
   agentOffset: 0,
   hasMoreAgents: true,
   isLoadingAgents: false,
   isCreatingAgent: false,
   selectedAgent: null,
+  selectedLambda: null,
   agentOperations: {},
   globalError: null,
   
@@ -216,9 +276,31 @@ export const usePlanStore = create<PlanState>((set, get) => {
     };
   }),
   
+  // Add a new transformer task
+  addTransformer: () => set((state) => {
+    const maxOrder = state.tasks
+      .filter(t => t.parallelGroup === null)
+      .reduce((max, t) => Math.max(max, t.order ?? 0), 0);
+    
+    const newTransformer: TransformerTask = {
+      id: `transformer-${Date.now()}`,
+      taskType: 'transformer',
+      title: 'New Transformer',
+      description: 'Data transformation step',
+      dependencies: [],
+      parallelGroup: null,
+      order: maxOrder + 1,
+    };
+    
+    return {
+      tasks: [...state.tasks, newTransformer],
+      selectedTask: newTransformer,
+    };
+  }),
+  
   updateTask: (taskId, updates) => set((state) => ({
     tasks: state.tasks.map((t) => 
-      t.id === taskId ? { ...t, ...updates } : t
+      t.id === taskId ? { ...t, ...updates } as Task : t
     ),
   })),
   
@@ -229,6 +311,15 @@ export const usePlanStore = create<PlanState>((set, get) => {
       taskIds: g.taskIds.filter((id) => id !== taskId),
     })),
   })),
+
+  setTasks: (tasks) => set({ tasks, selectedTask: null }),
+
+  clearTasks: () => set({ 
+    tasks: [], 
+    parallelGroups: [], 
+    selectedTask: null,
+    lambdas: [],
+  }),
   
   reorderTask: (taskId, newOrder) => set((state) => {
     const task = state.tasks.find(t => t.id === taskId);
@@ -381,6 +472,8 @@ export const usePlanStore = create<PlanState>((set, get) => {
       t.parallelGroup === groupId ? { ...t, parallelGroup: null } : t
     ),
   })),
+
+  setParallelGroups: (groups) => set({ parallelGroups: groups }),
   
   assignTaskToGroup: (taskId, groupId) => set((state) => {
     const task = state.tasks.find((t) => t.id === taskId);
@@ -438,35 +531,47 @@ export const usePlanStore = create<PlanState>((set, get) => {
     tasks.forEach((task) => {
       markdown += `**Task ID:** ${task.id}\n\n`;
       markdown += `**Title:** ${task.title}\n\n`;
-      markdown += `**Agent Role Description:** ${task.agentRoleDescription}\n\n`;
-      markdown += `**Recommended Model:** ${task.recommendedModel}\n\n`;
-      markdown += `**Prompt:**\n${task.prompt}\n\n`;
+      markdown += `**Type:** ${task.taskType || 'agent'}\n\n`;
       
-      if (task.context) {
-        markdown += `**Context:**\n${task.context}\n\n`;
+      if (isAgentTask(task)) {
+        // Agent task specific fields
+        markdown += `**Agent Role Description:** ${task.agentRoleDescription}\n\n`;
+        markdown += `**Recommended Model:** ${task.recommendedModel}\n\n`;
+        markdown += `**Prompt:**\n${task.prompt}\n\n`;
+        
+        if (task.context) {
+          markdown += `**Context:**\n${task.context}\n\n`;
+        }
+        
+        if (task.toolBasedExecution) {
+          markdown += `**Tool-Based Execution:**\n${task.toolBasedExecution}\n\n`;
+        }
+        
+        markdown += `**Success Criteria:**\n`;
+        task.successCriteria.forEach((criterion: string) => {
+          markdown += `- [ ] ${criterion}\n`;
+        });
+        markdown += `\n`;
+        
+        markdown += `**Dependencies:** ${task.dependencies.length > 0 ? task.dependencies.join(', ') : 'None'}\n\n`;
+        markdown += `**Estimated Duration:** ${task.estimatedDuration}\n\n`;
+        markdown += `**Estimated Tool Calls:** ${task.estimatedToolCalls}\n\n`;
+        markdown += `**Parallel Group:** ${task.parallelGroup ?? 'N/A'}\n\n`;
+        markdown += `**QC Agent Role Description:** ${task.qcRole}\n\n`;
+        markdown += `**Verification Criteria:**\n`;
+        task.verificationCriteria.forEach((criterion: string) => {
+          markdown += `- [ ] ${criterion}\n`;
+        });
+        markdown += `\n`;
+        markdown += `**Max Retries:** ${task.maxRetries}\n\n`;
+      } else if (isTransformerTask(task)) {
+        // Transformer task specific fields
+        markdown += `**Description:** ${task.description || 'Data transformation step'}\n\n`;
+        markdown += `**Lambda ID:** ${task.lambdaId || 'None (pass-through)'}\n\n`;
+        markdown += `**Dependencies:** ${task.dependencies.length > 0 ? task.dependencies.join(', ') : 'None'}\n\n`;
+        markdown += `**Parallel Group:** ${task.parallelGroup ?? 'N/A'}\n\n`;
       }
       
-      if (task.toolBasedExecution) {
-        markdown += `**Tool-Based Execution:**\n${task.toolBasedExecution}\n\n`;
-      }
-      
-      markdown += `**Success Criteria:**\n`;
-      task.successCriteria.forEach((criterion) => {
-        markdown += `- [ ] ${criterion}\n`;
-      });
-      markdown += `\n`;
-      
-      markdown += `**Dependencies:** ${task.dependencies.length > 0 ? task.dependencies.join(', ') : 'None'}\n\n`;
-      markdown += `**Estimated Duration:** ${task.estimatedDuration}\n\n`;
-      markdown += `**Estimated Tool Calls:** ${task.estimatedToolCalls}\n\n`;
-      markdown += `**Parallel Group:** ${task.parallelGroup ?? 'N/A'}\n\n`;
-      markdown += `**QC Agent Role Description:** ${task.qcRole}\n\n`;
-      markdown += `**Verification Criteria:**\n`;
-      task.verificationCriteria.forEach((criterion) => {
-        markdown += `- [ ] ${criterion}\n`;
-      });
-      markdown += `\n`;
-      markdown += `**Max Retries:** ${task.maxRetries}\n\n`;
       markdown += `---\n\n`;
     });
     
@@ -607,8 +712,35 @@ export const usePlanStore = create<PlanState>((set, get) => {
       throw error;
     }
   },
+
+  addAgentTemplate: (template) => set((state) => ({
+    agentTemplates: [...state.agentTemplates.filter(a => a.id !== template.id), template],
+  })),
   
   setSelectedAgent: (agent) => set({ selectedAgent: agent }),
+  
+  // Lambda management
+  addLambda: (lambda) => set((state) => ({
+    lambdas: [...state.lambdas, lambda],
+  })),
+  
+  updateLambda: (lambdaId, updates) => set((state) => ({
+    lambdas: state.lambdas.map((l) => 
+      l.id === lambdaId ? { ...l, ...updates } : l
+    ),
+  })),
+  
+  deleteLambda: (lambdaId) => set((state) => ({
+    lambdas: state.lambdas.filter((l) => l.id !== lambdaId),
+    // Also remove lambda from any transformers using it
+    tasks: state.tasks.map((t) => 
+      t.taskType === 'transformer' && t.lambdaId === lambdaId
+        ? { ...t, lambdaId: undefined }
+        : t
+    ),
+  })),
+  
+  setSelectedLambda: (lambda) => set({ selectedLambda: lambda }),
   
   // Execution tracking methods
   updateTaskExecutionStatus: (taskId, status) => set((state) => {
@@ -662,6 +794,7 @@ export const usePlanStore = create<PlanState>((set, get) => {
       tasks: state.tasks,
       parallelGroups: state.parallelGroups,
       agentTemplates: state.agentTemplates,
+      lambdas: state.lambdas,
     };
     sessionStorage.setItem(STORAGE_KEYS.WORKFLOW_STATE, JSON.stringify(workflowState));
     
@@ -704,6 +837,9 @@ export const usePlanStore = create<PlanState>((set, get) => {
           agentTemplates: workflowState.agentTemplates.length > 0 
             ? workflowState.agentTemplates 
             : get().agentTemplates, // Keep defaults if empty
+          lambdas: workflowState.lambdas?.length > 0
+            ? workflowState.lambdas
+            : get().lambdas, // Keep defaults if empty
         });
       }
       

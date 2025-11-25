@@ -18,12 +18,64 @@ import {
   type ExecutionResult 
 } from '../../orchestrator/task-executor.js';
 import {
+  executeLambda,
+  createPassThroughResult,
+  buildLambdaInput,
+  type LambdaInput,
+  type LambdaResult,
+  type TaskResult,
+  type QCVerificationResult,
+} from '../../orchestrator/lambda-executor.js';
+import {
+  createCancellationToken,
+  getCancellationToken,
+  cleanupCancellationToken,
+  CancellationError,
+  type CancellationToken,
+} from '../../orchestrator/cancellation.js';
+import {
   createExecutionNodeInNeo4j,
   persistTaskExecutionToNeo4j,
   updateExecutionNodeProgress,
   updateExecutionNodeInNeo4j,
 } from './persistence.js';
 import { sendSSEEvent, closeSSEConnections } from './sse.js';
+
+/**
+ * Task output tracking for Lambda inputs
+ * Contains all information needed to build LambdaInput for downstream tasks
+ */
+interface TaskOutputs {
+  /** Task ID */
+  taskId: string;
+  /** Task title for display */
+  taskTitle: string;
+  /** Type of task */
+  taskType: 'agent' | 'transformer';
+  /** Task execution status */
+  status: 'success' | 'failure';
+  /** Duration in milliseconds */
+  duration: number;
+  
+  // Agent-specific fields
+  /** Worker output strings (array to support multiple outputs) */
+  workerOutputs: string[];
+  /** QC verification result (for agent tasks) */
+  qcResult?: QCVerificationResult;
+  /** Agent role description */
+  agentRole?: string;
+  
+  // Transformer-specific fields
+  /** Lambda name if this was a transformer task */
+  lambdaName?: string;
+  /** Transformer output (same as workerOutputs[0] for transformers) */
+  transformerOutput?: string;
+}
+
+/**
+ * Global task outputs registry for passing data between tasks
+ */
+const taskOutputsRegistry = new Map<string, Map<string, TaskOutputs>>();
 
 /**
  * Deliverable file metadata
@@ -266,6 +318,175 @@ function groupTasksByParallelGroup(tasks: TaskDefinition[]): TaskDefinition[][] 
  * 
  * @since 1.0.0
  */
+/**
+ * Execute a transformer task (Lambda execution)
+ */
+async function executeTransformerTask(
+  task: TaskDefinition,
+  executionId: string,
+  graphManager: IGraphManager,
+  taskOutputs: Map<string, TaskOutputs>,
+  cancellationToken: CancellationToken
+): Promise<ExecutionResult> {
+  // Check for cancellation before starting
+  cancellationToken.throwIfCancelled();
+  
+  // Build unified LambdaInput from all dependencies
+  const taskResults: TaskResult[] = [];
+  
+  for (const depId of task.dependencies) {
+    const depOutputs = taskOutputs.get(depId);
+    if (depOutputs) {
+      taskResults.push({
+        taskId: depOutputs.taskId,
+        taskTitle: depOutputs.taskTitle,
+        taskType: depOutputs.taskType,
+        status: depOutputs.status,
+        duration: depOutputs.duration,
+        // Agent fields
+        workerOutput: depOutputs.taskType === 'agent' ? depOutputs.workerOutputs[0] : undefined,
+        qcResult: depOutputs.qcResult,
+        agentRole: depOutputs.agentRole,
+        // Transformer fields
+        transformerOutput: depOutputs.taskType === 'transformer' ? depOutputs.transformerOutput : undefined,
+        lambdaName: depOutputs.lambdaName,
+      });
+    }
+  }
+  
+  const lambdaInput: LambdaInput = {
+    tasks: taskResults,
+    meta: {
+      transformerId: task.id,
+      lambdaName: task.lambdaName || task.title,
+      dependencyCount: task.dependencies.length,
+      executionId,
+    },
+  };
+  
+  console.log(`\n🔮 Transformer ${task.id}: ${task.title}`);
+  console.log(`   Lambda: ${task.lambdaName || task.lambdaId || '(pass-through)'}`);
+  console.log(`   Dependencies: ${task.dependencies.join(', ') || 'none'}`);
+  console.log(`   Input tasks: ${taskResults.length}`);
+  
+  let lambdaResult: LambdaResult;
+  
+  if (task.lambdaScript && task.lambdaLanguage) {
+    // Check for cancellation before Lambda execution
+    cancellationToken.throwIfCancelled();
+    
+    // Execute the Lambda script with unified input
+    lambdaResult = await executeLambda(
+      task.lambdaScript,
+      task.lambdaLanguage,
+      lambdaInput,
+      cancellationToken
+    );
+    
+    // Check for cancellation after Lambda execution
+    cancellationToken.throwIfCancelled();
+  } else {
+    // No script - pass through
+    lambdaResult = createPassThroughResult(lambdaInput);
+  }
+  
+  // Store output for downstream tasks
+  taskOutputs.set(task.id, {
+    taskId: task.id,
+    taskTitle: task.title,
+    taskType: 'transformer',
+    status: lambdaResult.success ? 'success' : 'failure',
+    duration: lambdaResult.duration,
+    workerOutputs: [lambdaResult.output],
+    transformerOutput: lambdaResult.output,
+    lambdaName: task.lambdaName || task.title,
+  });
+  
+  // Create execution result
+  const result: ExecutionResult = {
+    taskId: task.id,
+    status: lambdaResult.success ? 'success' : 'failure',
+    output: lambdaResult.output,
+    error: lambdaResult.error,
+    duration: lambdaResult.duration,
+    preamblePath: '', // Transformers don't use preambles
+    outputPreview: lambdaResult.output.substring(0, 500),
+  };
+  
+  return result;
+}
+
+/**
+ * Execute a single agent task
+ */
+async function executeAgentTask(
+  task: TaskDefinition,
+  preambleContent: string,
+  qcPreambleContent: string | undefined,
+  executionId: string,
+  graphManager: IGraphManager,
+  taskOutputs: Map<string, TaskOutputs>,
+  cancellationToken: CancellationToken
+): Promise<ExecutionResult> {
+  // Check for cancellation before starting
+  cancellationToken.throwIfCancelled();
+  
+  // Check if there's Lambda output to inject into prompt
+  let modifiedPrompt = task.prompt;
+  
+  for (const depId of task.dependencies) {
+    const depOutputs = taskOutputs.get(depId);
+    if (depOutputs && depOutputs.lambdaName) {
+      // Previous task was a Lambda - inject its output as the prompt
+      console.log(`   📥 Injecting Lambda output from ${depId} into prompt`);
+      const lambdaOutput = depOutputs.workerOutputs.join('\n\n');
+      
+      // If current prompt is empty, use lambda output directly
+      // Otherwise, prepend lambda output to existing prompt
+      if (!modifiedPrompt || modifiedPrompt.trim() === '') {
+        modifiedPrompt = lambdaOutput;
+      } else {
+        modifiedPrompt = `[Previous Lambda Output (${depOutputs.lambdaName})]\n${lambdaOutput}\n\n[Task Prompt]\n${modifiedPrompt}`;
+      }
+    }
+  }
+  
+  // Create modified task with potentially updated prompt
+  const modifiedTask: TaskDefinition = {
+    ...task,
+    prompt: modifiedPrompt,
+  };
+  
+  // Check for cancellation before LLM call
+  cancellationToken.throwIfCancelled();
+  
+  const result = await executeTask(
+    modifiedTask, 
+    preambleContent, 
+    qcPreambleContent, 
+    executionId, 
+    (event, data) => sendSSEEvent(executionId, event, data),
+    cancellationToken
+  );
+  
+  // Check for cancellation after LLM call
+  cancellationToken.throwIfCancelled();
+  
+  // Store output for downstream tasks
+  taskOutputs.set(task.id, {
+    taskId: task.id,
+    taskTitle: task.title,
+    taskType: 'agent',
+    status: result.status,
+    duration: result.duration,
+    workerOutputs: [result.output],
+    qcResult: result.qcVerification,
+    agentRole: task.agentRoleDescription,
+  });
+  
+  return result;
+}
+
 async function executeTaskGroup(
   taskGroup: TaskDefinition[],
   rolePreambles: Map<string, string>,
@@ -276,18 +497,14 @@ async function executeTaskGroup(
   completedTasks: number
 ): Promise<ExecutionResult[]> {
   const state = executionStates.get(executionId);
+  const taskOutputs = taskOutputsRegistry.get(executionId) || new Map();
   
   if (taskGroup.length === 1) {
     // Single task - execute normally
     const task = taskGroup[0];
-    const preambleContent = rolePreambles.get(task.agentRoleDescription);
-    const qcPreambleContent = task.qcRole ? qcRolePreambles.get(task.qcRole) : undefined;
+    const isTransformer = task.taskType === 'transformer';
     
-    if (!preambleContent) {
-      throw new Error(`No preamble content found for role: ${task.agentRoleDescription}`);
-    }
-    
-    console.log(`\n📦 Task ${completedTasks + 1}/${totalTasks}: Executing ${task.id}`);
+    console.log(`\n📦 Task ${completedTasks + 1}/${totalTasks}: Executing ${task.id} (${isTransformer ? 'transformer' : 'agent'})`);
     
     // Update state and emit task-start event
     if (state) {
@@ -299,15 +516,36 @@ async function executeTaskGroup(
       taskTitle: task.title,
       progress: completedTasks + 1,
       total: totalTasks,
+      taskType: task.taskType || 'agent',
     });
     
-    const result = await executeTask(
-      task, 
-      preambleContent, 
-      qcPreambleContent, 
-      executionId, 
-      (event, data) => sendSSEEvent(executionId, event, data)
-    );
+    let result: ExecutionResult;
+    
+    // Get or create cancellation token for this execution
+    const cancellationToken = getCancellationToken(executionId) || createCancellationToken(executionId);
+    
+    if (isTransformer) {
+      // Execute transformer task
+      result = await executeTransformerTask(task, executionId, graphManager, taskOutputs, cancellationToken);
+    } else {
+      // Execute agent task
+      const preambleContent = rolePreambles.get(task.agentRoleDescription);
+      const qcPreambleContent = task.qcRole ? qcRolePreambles.get(task.qcRole) : undefined;
+      
+      if (!preambleContent) {
+        throw new Error(`No preamble content found for role: ${task.agentRoleDescription}`);
+      }
+      
+      result = await executeAgentTask(
+        task,
+        preambleContent,
+        qcPreambleContent,
+        executionId,
+        graphManager,
+        taskOutputs,
+        cancellationToken
+      );
+    }
     
     // Persist and update state
     try {
@@ -335,6 +573,7 @@ async function executeTaskGroup(
       duration: result.duration,
       progress: completedTasks + 1,
       total: totalTasks,
+      taskType: task.taskType || 'agent',
     });
     
     // Send agent chatter for browser console logging
@@ -367,28 +606,44 @@ async function executeTaskGroup(
       progress: completedTasks + i + 1,
       total: totalTasks,
       parallelGroup: task.parallelGroup,
+      taskType: task.taskType || 'agent',
     });
   }
   
+  // Get or create cancellation token for this execution (shared across parallel tasks)
+  const cancellationToken = getCancellationToken(executionId) || createCancellationToken(executionId);
+  
   // Execute all tasks in parallel - rate limiter handles concurrency
   const taskPromises = taskGroup.map(async (task, index) => {
-    const preambleContent = rolePreambles.get(task.agentRoleDescription);
-    const qcPreambleContent = task.qcRole ? qcRolePreambles.get(task.qcRole) : undefined;
+    const isTransformer = task.taskType === 'transformer';
     
-    if (!preambleContent) {
-      throw new Error(`No preamble content found for role: ${task.agentRoleDescription}`);
-    }
-    
-    console.log(`   ⚡ Starting ${task.id} (parallel)`);
+    console.log(`   ⚡ Starting ${task.id} (parallel, ${isTransformer ? 'transformer' : 'agent'})`);
     
     try {
-      const result = await executeTask(
-        task, 
-        preambleContent, 
-        qcPreambleContent, 
-        executionId, 
-        (event, data) => sendSSEEvent(executionId, event, data)
-      );
+      let result: ExecutionResult;
+      
+      if (isTransformer) {
+        // Execute transformer task
+        result = await executeTransformerTask(task, executionId, graphManager, taskOutputs, cancellationToken);
+      } else {
+        // Execute agent task
+        const preambleContent = rolePreambles.get(task.agentRoleDescription);
+        const qcPreambleContent = task.qcRole ? qcRolePreambles.get(task.qcRole) : undefined;
+        
+        if (!preambleContent) {
+          throw new Error(`No preamble content found for role: ${task.agentRoleDescription}`);
+        }
+        
+        result = await executeAgentTask(
+          task,
+          preambleContent,
+          qcPreambleContent,
+          executionId,
+          graphManager,
+          taskOutputs,
+          cancellationToken
+        );
+      }
       
       // Persist to Neo4j
       try {
@@ -559,19 +814,33 @@ export async function executeWorkflowFromJSON(
   const taskDefinitions: TaskDefinition[] = uiTasks.map(task => ({
     id: task.id,
     title: task.title || task.id,
-    agentRoleDescription: task.agentRoleDescription,
+    agentRoleDescription: task.agentRoleDescription || '',
     recommendedModel: task.recommendedModel || 'gpt-4.1',
-    prompt: task.prompt,
+    prompt: task.prompt || '',
     dependencies: task.dependencies || [],
     estimatedDuration: task.estimatedDuration || '30 min',
     parallelGroup: task.parallelGroup,
     qcRole: task.qcRole,
-    verificationCriteria: task.verificationCriteria, // Fixed: already a string, don't join
+    verificationCriteria: task.verificationCriteria,
     maxRetries: task.maxRetries || 2,
     estimatedToolCalls: task.estimatedToolCalls,
+    // Transformer-specific fields
+    taskType: task.taskType || 'agent',
+    lambdaId: task.lambdaId,
+    lambdaScript: task.lambdaScript,
+    lambdaLanguage: task.lambdaLanguage,
+    lambdaName: task.lambdaName,
   }));
 
-  console.log(`📋 Converted ${taskDefinitions.length} UI tasks to TaskDefinition format\n`);
+  // Initialize task outputs registry for this execution
+  taskOutputsRegistry.set(executionId, new Map());
+
+  // Count task types
+  const agentTasks = taskDefinitions.filter(t => t.taskType !== 'transformer');
+  const transformerTasks = taskDefinitions.filter(t => t.taskType === 'transformer');
+  console.log(`📋 Converted ${taskDefinitions.length} UI tasks to TaskDefinition format`);
+  console.log(`   - ${agentTasks.length} agent tasks`);
+  console.log(`   - ${transformerTasks.length} transformer tasks\n`);
 
   // Create execution node in Neo4j at the start
   console.log('-'.repeat(80));
@@ -592,7 +861,7 @@ export async function executeWorkflowFromJSON(
     console.error(`⚠️  Failed to create execution node:`, error.message);
   }
 
-  // Generate preambles for each unique role
+  // Generate preambles for each unique role (agent tasks only)
   console.log('-'.repeat(80));
   console.log('STEP 1: Generate Agent Preambles (Worker + QC)');
   console.log('-'.repeat(80) + '\n');
@@ -600,12 +869,17 @@ export async function executeWorkflowFromJSON(
   const rolePreambles = new Map<string, string>();
   const qcRolePreambles = new Map<string, string>();
 
-  // Group tasks by worker role
+  // Filter to agent tasks only (transformers don't need preambles)
+  const agentTasksForPreambles = taskDefinitions.filter(t => t.taskType !== 'transformer');
+
+  // Group agent tasks by worker role
   const roleMap = new Map<string, TaskDefinition[]>();
-  for (const task of taskDefinitions) {
-    const existing = roleMap.get(task.agentRoleDescription) || [];
-    existing.push(task);
-    roleMap.set(task.agentRoleDescription, existing);
+  for (const task of agentTasksForPreambles) {
+    if (task.agentRoleDescription) {
+      const existing = roleMap.get(task.agentRoleDescription) || [];
+      existing.push(task);
+      roleMap.set(task.agentRoleDescription, existing);
+    }
   }
 
   // Generate worker preambles
@@ -616,9 +890,9 @@ export async function executeWorkflowFromJSON(
     rolePreambles.set(role, preambleContent);
   }
 
-  // Group tasks by QC role
+  // Group agent tasks by QC role
   const qcRoleMap = new Map<string, TaskDefinition[]>();
-  for (const task of taskDefinitions) {
+  for (const task of agentTasksForPreambles) {
     if (task.qcRole) {
       const qcExisting = qcRoleMap.get(task.qcRole) || [];
       qcExisting.push(task);
@@ -635,7 +909,10 @@ export async function executeWorkflowFromJSON(
   }
 
   console.log(`\n✅ Generated ${rolePreambles.size} worker preambles`);
-  console.log(`✅ Generated ${qcRolePreambles.size} QC preambles\n`);
+  console.log(`✅ Generated ${qcRolePreambles.size} QC preambles`);
+  if (transformerTasks.length > 0) {
+    console.log(`ℹ️  Skipped preambles for ${transformerTasks.length} transformer tasks\n`);
+  }
 
   // Group tasks by parallel execution groups
   const taskGroups = groupTasksByParallelGroup(taskDefinitions);
@@ -803,6 +1080,10 @@ export async function executeWorkflowFromJSON(
   setTimeout(() => {
     closeSSEConnections(executionId);
     console.log(`🔌 Closed SSE connections for execution ${executionId}`);
+    
+    // Cleanup task outputs registry
+    taskOutputsRegistry.delete(executionId);
+    console.log(`🧹 Cleaned up task outputs registry for execution ${executionId}`);
   }, 1000);
   
   return results;

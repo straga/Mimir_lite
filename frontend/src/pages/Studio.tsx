@@ -5,6 +5,7 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Download, FileDown, X } from 'lucide-react';
 import { PromptInput } from '../components/PromptInput';
 import { AgentPalette } from '../components/AgentPalette';
+import { LambdaPalette } from '../components/LambdaPalette';
 import { TaskCanvas } from '../components/TaskCanvas';
 import { TaskEditor } from '../components/TaskEditor';
 import { AgentDragPreview } from '../components/AgentDragPreview';
@@ -133,13 +134,20 @@ export function Studio() {
 
         {/* Main Content */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Left Sidebar - Agent Palette */}
-          <aside className="w-80 bg-norse-shadow border-r border-norse-rune overflow-y-auto scroll-container">
-            <AgentPalette />
+          {/* Left Sidebar - Agent & Lambda Palettes (VS Code style layout) */}
+          <aside className="w-80 bg-norse-shadow border-r border-norse-rune flex flex-col overflow-hidden">
+            {/* Top section - Agents (scrollable) */}
+            <div className="flex-1 min-h-0 overflow-y-auto scroll-container">
+              <AgentPalette />
+            </div>
+            {/* Bottom section - Lambdas (pinned, expandable) */}
+            <div className="flex-shrink-0 border-t border-norse-rune">
+              <LambdaPalette />
+            </div>
           </aside>
 
           {/* Center - Task Canvas */}
-          <main className="flex-1 overflow-y-auto scroll-container">
+          <main className="flex-1 overflow-hidden">
             <TaskCanvas />
           </main>
 

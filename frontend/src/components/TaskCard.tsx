@@ -1,7 +1,7 @@
 import { useDrag, useDrop } from 'react-dnd';
 import { useEffect } from 'react';
 import { usePlanStore } from '../store/planStore';
-import { Task, AgentTemplate } from '../types/task';
+import { Task, AgentTemplate, isAgentTask } from '../types/task';
 import { GripVertical, Trash2, Clock, Zap, User, Shield } from 'lucide-react';
 
 interface TaskCardProps {
@@ -29,9 +29,9 @@ export function TaskCard({ task, disableDrag = false, isExecuting = false }: Tas
     }),
   }));
 
-  // Find assigned agents
-  const workerAgent = agentTemplates.find(a => a.id === task.workerPreambleId);
-  const qcAgent = agentTemplates.find(a => a.id === task.qcPreambleId);
+  // Find assigned agents (only for agent tasks)
+  const workerAgent = isAgentTask(task) ? agentTemplates.find(a => a.id === task.workerPreambleId) : undefined;
+  const qcAgent = isAgentTask(task) ? agentTemplates.find(a => a.id === task.qcPreambleId) : undefined;
 
   // Helper to get task title from task ID
   const getTaskTitle = (taskId: string): string => {
@@ -120,16 +120,18 @@ export function TaskCard({ task, disableDrag = false, isExecuting = false }: Tas
           </button>
         </div>
 
-        <div className="flex items-center justify-between text-xs text-gray-400">
-          <div className="flex items-center space-x-1">
-            <Clock className="w-3 h-3" />
-            <span>{task.estimatedDuration}</span>
+        {isAgentTask(task) && (
+          <div className="flex items-center justify-between text-xs text-gray-400">
+            <div className="flex items-center space-x-1">
+              <Clock className="w-3 h-3" />
+              <span>{task.estimatedDuration}</span>
+            </div>
+            <div className="flex items-center space-x-1">
+              <Zap className="w-3 h-3" />
+              <span>{task.estimatedToolCalls} calls</span>
+            </div>
           </div>
-          <div className="flex items-center space-x-1">
-            <Zap className="w-3 h-3" />
-            <span>{task.estimatedToolCalls} calls</span>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Worker Agent Drop Zone */}

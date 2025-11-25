@@ -12,6 +12,7 @@ import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
 import { createGraphManager } from '../managers/index.js';
 import type { GraphManager } from '../managers/GraphManager.js';
 import { consolidatedTools } from './tools.js';
+import { CancellationError, type CancellationToken } from './cancellation.js';
 import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs/promises';
@@ -94,6 +95,15 @@ export interface TaskDefinition {
   dependencies: string[];
   estimatedDuration: string;
   parallelGroup?: number; // Tasks with same parallelGroup can run concurrently
+  
+  // Task type - 'agent' (default) or 'transformer'
+  taskType?: 'agent' | 'transformer';
+  
+  // Transformer-specific fields
+  lambdaId?: string; // Reference to Lambda script for transformer tasks
+  lambdaScript?: string; // Inline Lambda script content
+  lambdaLanguage?: 'typescript' | 'javascript' | 'python';
+  lambdaName?: string; // Name of the lambda for logging
   
   // QC Verification fields
   qcRole?: string; // QC Agent Role Description
@@ -1530,8 +1540,12 @@ export async function executeTask(
   preambleContent: string,
   qcPreambleContent?: string,
   executionId?: string,
-  sendSSE?: (event: string, data: any) => void
+  sendSSE?: (event: string, data: any) => void,
+  cancellationToken?: CancellationToken
 ): Promise<ExecutionResult> {
+  // Check for cancellation before starting
+  cancellationToken?.throwIfCancelled();
+  
   console.log(`\n${'='.repeat(80)}`);
   console.log(`📋 Executing Task: ${task.title}`);
   console.log(`🆔 Task ID: ${task.id}`);
@@ -1576,6 +1590,9 @@ export async function executeTask(
   
   // Worker → QC → Retry loop
   while (attemptNumber <= maxRetries) {
+    // Check for cancellation at start of each attempt
+    cancellationToken?.throwIfCancelled();
+    
     console.log(`\n${'─'.repeat(80)}`);
     console.log(`🔄 ATTEMPT ${attemptNumber}/${maxRetries}`);
     console.log('─'.repeat(80));

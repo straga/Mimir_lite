@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { Task } from '../../types/task';
+import { Task, AgentTask } from '../../types/task';
 
 describe('TaskCard Visual States', () => {
-  const createMockTask = (executionStatus?: 'pending' | 'executing' | 'completed' | 'failed'): Task => ({
+  const createMockTask = (executionStatus?: 'pending' | 'executing' | 'completed' | 'failed'): AgentTask => ({
+    taskType: 'agent',
     id: 'task-0',
     title: 'Test Task',
     agentRoleDescription: 'Test Agent',
