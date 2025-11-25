@@ -1,0 +1,61 @@
+# Build llama.cpp server for AMD64 with CUDA support and Qwen2.5-VL-2B
+# Supports vision-language models for image understanding with GPU acceleration
+FROM nvidia/cuda:12.3.1-devel-ubuntu22.04 AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone llama.cpp repository
+WORKDIR /build
+RUN git clone https://github.com/ggerganov/llama.cpp.git .
+
+# Build llama.cpp server with CUDA and multimodal support
+RUN mkdir build && cd build && \
+    cmake .. \
+    -DLLAMA_CUDA=ON \
+    -DLLAMA_CURL=ON \
+    -DLLAMA_BUILD_SERVER=ON \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build . --config Release -j$(nproc)
+
+# Runtime stage with CUDA runtime
+FROM nvidia/cuda:12.3.1-runtime-ubuntu22.04
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libcurl4 \
+    curl \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built binaries
+COPY --from=builder /build/build/bin/llama-server /usr/local/bin/llama-server
+
+# Create models directory
+RUN mkdir -p /models
+
+# Copy Qwen2.5-VL-2B models
+COPY docker/llama-cpp/models/qwen2.5-vl-2b.gguf /models/qwen2.5-vl.gguf
+COPY docker/llama-cpp/models/qwen2.5-vl-2b-vision.gguf /models/qwen2.5-vl-vision.gguf
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Set working directory
+WORKDIR /app
+
+# Default command with Qwen2.5-VL-2B and GPU offloading
+# -ngl 99 = offload all layers to GPU
+ENTRYPOINT ["/usr/local/bin/llama-server"]
+CMD ["--host", "0.0.0.0", "--port", "8080", "--model", "/models/qwen2.5-vl.gguf", "--mmproj", "/models/qwen2.5-vl-vision.gguf", "--ctx-size", "32768", "--parallel", "4", "--threads", "-1", "-ngl", "99"]

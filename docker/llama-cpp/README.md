@@ -49,9 +49,7 @@ docker run -p 11434:8080 -v ./models:/models timothyswt/llama-cpp-server-arm64:l
 ./scripts/build-llama-cpp.sh
 
 # Or manually:
-docker build --platform linux/arm64 \
-  -t timothyswt/llama-cpp-server-arm64:latest \
-  -f docker/llama-cpp/Dockerfile .
+docker build -t timothyswt/llama-cpp-server-arm64:latest -f docker/llama-cpp/Dockerfile .
 ```
 
 ## Features

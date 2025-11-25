@@ -86,7 +86,7 @@ services:
 
   # llama.cpp server - OpenAI-compatible embeddings
   llama-server:
-    image: timothyswt/llama-cpp-server-amd64-mxbai:latest
+    image: timothyswt/llama-cpp-server-amd64-mxbai-cuda:latest
     container_name: llama_server
     ports:
       - "11434:8080"  # External 11434 -> Internal 8080 (llama.cpp default)
@@ -110,9 +110,12 @@ services:
               capabilities: [gpu]
 
   # llama.cpp Vision Server - 2B model (faster, lower memory)
-  # Qwen2.5-VL 2B with vision understanding capabilities
-  # llama-vl-server:
-  #   image: timothyswt/llama-cpp-server-amd64-qwen-vl-2b:latest
+  # Qwen2.5-VL 2B with vision understanding and CUDA acceleration
+  # Build with: npm run llama:build-qwen-2b-cuda
+  # For use without cuda `image: timothyswt/llama-cpp-server-amd64-qwen-vl-2b:latest`
+  # 
+  # llama-vl-server-2b:
+  #   image: timothyswt/llama-cpp-server-amd64-qwen-vl-2b-cuda:latest
   #   container_name: llama_server_vision_2b
   #   ports:
   #     - "8081:8080"  # Vision 2B API endpoint
@@ -137,9 +140,12 @@ services:
   #             capabilities: [gpu]
 
   # llama.cpp Vision Server - 7B model (higher quality, more memory)
-  # Qwen2.5-VL 7B with vision understanding capabilities
-  # llama-vl-server:
-  #   image: timothyswt/llama-cpp-server-amd64-qwen-vl-7b:latest
+  # Qwen2.5-VL 7B with vision understanding and CUDA acceleration
+  # Build with: npm run llama:build-qwen-7b-cuda
+  # For use without cuda `image: timothyswt/llama-cpp-server-amd64-qwen-vl-7b:latest`
+  #
+  # llama-vl-server-7b:
+  #   image: timothyswt/llama-cpp-server-amd64-qwen-vl-7b-cuda:latest
   #   container_name: llama_server_vision_7b
   #   ports:
   #     - "8082:8080"  # Vision 7B API endpoint
@@ -233,7 +239,7 @@ services:
       - MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE=${MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE:-true}  # Default: VL description mode
       # Qwen2.5-VL Configuration (for llama.cpp server)
       - MIMIR_EMBEDDINGS_VL_PROVIDER=${MIMIR_EMBEDDINGS_VL_PROVIDER:-llama.cpp}
-      - MIMIR_EMBEDDINGS_VL_API=${MIMIR_EMBEDDINGS_VL_API:-http://llama-vl-server:8080}
+      - MIMIR_EMBEDDINGS_VL_API=${MIMIR_EMBEDDINGS_VL_API:-http://llama-vl-server-2b:8080}
       - MIMIR_EMBEDDINGS_VL_API_PATH=${MIMIR_EMBEDDINGS_VL_API_PATH:-/v1/chat/completions}
       - MIMIR_EMBEDDINGS_VL_API_KEY=${MIMIR_EMBEDDINGS_VL_API_KEY:-dummy-key}
       - MIMIR_EMBEDDINGS_VL_MODEL=${MIMIR_EMBEDDINGS_VL_MODEL:-qwen2.5-vl}
