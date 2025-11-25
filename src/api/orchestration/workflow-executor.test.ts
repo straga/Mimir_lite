@@ -423,11 +423,20 @@ describe('Workflow Executor', () => {
           verificationCriteria: 'Criterion 1, Criterion 2', // Keep as comma-separated
           maxRetries: 3,
           estimatedToolCalls: 10,
+          taskType: 'agent', // New field for task type
+          lambdaId: undefined,
+          lambdaScript: undefined,
+          lambdaLanguage: undefined,
+          lambdaName: undefined,
         }),
         expect.any(String),
         expect.any(String),
         expect.any(String),
-        expect.any(Function)
+        expect.any(Function),
+        expect.objectContaining({
+          executionId: 'exec-complex',
+          isCancelled: false,
+        })
       );
     });
   });

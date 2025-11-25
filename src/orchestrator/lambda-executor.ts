@@ -594,7 +594,10 @@ async function executeJSLambda(
     sandbox.global = sandbox;
     sandbox.globalThis = sandbox;
 
-    // Wrap script to handle different export conventions
+    // Lambda timeout in milliseconds (30 seconds)
+    const LAMBDA_TIMEOUT_MS = 30000;
+    
+    // Wrap script to handle different export conventions with proper async timeout
     const wrappedScript = `
       (async function() {
         try {
@@ -619,16 +622,27 @@ async function executeJSLambda(
             throw new Error('Lambda must export a default function or define transform(input)');
           }
           
-          // Execute with the unified input
-          const result = await transformFn(__input);
-          __result = result;
+          // Execute with the unified input - handle both sync and async
+          const resultOrPromise = transformFn(__input);
+          
+          // Check if result is a Promise
+          if (resultOrPromise && typeof resultOrPromise.then === 'function') {
+            // It's a Promise - store it for external timeout handling
+            __pendingPromise = resultOrPromise;
+          } else {
+            // Synchronous result
+            __result = resultOrPromise;
+          }
         } catch (err) {
           __error = err.message || String(err);
         }
       })();
     `;
 
-    // Run in VM sandbox with timeout
+    // Add pending promise placeholder to sandbox
+    sandbox.__pendingPromise = null;
+
+    // Run in VM sandbox with timeout for synchronous code
     const vmScript = new vm.Script(wrappedScript, { 
       filename: 'lambda.js',
       lineOffset: 0,
@@ -642,14 +656,37 @@ async function executeJSLambda(
       },
     });
     
-    // Execute with 30 second timeout
+    // Execute synchronous part with timeout
     await vmScript.runInContext(vmContext, { 
-      timeout: 30000,
+      timeout: LAMBDA_TIMEOUT_MS,
       breakOnSigint: true,
     });
     
-    // Wait for async operations to complete
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // If there's a pending promise, wait for it with timeout
+    if (sandbox.__pendingPromise) {
+      try {
+        // Create a timeout promise that rejects after LAMBDA_TIMEOUT_MS
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`Lambda async operation timed out after ${LAMBDA_TIMEOUT_MS / 1000} seconds`));
+          }, LAMBDA_TIMEOUT_MS);
+        });
+        
+        // Race between the actual promise and the timeout
+        const result = await Promise.race([
+          sandbox.__pendingPromise,
+          timeoutPromise
+        ]);
+        
+        sandbox.__result = result;
+      } catch (asyncError: any) {
+        // Handle rejected promises or timeouts
+        sandbox.__error = asyncError.message || String(asyncError);
+      }
+    } else {
+      // Wait a bit for any microtasks to complete
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
 
     // Check for cancellation after execution
     cancellationToken?.throwIfCancelled();
