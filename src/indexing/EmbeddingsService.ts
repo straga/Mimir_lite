@@ -12,6 +12,79 @@
 import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
 import { createSecureFetchOptions } from '../utils/fetch-helper.js';
 
+/**
+ * Sanitize text for embedding API by removing/replacing invalid Unicode
+ * 
+ * Handles:
+ * - Lone surrogate code units (U+D800-U+DFFF) that cause JSON parse errors
+ * - Null bytes and other problematic control characters
+ * - Preserves valid emojis, CJK characters, and all proper Unicode
+ * 
+ * The embedding API error "surrogate U+DC00..U+DFFF must follow U+D800..U+DBFF"
+ * occurs when lone surrogate pairs exist in text (often from corrupted files or
+ * improper string handling).
+ * 
+ * @param text - Text to sanitize
+ * @returns Sanitized text safe for JSON serialization and embedding APIs
+ */
+export function sanitizeTextForEmbedding(text: string): string {
+  // Fast path: if no potential issues, return as-is
+  // Check for control chars (0x00-0x08, 0x0B, 0x0E-0x1F) or surrogate range (0xD800-0xDFFF)
+  let needsSanitization = false;
+  for (let i = 0; i < Math.min(text.length, 1000); i++) {
+    const code = text.charCodeAt(i);
+    if ((code >= 0x00 && code <= 0x08) || code === 0x0B || (code >= 0x0E && code <= 0x1F) ||
+        (code >= 0xD800 && code <= 0xDFFF)) {
+      needsSanitization = true;
+      break;
+    }
+  }
+  
+  // If sample looks clean, do a full check only if the text is short
+  if (!needsSanitization && text.length <= 1000) {
+    return text;
+  }
+  
+  // For longer texts or those with issues, do full sanitization
+  const result: string[] = [];
+  
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    
+    // Skip problematic control characters (keep tab, newline, carriage return, form feed)
+    if ((code >= 0x00 && code <= 0x08) || code === 0x0B || (code >= 0x0E && code <= 0x1F)) {
+      result.push(' '); // Replace with space
+      continue;
+    }
+    
+    // Handle surrogate pairs
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      // High surrogate - check if followed by low surrogate
+      const nextCode = i + 1 < text.length ? text.charCodeAt(i + 1) : 0;
+      if (nextCode >= 0xDC00 && nextCode <= 0xDFFF) {
+        // Valid surrogate pair - keep both
+        result.push(text[i], text[i + 1]);
+        i++; // Skip the low surrogate
+      } else {
+        // Lone high surrogate - replace with Unicode replacement character
+        result.push('\uFFFD');
+      }
+      continue;
+    }
+    
+    if (code >= 0xDC00 && code <= 0xDFFF) {
+      // Lone low surrogate (without preceding high surrogate) - replace
+      result.push('\uFFFD');
+      continue;
+    }
+    
+    // All other characters are safe
+    result.push(text[i]);
+  }
+  
+  return result.join('');
+}
+
 export interface EmbeddingResult {
   embedding: number[];
   dimensions: number;
@@ -96,7 +169,12 @@ export function formatMetadataForEmbedding(metadata: FileMetadata): string {
 // Configurable via environment variables for flexibility
 const getChunkSize = () => parseInt(process.env.MIMIR_EMBEDDINGS_CHUNK_SIZE || '768', 10);
 const getChunkOverlap = () => parseInt(process.env.MIMIR_EMBEDDINGS_CHUNK_OVERLAP || '10', 10);
-const getMaxRetries = () => parseInt(process.env.MIMIR_EMBEDDINGS_MAX_RETRIES || '3', 10);
+// Default 5 retries to handle model loading which can take 30+ seconds
+const getMaxRetries = () => parseInt(process.env.MIMIR_EMBEDDINGS_MAX_RETRIES || '5', 10);
+// Initial delay for model loading retries (ms) - model loading can take 30+ seconds
+const getModelLoadingBaseDelay = () => parseInt(process.env.MIMIR_EMBEDDINGS_MODEL_LOADING_DELAY || '5000', 10);
+// Maximum delay cap (ms)
+const getMaxDelay = () => parseInt(process.env.MIMIR_EMBEDDINGS_MAX_DELAY || '30000', 10);
 
 export class EmbeddingsService {
   private configLoader: LLMConfigLoader;
@@ -464,34 +542,66 @@ export class EmbeddingsService {
       const chunkText = text.substring(start, end).trim();
       
       if (chunkText.length > 0) {
-        try {
-          // Generate embedding for this chunk
-          let result: EmbeddingResult;
-          if (this.provider === 'copilot' || this.provider === 'openai' || this.provider === 'llama.cpp') {
-            result = await this.generateOpenAIEmbedding(chunkText);
-          } else {
-            result = await this.generateOllamaEmbedding(chunkText);
+        // Retry logic for individual chunks with transient errors
+        let chunkRetries = 0;
+        const maxChunkRetries = getMaxRetries();
+        let lastChunkError: Error | null = null;
+        
+        while (chunkRetries <= maxChunkRetries) {
+          try {
+            // Generate embedding for this chunk
+            let result: EmbeddingResult;
+            if (this.provider === 'copilot' || this.provider === 'openai' || this.provider === 'llama.cpp') {
+              result = await this.generateOpenAIEmbedding(chunkText);
+            } else {
+              result = await this.generateOllamaEmbedding(chunkText);
+            }
+
+            chunks.push({
+              text: chunkText,
+              embedding: result.embedding,
+              dimensions: result.dimensions,
+              model: result.model,
+              startOffset: start,
+              endOffset: end,
+              chunkIndex: chunkIndex
+            });
+
+            chunkIndex++;
+
+            // Small delay between chunks to avoid overwhelming the API
+            if (start + chunkSize < text.length) {
+              await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            
+            // Success - break out of retry loop
+            break;
+          } catch (error: any) {
+            lastChunkError = error;
+            
+            // Check if this is a retryable error at the chunk level
+            // (The inner methods already retry, but model loading can persist)
+            const isModelLoading = error.message?.includes('503') || 
+                                  error.message?.includes('Loading model') ||
+                                  error.message?.includes('unavailable_error');
+            const isFetchFailed = error.message?.includes('fetch failed');
+            const isRetryable = isModelLoading || isFetchFailed;
+            
+            if (!isRetryable || chunkRetries >= maxChunkRetries) {
+              console.warn(`⚠️  Failed to generate embedding for chunk ${chunkIndex}: ${error.message}`);
+              // Skip this chunk and continue with others
+              break;
+            }
+            
+            // Wait longer for model loading at chunk level (models may need time to fully load)
+            const chunkDelay = isModelLoading ? 5000 * (chunkRetries + 1) : 2000 * (chunkRetries + 1);
+            console.warn(
+              `⚠️  Chunk ${chunkIndex} failed (${isModelLoading ? 'model loading' : 'fetch failed'}), ` +
+              `retry ${chunkRetries + 1}/${maxChunkRetries} in ${chunkDelay}ms...`
+            );
+            await new Promise(resolve => setTimeout(resolve, chunkDelay));
+            chunkRetries++;
           }
-
-          chunks.push({
-            text: chunkText,
-            embedding: result.embedding,
-            dimensions: result.dimensions,
-            model: result.model,
-            startOffset: start,
-            endOffset: end,
-            chunkIndex: chunkIndex
-          });
-
-          chunkIndex++;
-
-          // Small delay between chunks to avoid overwhelming the API
-          if (start + chunkSize < text.length) {
-            await new Promise(resolve => setTimeout(resolve, 50));
-          }
-        } catch (error: any) {
-          console.warn(`⚠️  Failed to generate embedding for chunk ${chunkIndex}: ${error.message}`);
-          // Continue with other chunks
         }
       }
       
@@ -515,7 +625,7 @@ export class EmbeddingsService {
 
   /**
    * Retry wrapper for embedding generation with exponential backoff
-   * Handles EOF errors, 503 (model loading), and other transient failures from Ollama
+   * Handles EOF errors, 503 (model loading), and other transient failures from Ollama/llama.cpp
    */
   private async retryWithBackoff<T>(
     fn: () => Promise<T>,
@@ -523,6 +633,8 @@ export class EmbeddingsService {
     maxRetries: number = getMaxRetries()
   ): Promise<T> {
     let lastError: Error | null = null;
+    const modelLoadingBaseDelay = getModelLoadingBaseDelay();
+    const maxDelay = getMaxDelay();
     
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
@@ -548,18 +660,27 @@ export class EmbeddingsService {
           throw error;
         }
         
-        // Exponential backoff with longer delays for model loading
-        // Model loading: 3s, 6s, 12s, 20s
-        // Other errors: 1s, 2s, 4s, 8s
-        const baseDelay = isModelLoading ? 3000 : 1000;
-        const delayMs = Math.min(baseDelay * Math.pow(2, attempt), 20000);
+        // Exponential backoff with much longer delays for model loading
+        // Model loading can take 30+ seconds, so we use longer waits:
+        // Model loading: 5s, 10s, 20s, 30s, 30s (with default 5s base)
+        // Fetch failed: 3s, 6s, 12s, 24s, 30s (connection issues may need time)
+        // EOF errors: 1s, 2s, 4s, 8s, 16s
+        let baseDelay: number;
+        if (isModelLoading) {
+          baseDelay = modelLoadingBaseDelay;
+        } else if (isFetchFailed) {
+          baseDelay = 3000;
+        } else {
+          baseDelay = 1000;
+        }
+        const delayMs = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
         
         const errorType = isModelLoading ? 'model loading' : 
                          isFetchFailed ? 'fetch failed' : 'EOF';
         
         console.warn(
           `⚠️  ${operation} failed with ${errorType} error (attempt ${attempt + 1}/${maxRetries + 1}). ` +
-          `Retrying in ${delayMs}ms...`
+          `Retrying in ${Math.round(delayMs / 1000)}s...`
         );
         
         await new Promise(resolve => setTimeout(resolve, delayMs));
@@ -573,6 +694,9 @@ export class EmbeddingsService {
    * Generate embedding using Ollama
    */
   private async generateOllamaEmbedding(text: string): Promise<EmbeddingResult> {
+    // Sanitize text to remove invalid Unicode before sending to API
+    const sanitizedText = sanitizeTextForEmbedding(text);
+    
     return this.retryWithBackoff(async () => {
       try {
         // Simple concatenation: base URL + path
@@ -593,7 +717,7 @@ export class EmbeddingsService {
           headers,
           body: JSON.stringify({
             model: this.model,
-            prompt: text,
+            prompt: sanitizedText,
           }),
         });
         
@@ -629,74 +753,79 @@ export class EmbeddingsService {
    * Generate embedding using OpenAI/Copilot/llama.cpp API (all use OpenAI-compatible format)
    */
   private async generateOpenAIEmbedding(text: string): Promise<EmbeddingResult> {
-    try {
-      // Simple concatenation: base URL + path
-      const baseUrl = process.env.MIMIR_EMBEDDINGS_API || this.baseUrl || 'http://localhost:11434';
-      const embeddingsPath = process.env.MIMIR_EMBEDDINGS_API_PATH || '/v1/embeddings';
-      const embeddingsUrl = `${baseUrl}${embeddingsPath}`;
-      const apiKey = process.env.MIMIR_EMBEDDINGS_API_KEY || this.apiKey;
-      
-      // Build headers - llama.cpp doesn't need Authorization header
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      
-      // Only add Authorization if we have a key and not llama.cpp
-      if (this.provider !== 'llama.cpp' && apiKey && apiKey !== 'dummy-key') {
-        headers['Authorization'] = `Bearer ${apiKey}`;
-      }
-      
-      // Detect if input is a data URL (image) for multimodal embeddings
-      const isDataURL = text.startsWith('data:image/');
-      
-      // For multimodal embeddings, send as array with image object
-      // For text embeddings, send as string
-      const input = isDataURL 
-        ? [{ type: 'image_url', image_url: { url: text } }]
-        : text;
-      
-      const requestBody = JSON.stringify({
-        model: this.model,
-        input: input,
-      });
-      
-      const fetchOptions = createSecureFetchOptions(embeddingsUrl, {
-        method: 'POST',
-        headers,
-        body: requestBody,
-      });
-      
-      const response = await fetch(embeddingsUrl, fetchOptions);
+    // Sanitize text to remove invalid Unicode before sending to API
+    const sanitizedText = sanitizeTextForEmbedding(text);
+    
+    return this.retryWithBackoff(async () => {
+      try {
+        // Simple concatenation: base URL + path
+        const baseUrl = process.env.MIMIR_EMBEDDINGS_API || this.baseUrl || 'http://localhost:11434';
+        const embeddingsPath = process.env.MIMIR_EMBEDDINGS_API_PATH || '/v1/embeddings';
+        const embeddingsUrl = `${baseUrl}${embeddingsPath}`;
+        const apiKey = process.env.MIMIR_EMBEDDINGS_API_KEY || this.apiKey;
+        
+        // Build headers - llama.cpp doesn't need Authorization header
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        
+        // Only add Authorization if we have a key and not llama.cpp
+        if (this.provider !== 'llama.cpp' && apiKey && apiKey !== 'dummy-key') {
+          headers['Authorization'] = `Bearer ${apiKey}`;
+        }
+        
+        // Detect if input is a data URL (image) for multimodal embeddings
+        const isDataURL = sanitizedText.startsWith('data:image/');
+        
+        // For multimodal embeddings, send as array with image object
+        // For text embeddings, send as string
+        const input = isDataURL 
+          ? [{ type: 'image_url', image_url: { url: sanitizedText } }]
+          : sanitizedText;
+        
+        const requestBody = JSON.stringify({
+          model: this.model,
+          input: input,
+        });
+        
+        const fetchOptions = createSecureFetchOptions(embeddingsUrl, {
+          method: 'POST',
+          headers,
+          body: requestBody,
+        });
+        
+        const response = await fetch(embeddingsUrl, fetchOptions);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`OpenAI API error (${response.status}): ${errorText}`);
-      }
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`OpenAI API error (${response.status}): ${errorText}`);
+        }
 
-      const data = await response.json();
-      
-      if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
-        throw new Error('Invalid response from OpenAI: missing data array');
-      }
+        const data = await response.json();
+        
+        if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
+          throw new Error('Invalid response from OpenAI: missing data array');
+        }
 
-      const embedding = data.data[0].embedding;
-      
-      if (!Array.isArray(embedding)) {
-        throw new Error('Invalid response from OpenAI: embedding is not an array');
-      }
+        const embedding = data.data[0].embedding;
+        
+        if (!Array.isArray(embedding)) {
+          throw new Error('Invalid response from OpenAI: embedding is not an array');
+        }
 
-      return {
-        embedding: embedding,
-        dimensions: embedding.length,
-        model: this.model,
-      };
+        return {
+          embedding: embedding,
+          dimensions: embedding.length,
+          model: this.model,
+        };
 
-    } catch (error: any) {
-      if (error.code === 'ECONNREFUSED') {
-        throw new Error(`Cannot connect to OpenAI API at ${this.baseUrl}. Make sure copilot-api is running.`);
+      } catch (error: any) {
+        if (error.code === 'ECONNREFUSED') {
+          throw new Error(`Cannot connect to OpenAI API at ${this.baseUrl}. Make sure copilot-api is running.`);
+        }
+        throw error;
       }
-      throw error;
-    }
+    }, `OpenAI embedding (${text.substring(0, 50)}...)`);
   }
 
   /**

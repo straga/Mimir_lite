@@ -606,29 +606,63 @@ export class FileIndexer {
 
   /**
    * Check if content is actually text (not binary)
+   * 
+   * Industry-standard approach:
+   * 1. Check for null bytes (definitive binary indicator)
+   * 2. Check for high concentration of control characters (0x00-0x08, 0x0E-0x1F)
+   * 3. Allow all valid Unicode including emojis, CJK, extended Latin, etc.
+   * 
+   * This properly handles:
+   * - UTF-8 encoded files with emojis (🔧, 📄, etc.)
+   * - Files with non-ASCII characters (Chinese, Japanese, Arabic, etc.)
+   * - Files with special symbols and mathematical notation
    */
   private isTextContent(content: string): boolean {
-    // Check for null bytes (common in binary files)
+    // Empty content is treated as text (no binary indicators)
+    if (content.length === 0) {
+      return true;
+    }
+    
+    // Check for null bytes (definitive binary indicator)
     if (content.includes('\0')) {
       return false;
     }
     
-    // Check ratio of printable characters
-    let printableCount = 0;
-    const sampleSize = Math.min(content.length, 1000); // Check first 1000 chars
+    // Sample first 8KB for performance (industry standard sample size)
+    const sampleSize = Math.min(content.length, 8192);
+    let controlCharCount = 0;
     
     for (let i = 0; i < sampleSize; i++) {
       const code = content.charCodeAt(i);
-      // Printable ASCII + common whitespace/newlines
-      if ((code >= 32 && code <= 126) || code === 9 || code === 10 || code === 13) {
-        printableCount++;
+      
+      // Count problematic control characters (0x00-0x08, 0x0E-0x1F)
+      // Exclude common whitespace: tab (0x09), newline (0x0A), carriage return (0x0D)
+      // Also exclude form feed (0x0C) which appears in some text files
+      if ((code >= 0x00 && code <= 0x08) || (code >= 0x0E && code <= 0x1F)) {
+        controlCharCount++;
+      }
+      
+      // Check for lone surrogate code units (invalid UTF-16)
+      // High surrogate (0xD800-0xDBFF) must be followed by low surrogate (0xDC00-0xDFFF)
+      if (code >= 0xD800 && code <= 0xDBFF) {
+        const nextCode = i + 1 < sampleSize ? content.charCodeAt(i + 1) : 0;
+        if (nextCode < 0xDC00 || nextCode > 0xDFFF) {
+          // Lone high surrogate - likely binary or corrupted
+          controlCharCount++;
+        } else {
+          // Valid surrogate pair - skip the low surrogate on next iteration
+          i++;
+        }
+      } else if (code >= 0xDC00 && code <= 0xDFFF) {
+        // Lone low surrogate without preceding high surrogate
+        controlCharCount++;
       }
     }
     
-    const printableRatio = printableCount / sampleSize;
-    
-    // If less than 85% printable, likely binary
-    return printableRatio >= 0.85;
+    // If more than 10% control characters, likely binary
+    // This is more permissive than the old 85% printable threshold
+    const controlRatio = controlCharCount / sampleSize;
+    return controlRatio < 0.10;
   }
 
   /**

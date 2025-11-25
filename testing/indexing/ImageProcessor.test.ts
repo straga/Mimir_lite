@@ -2,18 +2,29 @@
  * @file testing/indexing/ImageProcessor.test.ts
  * @description Unit tests for ImageProcessor
  * 
- * NOTE: These tests create temporary test images in /tmp for testing.
+ * NOTE: These tests create temporary test images for testing.
+ * Uses os.tmpdir() for cross-platform temp directory support.
  * No external services are required. Files are cleaned up after tests.
  */
 
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import { ImageProcessor } from '../../src/indexing/ImageProcessor.js';
 import sharp from 'sharp';
 import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as os from 'os';
 
 describe('ImageProcessor', () => {
   let processor: ImageProcessor;
   const testFiles: string[] = [];
+  let tempDir: string;
+
+  // Get cross-platform temp directory
+  beforeAll(async () => {
+    // Use os.tmpdir() for cross-platform support (works on Windows, macOS, Linux)
+    tempDir = path.join(os.tmpdir(), 'mimir-image-processor-tests');
+    await fs.mkdir(tempDir, { recursive: true });
+  });
 
   beforeEach(() => {
     processor = new ImageProcessor({
@@ -31,6 +42,12 @@ describe('ImageProcessor', () => {
       } catch (e) {
         // Ignore errors - file may not exist
       }
+    }
+    // Clean up temp directory
+    try {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    } catch (e) {
+      // Ignore errors
     }
   });
 
@@ -72,7 +89,7 @@ describe('ImageProcessor', () => {
         .jpeg()
         .toBuffer();
 
-      const tempPath = '/tmp/test-small-image.jpg';
+      const tempPath = path.join(tempDir, 'test-small-image.jpg');
       testFiles.push(tempPath);
       await sharp(testImage).toFile(tempPath);
 
@@ -100,7 +117,7 @@ describe('ImageProcessor', () => {
         .jpeg()
         .toBuffer();
 
-      const tempPath = '/tmp/test-large-image.jpg';
+      const tempPath = path.join(tempDir, 'test-large-image.jpg');
       testFiles.push(tempPath);
       await sharp(testImage).toFile(tempPath);
 
@@ -135,7 +152,7 @@ describe('ImageProcessor', () => {
         .jpeg()
         .toBuffer();
 
-      const tempPath = '/tmp/test-portrait-image.jpg';
+      const tempPath = path.join(tempDir, 'test-portrait-image.jpg');
       testFiles.push(tempPath);
       await sharp(testImage).toFile(tempPath);
 
@@ -161,7 +178,7 @@ describe('ImageProcessor', () => {
         .jpeg()
         .toBuffer();
 
-      const tempPath = '/tmp/test-square-image.jpg';
+      const tempPath = path.join(tempDir, 'test-square-image.jpg');
       testFiles.push(tempPath);
       await sharp(testImage).toFile(tempPath);
 
@@ -225,7 +242,7 @@ describe('ImageProcessor', () => {
         .jpeg()
         .toBuffer();
 
-      const tempPath = '/tmp/test-custom-limit.jpg';
+      const tempPath = path.join(tempDir, 'test-custom-limit.jpg');
       testFiles.push(tempPath);
       await sharp(testImage).toFile(tempPath);
 
@@ -255,7 +272,7 @@ describe('ImageProcessor', () => {
         .jpeg()
         .toBuffer();
 
-      const tempPath = '/tmp/test-custom-target.jpg';
+      const tempPath = path.join(tempDir, 'test-custom-target.jpg');
       testFiles.push(tempPath);
       await sharp(testImage).toFile(tempPath);
 

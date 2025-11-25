@@ -72,12 +72,14 @@ describe('Path Utilities', () => {
     });
 
     it('should expand ~/ to home directory with path', () => {
-      expect(expandTilde('~/Documents')).toBe('/Users/testuser/Documents');
-      expect(expandTilde('~/project/file.txt')).toBe('/Users/testuser/project/file.txt');
+      // On Windows, path.join uses backslashes, so normalize the result
+      expect(normalizeSlashes(expandTilde('~/Documents'))).toBe('/Users/testuser/Documents');
+      expect(normalizeSlashes(expandTilde('~/project/file.txt'))).toBe('/Users/testuser/project/file.txt');
     });
 
     it('should expand ~\\ (Windows style) to home directory', () => {
-      expect(expandTilde('~\\Documents')).toBe('/Users/testuser/Documents');
+      // On Windows, path.join uses backslashes, so normalize the result
+      expect(normalizeSlashes(expandTilde('~\\Documents'))).toBe('/Users/testuser/Documents');
     });
 
     it('should not expand paths that do not start with ~', () => {
@@ -99,7 +101,10 @@ describe('Path Utilities', () => {
 
     it('should resolve relative paths', () => {
       const result = normalizeAndResolve('../other', '/home/user/project');
-      expect(result).toBe('/home/user/other');
+      // On Windows, path.resolve may add drive letter (C:) to Unix-style paths
+      // The important thing is the relative resolution is correct
+      expect(result).toMatch(/\/?home\/user\/other$/);
+      expect(result).not.toContain('..');
     });
 
     it('should normalize Windows paths', () => {

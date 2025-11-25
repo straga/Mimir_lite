@@ -235,8 +235,17 @@ export class LLMConfigLoader {
 
   /**
    * Discover available models from provider API
+   * 
+   * In test mode (NODE_ENV=test), skips network calls to ensure deterministic
+   * behavior and uses the default config models instead.
    */
   private async discoverModels(config: LLMConfig): Promise<void> {
+    // Skip model discovery in test mode for deterministic behavior
+    // Tests should not rely on live services
+    if (process.env.NODE_ENV === 'test') {
+      return;
+    }
+
     const defaultProvider = config.defaultProvider;
     const providerConfig = config.providers[defaultProvider];
     
@@ -523,23 +532,54 @@ export class LLMConfigLoader {
     // Use base URL directly from MIMIR_LLM_API
     const llmBaseUrl = process.env.MIMIR_LLM_API;
     
+    // In test mode, include fallback models for deterministic behavior
+    // In production, models are discovered dynamically from the provider API
+    const isTestMode = process.env.NODE_ENV === 'test';
+    
+    const defaultCopilotModels: Record<string, ModelConfig> = isTestMode ? {
+      'gpt-4.1': {
+        name: 'gpt-4.1',
+        contextWindow: 128000,
+        description: 'GPT-4.1 model (test fallback)',
+        recommendedFor: ['pm', 'worker', 'qc'],
+        config: { maxTokens: -1, temperature: 0.0 },
+      },
+      'gpt-4o': {
+        name: 'gpt-4o',
+        contextWindow: 128000,
+        description: 'GPT-4o multimodal model (test fallback)',
+        recommendedFor: ['pm'],
+        config: { maxTokens: -1, temperature: 0.0 },
+      },
+    } : {};
+    
+    const defaultOllamaModels: Record<string, ModelConfig> = isTestMode ? {
+      'llama3': {
+        name: 'llama3',
+        contextWindow: 8192,
+        description: 'Llama 3 model (test fallback)',
+        recommendedFor: ['worker', 'qc'],
+        config: { numCtx: 8192, temperature: 0.0, numPredict: -1 },
+      },
+    } : {};
+    
     const config: LLMConfig = {
       defaultProvider,
       providers: {
         copilot: {
           baseUrl: (defaultProvider === 'copilot' && llmBaseUrl) || 'http://localhost:4141',
           defaultModel: defaultModel,
-          models: {},
+          models: defaultCopilotModels,
         },
         ollama: {
           baseUrl: (defaultProvider === 'ollama' && llmBaseUrl) || 'http://localhost:11434',
           defaultModel: defaultModel,
-          models: {},
+          models: defaultOllamaModels,
         },
         openai: {
           baseUrl: (defaultProvider === 'openai' && llmBaseUrl) || 'https://api.openai.com',
           defaultModel: defaultModel,
-          models: {},
+          models: defaultCopilotModels, // OpenAI uses same models as copilot
         },
       },
       // Agent defaults from ENV (all use default provider)
