@@ -208,11 +208,42 @@ func (s *Server) buildRouter() http.Handler {
 	mux := http.NewServeMux()
 
 	// ==========================================================================
+	// UI Browser (if enabled)
+	// ==========================================================================
+	uiHandler, uiErr := newUIHandler()
+	if uiErr != nil {
+		fmt.Printf("⚠️  UI initialization failed: %v\n", uiErr)
+	}
+	if uiHandler != nil {
+		fmt.Println("📱 UI Browser enabled at /")
+		// Serve UI assets
+		mux.Handle("/assets/", uiHandler)
+		mux.HandleFunc("/nornicdb.svg", func(w http.ResponseWriter, r *http.Request) {
+			uiHandler.ServeHTTP(w, r)
+		})
+		// UI routes (SPA)
+		mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+			uiHandler.ServeHTTP(w, r)
+		})
+		// Auth config endpoint for UI
+		mux.HandleFunc("/auth/config", s.handleAuthConfig)
+	}
+
+	// ==========================================================================
 	// Neo4j-Compatible Endpoints (for driver/browser compatibility)
 	// ==========================================================================
 
 	// Discovery endpoint (no auth required) - Neo4j compatible
-	mux.HandleFunc("/", s.handleDiscovery)
+	// Also serves UI for browser requests
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Serve UI for browser requests at root
+		if uiHandler != nil && isUIRequest(r) && r.URL.Path == "/" {
+			uiHandler.ServeHTTP(w, r)
+			return
+		}
+		// Otherwise serve Neo4j discovery JSON
+		s.handleDiscovery(w, r)
+	})
 
 	// Neo4j HTTP API - Transaction endpoints (database-specific)
 	// Pattern: /db/{databaseName}/tx/commit for implicit transactions
@@ -1014,6 +1045,29 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "logged out"})
+}
+
+// handleAuthConfig returns auth configuration for the UI
+func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
+	config := struct {
+		DevLoginEnabled bool `json:"devLoginEnabled"`
+		SecurityEnabled bool `json:"securityEnabled"`
+		OAuthProviders  []struct {
+			Name        string `json:"name"`
+			URL         string `json:"url"`
+			DisplayName string `json:"displayName"`
+		} `json:"oauthProviders"`
+	}{
+		DevLoginEnabled: true, // Always enable dev login for now
+		SecurityEnabled: s.auth != nil && s.auth.IsSecurityEnabled(),
+		OAuthProviders:  []struct {
+			Name        string `json:"name"`
+			URL         string `json:"url"`
+			DisplayName string `json:"displayName"`
+		}{},
+	}
+
+	s.writeJSON(w, http.StatusOK, config)
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {

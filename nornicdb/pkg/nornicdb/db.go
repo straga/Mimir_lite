@@ -9,13 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/orneryd/nornicdb/pkg/cypher"
 	"github.com/orneryd/nornicdb/pkg/decay"
 	"github.com/orneryd/nornicdb/pkg/inference"
+	"github.com/orneryd/nornicdb/pkg/search"
 	"github.com/orneryd/nornicdb/pkg/storage"
 )
 
@@ -125,9 +125,9 @@ type DB struct {
 	inference      *inference.Engine
 	cypherExecutor *cypher.StorageExecutor
 	gpuManager     interface{} // *gpu.Manager - interface to avoid circular import
-	// vectorIdx *index.HNSWIndex  // TODO
-	// textIdx   *index.BleveIndex // TODO
-	// embedder  embed.Embedder    // TODO
+	
+	// Search service (uses pre-computed embeddings from Mimir)
+	searchService *search.Service
 }
 
 // Open opens or creates a NornicDB database.
@@ -173,7 +173,57 @@ func Open(dataDir string, config *Config) (*DB, error) {
 		db.inference = inference.New(inferConfig)
 	}
 
+	// Initialize search service (uses pre-computed embeddings from Mimir)
+	db.searchService = search.NewService(db.storage)
+
 	return db, nil
+}
+
+// LoadFromExport loads data from a Mimir JSON export directory.
+// This loads nodes, relationships, and embeddings from the exported files.
+func (db *DB) LoadFromExport(ctx context.Context, exportDir string) (*LoadResult, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	
+	if db.closed {
+		return nil, ErrClosed
+	}
+	
+	// Use the storage loader
+	result, err := storage.LoadFromMimirExport(db.storage, exportDir)
+	if err != nil {
+		return nil, fmt.Errorf("loading export: %w", err)
+	}
+	
+	return &LoadResult{
+		NodesLoaded:      result.NodesImported,
+		EdgesLoaded:      result.EdgesImported,
+		EmbeddingsLoaded: result.EmbeddingsLoaded,
+	}, nil
+}
+
+// LoadResult holds the result of a data load operation.
+type LoadResult struct {
+	NodesLoaded      int `json:"nodes_loaded"`
+	EdgesLoaded      int `json:"edges_loaded"`
+	EmbeddingsLoaded int `json:"embeddings_loaded"`
+}
+
+// BuildSearchIndexes builds the search indexes from loaded data.
+// Call this after loading data to enable search functionality.
+func (db *DB) BuildSearchIndexes(ctx context.Context) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	
+	if db.closed {
+		return ErrClosed
+	}
+	
+	if db.searchService == nil {
+		return fmt.Errorf("search service not initialized")
+	}
+	
+	return db.searchService.BuildIndexes(ctx)
 }
 
 // Close closes the database.
@@ -885,6 +935,11 @@ func (db *DB) CreateNode(ctx context.Context, labels []string, properties map[st
 		return nil, err
 	}
 
+	// Update search indexes (live indexing for seamless Mimir compatibility)
+	if db.searchService != nil {
+		_ = db.searchService.IndexNode(node) // Best effort - search may lag behind writes
+	}
+
 	return &Node{
 		ID:         id,
 		Labels:     labels,
@@ -1076,9 +1131,15 @@ func (db *DB) DeleteEdge(ctx context.Context, id string) error {
 type SearchResult struct {
 	Node  *Node   `json:"node"`
 	Score float64 `json:"score"`
+	
+	// RRF metadata
+	RRFScore   float64 `json:"rrf_score,omitempty"`
+	VectorRank int     `json:"vector_rank,omitempty"`
+	BM25Rank   int     `json:"bm25_rank,omitempty"`
 }
 
-// Search performs text/semantic search.
+// Search performs full-text BM25 search.
+// For hybrid vector+text search, use HybridSearch with pre-computed query embedding.
 func (db *DB) Search(ctx context.Context, query string, labels []string, limit int) ([]*SearchResult, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -1087,62 +1148,85 @@ func (db *DB) Search(ctx context.Context, query string, labels []string, limit i
 		return nil, ErrClosed
 	}
 
-	// Simple text search in properties (TODO: integrate full-text index)
-	allNodes, err := db.storage.AllNodes()
+	if db.searchService == nil {
+		return nil, fmt.Errorf("search service not initialized")
+	}
+
+	// Get adaptive search options based on query
+	opts := search.GetAdaptiveRRFConfig(query)
+	opts.Limit = limit
+	if len(labels) > 0 {
+		opts.Types = labels
+	}
+
+	// Full-text search only (no embedding generation)
+	// For hybrid search, Mimir should call VectorSearch with pre-computed embedding
+	response, err := db.searchService.Search(ctx, query, nil, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	queryLower := strings.ToLower(query)
-	var results []*SearchResult
-
-	for _, n := range allNodes {
-		// Filter by labels if specified
-		if len(labels) > 0 {
-			hasLabel := false
-			for _, l := range labels {
-				for _, nl := range n.Labels {
-					if nl == l {
-						hasLabel = true
-						break
-					}
-				}
-				if hasLabel {
-					break
-				}
-			}
-			if !hasLabel {
-				continue
-			}
-		}
-
-		// Simple text matching in properties
-		score := 0.0
-		for _, v := range n.Properties {
-			if str, ok := v.(string); ok {
-				if strings.Contains(strings.ToLower(str), queryLower) {
-					score = 1.0
-					break
-				}
-			}
-		}
-
-		if score > 0 {
-			results = append(results, &SearchResult{
-				Node: &Node{
-					ID:         string(n.ID),
-					Labels:     n.Labels,
-					Properties: n.Properties,
-					CreatedAt:  n.CreatedAt,
-				},
-				Score: score,
-			})
+	// Convert search results to our format
+	results := make([]*SearchResult, len(response.Results))
+	for i, r := range response.Results {
+		results[i] = &SearchResult{
+			Node: &Node{
+				ID:         r.ID,
+				Labels:     r.Labels,
+				Properties: r.Properties,
+			},
+			Score:      r.Score,
+			RRFScore:   r.RRFScore,
+			VectorRank: r.VectorRank,
+			BM25Rank:   r.BM25Rank,
 		}
 	}
 
-	// Limit results
-	if len(results) > limit {
-		results = results[:limit]
+	return results, nil
+}
+
+// HybridSearch performs RRF hybrid search combining vector similarity and BM25 full-text.
+// The queryEmbedding should be pre-computed by Mimir using its embedding service.
+// This is the primary search method for semantic search with ranking fusion.
+func (db *DB) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, labels []string, limit int) ([]*SearchResult, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	if db.closed {
+		return nil, ErrClosed
+	}
+
+	if db.searchService == nil {
+		return nil, fmt.Errorf("search service not initialized")
+	}
+
+	// Get adaptive search options based on query
+	opts := search.GetAdaptiveRRFConfig(query)
+	opts.Limit = limit
+	if len(labels) > 0 {
+		opts.Types = labels
+	}
+
+	// Execute RRF hybrid search with Mimir's pre-computed embedding
+	response, err := db.searchService.Search(ctx, query, queryEmbedding, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert search results to our format
+	results := make([]*SearchResult, len(response.Results))
+	for i, r := range response.Results {
+		results[i] = &SearchResult{
+			Node: &Node{
+				ID:         r.ID,
+				Labels:     r.Labels,
+				Properties: r.Properties,
+			},
+			Score:      r.Score,
+			RRFScore:   r.RRFScore,
+			VectorRank: r.VectorRank,
+			BM25Rank:   r.BM25Rank,
+		}
 	}
 
 	return results, nil

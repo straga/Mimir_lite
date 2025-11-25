@@ -27,3 +27,4 @@ config/rbac.local.json
 config/rbac.*.json
 !config/rbac.json
 docker/llama-cpp/models/*
+nornicdb/nornicdb

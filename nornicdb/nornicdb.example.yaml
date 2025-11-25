@@ -1,87 +1,156 @@
 # NornicDB Configuration
-# Copy this file to nornicdb.yaml and customize
+# 
+# NornicDB is a high-performance drop-in replacement for Neo4j.
+# It receives pre-embedded nodes from Mimir - no embedding generation here.
+#
+# Environment variables take precedence over this file.
+# Use NORNIC_* prefix for environment variables.
 
+# =============================================================================
+# Server Configuration
+# =============================================================================
 server:
   # Bolt protocol port (Neo4j compatible)
   bolt_port: 7687
   
-  # HTTP REST API port
+  # HTTP API port (Neo4j compatible)
   http_port: 7474
   
-  # Data directory
+  # Data directory for persistence
   data_dir: ./data
   
-  # Maximum concurrent connections
-  max_connections: 100
+  # Authentication (Neo4j compatible format: username:password)
+  # Can also use environment: NORNIC_AUTH=neo4j:password
+  auth: "neo4j:password"
+  
+  # Enable TLS (optional)
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
 
-# Embedding configuration for vector search
-embeddings:
-  # Provider: ollama, openai
-  provider: ollama
+# =============================================================================
+# GPU Configuration (NornicDB-specific)
+# =============================================================================
+gpu:
+  # Enable GPU acceleration for vector search
+  enabled: true
   
-  # API endpoint
-  api_url: http://localhost:11434
-  api_path: /api/embeddings
+  # Backend: auto, metal, cuda, opencl, vulkan, cpu
+  # auto: Automatically detect best available backend
+  # metal: Apple Silicon (M1/M2/M3)
+  # cuda: NVIDIA GPUs
+  # opencl: AMD GPUs (ROCm), some NVIDIA
+  # vulkan: Cross-platform (experimental)
+  # cpu: Fallback, no GPU
+  backend: auto
   
-  # API key (for OpenAI)
-  # api_key: sk-...
+  # Maximum VRAM usage (bytes, 0 = auto)
+  # Default: ~80% of available VRAM
+  max_vram_bytes: 0
   
-  # Model name
-  model: mxbai-embed-large
-  
-  # Expected dimensions (for validation)
-  dimensions: 1024
-  
-  # Request timeout
-  timeout: 30s
+  # Batch size for GPU operations
+  batch_size: 1000
 
-# Memory decay configuration
+# =============================================================================
+# Memory Decay Configuration (NornicDB-specific)
+# =============================================================================
 decay:
-  # Enable automatic decay
+  # Enable memory decay system
   enabled: true
   
-  # How often to recalculate scores
-  recalculate_interval: 1h
+  # Run decay every N hours
+  interval_hours: 24
   
-  # Score threshold for archiving (0.0 - 1.0)
-  archive_threshold: 0.05
-  
-  # Decay formula weights (must sum to 1.0)
-  recency_weight: 0.4
-  frequency_weight: 0.3
-  importance_weight: 0.3
+  # Memory types and their decay rates
+  types:
+    # Episodic: Personal events, experiences
+    # Fast initial decay, stabilizes over time
+    episodic:
+      enabled: true
+      initial_strength: 1.0
+      decay_rate: 0.1      # 10% per interval
+      min_strength: 0.1
+    
+    # Semantic: Facts, concepts, knowledge
+    # Slow, steady decay
+    semantic:
+      enabled: true
+      initial_strength: 1.0
+      decay_rate: 0.02     # 2% per interval
+      min_strength: 0.3
+    
+    # Procedural: Skills, how-to knowledge
+    # Very slow decay
+    procedural:
+      enabled: true
+      initial_strength: 1.0
+      decay_rate: 0.01     # 1% per interval
+      min_strength: 0.5
 
-# Automatic relationship inference
-auto_links:
-  # Enable automatic edge creation
+# =============================================================================
+# Auto-Relationship Configuration (NornicDB-specific)
+# =============================================================================
+auto_relationships:
+  # Enable automatic relationship creation
   enabled: true
   
-  # Minimum similarity score for suggesting edges (0.0 - 1.0)
-  similarity_threshold: 0.82
+  # Minimum similarity threshold for auto-linking (0.0-1.0)
+  similarity_threshold: 0.85
   
-  # Number of similar nodes to consider
-  similarity_top_k: 10
+  # Maximum edges to auto-create per node
+  max_edges_per_node: 10
   
-  # Co-access pattern detection
-  co_access_enabled: true
-  co_access_window: 30s
-  co_access_min_count: 3
-  
-  # Temporal proximity linking
-  temporal_enabled: true
-  temporal_window: 30m
-  
-  # Transitive relationship inference
-  transitive_enabled: true
-  transitive_min_confidence: 0.5
+  # Types of auto-relationships to create
+  types:
+    # Link nodes with similar embeddings
+    embedding_similarity: true
+    
+    # Link nodes accessed together
+    co_access: true
+    
+    # Link nodes created close in time
+    temporal_proximity: true
 
-# Logging configuration
+# =============================================================================
+# Search Configuration
+# =============================================================================
+search:
+  # RRF (Reciprocal Rank Fusion) settings
+  rrf:
+    # RRF constant (higher = more equal weight to lower ranks)
+    k: 60
+    
+    # Default weight for vector search (0.0-1.0)
+    vector_weight: 0.6
+    
+    # Default weight for BM25 search (0.0-1.0)
+    bm25_weight: 0.4
+    
+    # Use adaptive weights based on query length
+    adaptive: true
+  
+  # Properties indexed for full-text search
+  # Must match Mimir's Neo4j node_search fulltext index
+  fulltext_properties:
+    - content
+    - text
+    - title
+    - name
+    - description
+    - path
+    - workerRole
+    - requirements
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
 logging:
-  level: info  # debug, info, warn, error
-  format: json # json, text
+  # Log level: debug, info, warn, error
+  level: info
   
-# Metrics (Prometheus)
-metrics:
-  enabled: true
-  port: 9090
-  path: /metrics
+  # Log format: json, text
+  format: text
+  
+  # Log file (empty = stdout only)
+  file: ""
