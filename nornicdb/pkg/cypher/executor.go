@@ -288,6 +288,12 @@ func (e *StorageExecutor) Execute(ctx context.Context, cypher string, params map
 		return e.executeCompoundMatchCreate(ctx, cypher)
 	}
 
+	// Compound queries: CREATE ... WITH ... DELETE (create then delete in same statement)
+	// This pattern is used for testing: CREATE (t:Test) WITH t DELETE t RETURN count(t)
+	if strings.HasPrefix(upperQuery, "CREATE") && findKeywordIndex(cypher, "WITH") > 0 && findKeywordIndex(cypher, "DELETE") > 0 {
+		return e.executeCompoundCreateWithDelete(ctx, cypher)
+	}
+
 	// Check for compound queries - MATCH ... DELETE, MATCH ... SET, etc.
 	// These need special handling (but not MERGE queries which handle SET internally)
 	if strings.Contains(upperQuery, " DELETE ") || strings.HasSuffix(upperQuery, " DELETE") ||

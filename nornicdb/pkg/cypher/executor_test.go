@@ -1078,6 +1078,111 @@ func TestExecuteCreateRelationshipWithReturn(t *testing.T) {
 	assert.NotEmpty(t, result.Rows)
 }
 
+// TestExecuteCreateRelationshipWithArrayProperties tests CREATE with relationship properties containing arrays
+// This is a Neo4j-compatible feature for creating edges with properties like {roles: ['Neo']}
+func TestExecuteCreateRelationshipWithArrayProperties(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Test direct CREATE with relationship properties (array value)
+	result, err := exec.Execute(ctx, "CREATE (a:Person {name: 'Keanu'})-[:ACTED_IN {roles: ['Neo', 'John Wick']}]->(m:Movie {title: 'The Matrix'})", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Stats.NodesCreated)
+	assert.Equal(t, 1, result.Stats.RelationshipsCreated)
+
+	// Verify the relationship has properties
+	edges, err := store.AllEdges()
+	require.NoError(t, err)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "ACTED_IN", edges[0].Type)
+	roles, ok := edges[0].Properties["roles"]
+	assert.True(t, ok, "relationship should have 'roles' property")
+	assert.NotNil(t, roles)
+}
+
+// TestExecuteCreateRelationshipWithStringProperty tests CREATE with a string property on relationship
+func TestExecuteCreateRelationshipWithStringProperty(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	result, err := exec.Execute(ctx, "CREATE (a:Person {name: 'Director'})-[:DIRECTED {since: '1999'}]->(m:Movie {title: 'Film'})", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Stats.NodesCreated)
+	assert.Equal(t, 1, result.Stats.RelationshipsCreated)
+
+	edges, err := store.AllEdges()
+	require.NoError(t, err)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "DIRECTED", edges[0].Type)
+	since, ok := edges[0].Properties["since"]
+	assert.True(t, ok, "relationship should have 'since' property")
+	assert.Equal(t, "1999", since)
+}
+
+// TestExecuteMatchCreateRelationshipWithProperties tests MATCH...CREATE with relationship properties
+func TestExecuteMatchCreateRelationshipWithProperties(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// First create the nodes
+	_, err := exec.Execute(ctx, "CREATE (p:Person {name: 'Keanu Reeves'})", nil)
+	require.NoError(t, err)
+	_, err = exec.Execute(ctx, "CREATE (m:Movie {title: 'The Matrix'})", nil)
+	require.NoError(t, err)
+
+	// Now use MATCH...CREATE with relationship properties (Neo4j Movies dataset pattern)
+	result, err := exec.Execute(ctx, `
+		MATCH (keanu:Person {name: 'Keanu Reeves'}), (matrix:Movie {title: 'The Matrix'})
+		CREATE (keanu)-[:ACTED_IN {roles: ['Neo']}]->(matrix)
+	`, nil)
+	require.NoError(t, err, "MATCH...CREATE with relationship properties should work")
+	assert.Equal(t, 1, result.Stats.RelationshipsCreated)
+
+	// Verify the relationship has properties
+	edges, err := store.AllEdges()
+	require.NoError(t, err)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "ACTED_IN", edges[0].Type)
+	roles, ok := edges[0].Properties["roles"]
+	assert.True(t, ok, "relationship should have 'roles' property")
+	assert.NotNil(t, roles)
+}
+
+// TestExecuteMatchCreateRelationshipWithMultipleProperties tests multiple properties on relationships
+func TestExecuteMatchCreateRelationshipWithMultipleProperties(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create nodes first
+	_, err := exec.Execute(ctx, "CREATE (a:Person {name: 'Alice'})", nil)
+	require.NoError(t, err)
+	_, err = exec.Execute(ctx, "CREATE (b:Person {name: 'Bob'})", nil)
+	require.NoError(t, err)
+
+	// MATCH...CREATE with multiple relationship properties
+	result, err := exec.Execute(ctx, `
+		MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+		CREATE (a)-[:KNOWS {since: 2020, trust: 'high', tags: ['friend', 'colleague']}]->(b)
+	`, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Stats.RelationshipsCreated)
+
+	edges, err := store.AllEdges()
+	require.NoError(t, err)
+	require.Len(t, edges, 1)
+	assert.Equal(t, "KNOWS", edges[0].Type)
+	_, hasSince := edges[0].Properties["since"]
+	_, hasTrust := edges[0].Properties["trust"]
+	_, hasTags := edges[0].Properties["tags"]
+	assert.True(t, hasSince, "should have 'since' property")
+	assert.True(t, hasTrust, "should have 'trust' property")
+	assert.True(t, hasTags, "should have 'tags' property")
+}
+
 func TestExecuteAllProcedures(t *testing.T) {
 	store := storage.NewMemoryEngine()
 	exec := NewStorageExecutor(store)
@@ -1948,9 +2053,9 @@ func TestExecuteAggregationNonAggregateInQuery(t *testing.T) {
 		sum := row[1].(float64)
 		sumByName[name] = sum
 	}
-	assert.Equal(t, float64(0), sumByName["Item0"])   // Only Item0's value
-	assert.Equal(t, float64(10), sumByName["Item1"])  // Only Item1's value
-	assert.Equal(t, float64(20), sumByName["Item2"])  // Only Item2's value
+	assert.Equal(t, float64(0), sumByName["Item0"])  // Only Item0's value
+	assert.Equal(t, float64(10), sumByName["Item1"]) // Only Item1's value
+	assert.Equal(t, float64(20), sumByName["Item2"]) // Only Item2's value
 }
 
 func TestExecuteAggregationEmptyResultSet(t *testing.T) {
@@ -2626,6 +2731,102 @@ func TestExecuteCreateRelationshipNoType(t *testing.T) {
 
 	edges, _ := store.AllEdges()
 	assert.Equal(t, "RELATED_TO", edges[0].Type)
+}
+
+// ============================================================================
+// CREATE ... WITH ... DELETE Tests (Compound Query Pattern)
+// ============================================================================
+
+// TestExecuteCreateWithDeleteBasic tests the basic CREATE...WITH...DELETE pattern
+func TestExecuteCreateWithDeleteBasic(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create a node, pass it through WITH, then delete it
+	result, err := exec.Execute(ctx, "CREATE (t:TestNode {name: 'temp'}) WITH t DELETE t", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Stats.NodesCreated)
+	assert.Equal(t, 1, result.Stats.NodesDeleted)
+
+	// Verify node is gone
+	nodeCount, _ := store.NodeCount()
+	assert.Equal(t, int64(0), nodeCount)
+}
+
+// TestExecuteCreateWithDeleteAndReturn tests CREATE...WITH...DELETE...RETURN
+func TestExecuteCreateWithDeleteAndReturn(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// This is the benchmark pattern: create, delete, return count
+	result, err := exec.Execute(ctx, "CREATE (t:TestNode {name: 'temp'}) WITH t DELETE t RETURN count(t)", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Stats.NodesCreated)
+	assert.Equal(t, 1, result.Stats.NodesDeleted)
+
+	// Should have a return value
+	assert.NotEmpty(t, result.Columns)
+	assert.NotEmpty(t, result.Rows)
+
+	// Verify node is gone
+	nodeCount, _ := store.NodeCount()
+	assert.Equal(t, int64(0), nodeCount)
+}
+
+// TestExecuteCreateWithDeleteTimestamp tests CREATE with timestamp() function
+func TestExecuteCreateWithDeleteTimestamp(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// The benchmark uses timestamp() in the CREATE
+	result, err := exec.Execute(ctx, "CREATE (t:TestNode {name: 'temp', created: timestamp()}) WITH t DELETE t RETURN count(t)", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Stats.NodesCreated)
+	assert.Equal(t, 1, result.Stats.NodesDeleted)
+
+	// Verify node is gone
+	nodeCount, _ := store.NodeCount()
+	assert.Equal(t, int64(0), nodeCount)
+}
+
+// TestExecuteCreateWithDeleteRelationship tests CREATE...WITH...DELETE for relationships
+// Note: This creates nodes AND a relationship in one CREATE, then deletes the relationship
+func TestExecuteCreateWithDeleteRelationship(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create two nodes with a relationship, pass relationship through WITH, delete it
+	result, err := exec.Execute(ctx, "CREATE (a:Person)-[r:KNOWS]->(b:Person) WITH r DELETE r RETURN count(r)", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Stats.NodesCreated)
+	assert.Equal(t, 1, result.Stats.RelationshipsCreated)
+	assert.Equal(t, 1, result.Stats.RelationshipsDeleted)
+
+	// Verify relationship is gone but nodes remain
+	nodeCount, _ := store.NodeCount()
+	assert.Equal(t, int64(2), nodeCount)
+	edgeCount, _ := store.EdgeCount()
+	assert.Equal(t, int64(0), edgeCount)
+}
+
+// TestExecuteCreateWithDeleteMultipleNodes tests creating and deleting multiple nodes
+func TestExecuteCreateWithDeleteMultipleNodes(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create a single node pattern first to verify basic functionality
+	result, err := exec.Execute(ctx, "CREATE (t:Temp {id: 1}) WITH t DELETE t", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Stats.NodesCreated)
+	assert.Equal(t, 1, result.Stats.NodesDeleted)
+
+	nodeCount, _ := store.NodeCount()
+	assert.Equal(t, int64(0), nodeCount)
 }
 
 func TestExecuteDeleteDetachKeywordPosition(t *testing.T) {
@@ -3570,8 +3771,8 @@ func TestEvaluateExpression(t *testing.T) {
 	exec := NewStorageExecutor(store)
 
 	node := &storage.Node{
-		ID:         "eval-1",
-		Labels:     []string{"Test"},
+		ID:     "eval-1",
+		Labels: []string{"Test"},
 		Properties: map[string]interface{}{
 			"name":      "Test Node",
 			"count":     float64(42),

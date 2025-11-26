@@ -43,6 +43,8 @@
     "bench:api": "npx vitest bench testing/benchmarks/mimir-api.bench.ts --run",
     "bench:all": "npm run bench && npm run bench:api",
     "bench:compare": "npm run bench:json > testing/benchmarks/results/neo4j.json && npm run bench:api -- --reporter=json > testing/benchmarks/results/api.json && echo '✅ Results saved. Compare against Zep: see testing/benchmarks/ZEP_COMPARISON.md'",
+    "bench:compare-dbs": "npx vitest bench testing/benchmarks/nornicdb-vs-neo4j.bench.ts --run",
+    "bench:compare-dbs:standalone": "npx tsx testing/benchmarks/nornicdb-vs-neo4j.bench.ts",
     "watch": "node esbuild.config.js --watch",
     "dev": "node esbuild.config.js && node build/index.js",
     "list-models": "tsc && node build/orchestrator/validate-agent.js --list-models",
