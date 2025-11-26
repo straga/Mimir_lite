@@ -3,20 +3,30 @@
 // +build linux windows darwin
 
 // Package vulkan provides cross-platform GPU acceleration using Vulkan Compute.
+//
+// Build Requirements:
+//   Set CGO_CFLAGS and CGO_LDFLAGS environment variables before building:
+//
+//   macOS with MoltenVK:
+//     export CGO_CFLAGS="-I/path/to/vulkan-sdk/include"
+//     export CGO_LDFLAGS="-L/path/to/vulkan-sdk/lib -lvulkan"
+//
+//   Linux:
+//     export CGO_CFLAGS="-I$VULKAN_SDK/include"
+//     export CGO_LDFLAGS="-L$VULKAN_SDK/lib -lvulkan"
+//
 package vulkan
 
 /*
-#cgo linux CFLAGS: -I${VULKAN_SDK}/include
-#cgo linux LDFLAGS: -L${VULKAN_SDK}/lib -lvulkan
-#cgo darwin CFLAGS: -I${VULKAN_SDK}/include
-#cgo darwin LDFLAGS: -L${VULKAN_SDK}/lib -lvulkan
-#cgo windows CFLAGS: -I${VULKAN_SDK}/Include
-#cgo windows LDFLAGS: -L${VULKAN_SDK}/Lib -lvulkan-1
+#cgo linux LDFLAGS: -lvulkan
+#cgo darwin LDFLAGS: -lvulkan
+#cgo windows LDFLAGS: -lvulkan-1
 
 #include <vulkan/vulkan.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 // Error handling
 static char vulkan_last_error[512] = {0};
