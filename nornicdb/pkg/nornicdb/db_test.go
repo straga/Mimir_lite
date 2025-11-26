@@ -27,12 +27,13 @@ func TestMemoryTierHalfLives(t *testing.T) {
 
 func TestOpen(t *testing.T) {
 	t.Run("with nil config uses defaults", func(t *testing.T) {
-		db, err := Open("./testdata", nil)
+		tmpDir := t.TempDir() // Auto-cleanup after test
+		db, err := Open(tmpDir, nil)
 		require.NoError(t, err)
 		require.NotNil(t, db)
 		defer db.Close()
 
-		assert.Equal(t, "./testdata", db.config.DataDir)
+		assert.Equal(t, tmpDir, db.config.DataDir)
 		assert.True(t, db.config.DecayEnabled)
 		assert.True(t, db.config.AutoLinksEnabled)
 		assert.NotNil(t, db.storage)
@@ -41,16 +42,17 @@ func TestOpen(t *testing.T) {
 	})
 
 	t.Run("with custom config", func(t *testing.T) {
+		tmpDir := t.TempDir() // Auto-cleanup after test
 		config := &Config{
 			DecayEnabled:     false,
 			AutoLinksEnabled: false,
 		}
-		db, err := Open("./custom", config)
+		db, err := Open(tmpDir, config)
 		require.NoError(t, err)
 		require.NotNil(t, db)
 		defer db.Close()
 
-		assert.Equal(t, "./custom", db.config.DataDir)
+		assert.Equal(t, tmpDir, db.config.DataDir)
 		assert.Nil(t, db.decay)
 		assert.Nil(t, db.inference)
 	})
@@ -58,7 +60,8 @@ func TestOpen(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	t.Run("closes successfully", func(t *testing.T) {
-		db, err := Open("./testdata", nil)
+		tmpDir := t.TempDir()
+		db, err := Open(tmpDir, nil)
 		require.NoError(t, err)
 
 		err = db.Close()
@@ -67,7 +70,8 @@ func TestClose(t *testing.T) {
 	})
 
 	t.Run("close is idempotent", func(t *testing.T) {
-		db, err := Open("./testdata", nil)
+		tmpDir := t.TempDir()
+		db, err := Open(tmpDir, nil)
 		require.NoError(t, err)
 
 		err = db.Close()

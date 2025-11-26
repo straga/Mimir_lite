@@ -37,3 +37,5 @@ Thumbs.db
 # Temporary files
 /tmp/
 *.tmp
+./nornicdb/pkg/nornicdb/
+./nornicdb/pkg/nornicdb/custom

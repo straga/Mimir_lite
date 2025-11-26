@@ -424,8 +424,6 @@ func (e *StorageExecutor) executeMergeWithContext(ctx context.Context, cypher st
 		Stats:   &QueryStats{},
 	}
 
-	upper := strings.ToUpper(cypher)
-
 	// Find clauses - use word boundary detection
 	mergeIdx := findKeywordIndex(cypher, "MERGE")
 	if mergeIdx == -1 {
@@ -438,6 +436,7 @@ func (e *StorageExecutor) executeMergeWithContext(ctx context.Context, cypher st
 	withIdx := findKeywordIndex(cypher, "WITH")
 
 	// Find standalone SET (not ON CREATE/MATCH SET)
+	// Must handle SET preceded by space, tab, or newline
 	setIdx := -1
 	searchStart := 0
 	if onCreateIdx > 0 {
@@ -446,20 +445,44 @@ func (e *StorageExecutor) executeMergeWithContext(ctx context.Context, cypher st
 	if onMatchIdx > 0 && onMatchIdx > searchStart {
 		searchStart = onMatchIdx + 12
 	}
-	if searchStart > 0 {
-		rest := upper[searchStart:]
-		for i := 0; i < len(rest)-4; i++ {
-			if (rest[i] == ' ' || rest[i] == '\n' || rest[i] == '\t') &&
-				strings.HasPrefix(rest[i+1:], "SET ") {
-				setIdx = searchStart + i + 1
-				break
+
+	// Helper function to find SET with any whitespace before it (reuse from executeMerge)
+	findStandaloneSetInContext := func(s string, start int) int {
+		upperS := strings.ToUpper(s)
+		for i := start; i <= len(upperS)-3; i++ {
+			if strings.HasPrefix(upperS[i:], "SET") {
+				// Check for whitespace before SET
+				if i > 0 {
+					prevChar := upperS[i-1]
+					if prevChar != ' ' && prevChar != '\n' && prevChar != '\t' && prevChar != '\r' {
+						continue // Not a word boundary
+					}
+				}
+				// Check for whitespace/end after SET
+				endPos := i + 3
+				if endPos < len(upperS) {
+					nextChar := upperS[endPos]
+					if nextChar != ' ' && nextChar != '\n' && nextChar != '\t' && nextChar != '\r' {
+						continue // Not a word boundary
+					}
+				}
+				// Make sure this isn't part of ON CREATE SET or ON MATCH SET
+				if i >= 10 && strings.HasPrefix(upperS[i-10:], "ON CREATE ") {
+					continue
+				}
+				if i >= 9 && strings.HasPrefix(upperS[i-9:], "ON MATCH ") {
+					continue
+				}
+				return i
 			}
 		}
+		return -1
+	}
+
+	if searchStart > 0 {
+		setIdx = findStandaloneSetInContext(cypher, searchStart)
 	} else {
-		idx := strings.Index(upper, " SET ")
-		if idx > 0 {
-			setIdx = idx + 1
-		}
+		setIdx = findStandaloneSetInContext(cypher, 0)
 	}
 
 	// Find MERGE pattern end
@@ -470,8 +493,8 @@ func (e *StorageExecutor) executeMergeWithContext(ctx context.Context, cypher st
 		}
 	}
 
-	// Handle second MERGE in compound query
-	secondMergeIdx := strings.Index(upper[mergeIdx+5:], " MERGE ")
+	// Handle second MERGE in compound query (handle any whitespace before MERGE)
+	secondMergeIdx := findKeywordIndex(cypher[mergeIdx+5:], "MERGE")
 	if secondMergeIdx > 0 {
 		// There's a second MERGE clause - this is for relationships
 		// Handle the first MERGE, then process second
