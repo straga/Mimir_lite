@@ -1,14 +1,15 @@
 services:
+  # Neo4j (Legacy - replaced by NornicDB)
   neo4j:
     image: neo4j:5.15-community
     container_name: neo4j_db
     ports:
-      - "7474:7474"  # HTTP Browser UI
-      - "7687:7687"  # Bolt protocol
+      - "7475:7474"  # HTTP Browser UI
+      - "7688:7687"  # Bolt protocol
     volumes:
-      - ./data/neo4j:/data
-      - ./logs/neo4j:/logs
-      - ./data/neo4j/import:/var/lib/neo4j/import
+      - ./data/test:/data
+      - ./logs/test:/logs
+      - ./data/test/import:/var/lib/neo4j/import
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
       - NEO4J_dbms_memory_pagecache_size=512M
@@ -24,6 +25,54 @@ services:
       start_period: 40s
     networks:
       - mcp_network
+  nornicdb:
+    build:
+      context: ./nornicdb
+      dockerfile: Dockerfile.cuda
+      tags:
+        - timothyswt/nornicdb:cuda
+    image: timothyswt/nornicdb:cuda
+    container_name: nornicdb
+    ports:
+      - "7474:7474"  # HTTP API & Browser UI
+      - "7687:7687"  # Bolt protocol (Neo4j compatible)
+    volumes:
+      - ./data/nornicdb:/data
+      - ./data/nornicdb/export:/data/export  # For loading Mimir exports
+    environment:
+      - NORNICDB_DATA_DIR=/data
+      - NORNICDB_HTTP_PORT=7474
+      - NORNICDB_BOLT_PORT=7687
+      # - NORNICDB_EMBEDDING_URL=http://llama-server:8080
+      # - NORNICDB_EMBEDDING_MODEL=mxbai-embed-large
+      # - NORNICDB_EMBEDDING_DIM=1024
+      # # Authentication (disabled by default for dev)
+      - NORNICDB_NO_AUTH=${NORNICDB_NO_AUTH:-true}
+      - NORNICDB_ADMIN_PASSWORD=${NEO4J_PASSWORD:-password}
+      # Load export data on startup (disabled - starting fresh)
+      - NORNICDB_LOAD_EXPORT=
+      # GPU Configuration (auto-detected, can override)
+      - NORNICDB_GPU_ENABLED=${NORNICDB_GPU_ENABLED:-true}
+      - NORNICDB_GPU_DEVICE_ID=${NORNICDB_GPU_DEVICE_ID:-0}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:7474/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      llama-server:
+        condition: service_healthy
+    networks:
+      - mcp_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
 
   copilot-api:
     image: timothyswt/copilot-api:latest
@@ -181,9 +230,9 @@ services:
     restart: unless-stopped
     environment:
       # Database Configuration
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      - NEO4J_URI=bolt://nornicdb:7687
+      - NEO4J_USER=admin
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-admin}
       
       # Server Configuration
       - NODE_ENV=production
@@ -290,7 +339,7 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      neo4j:
+      nornicdb:
         condition: service_healthy
       copilot-api:
         condition: service_healthy
@@ -302,49 +351,6 @@ services:
         # condition: service_healthy
     networks:
       - mcp_network
-
-  # Open-WebUI with Mimir Pipeline Integration
-  # open-webui:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/open-webui/Dockerfile
-  #     tags:
-  #       - mimir-open-webui:${VERSION:-1.0.0}
-  #       - mimir-open-webui:latest
-  #   image: mimir-open-webui:${VERSION:-1.0.0}
-  #   container_name: mimir-open-webui
-  #   ports:
-  #     - "3000:8080"
-  #   volumes:
-  #     - open-webui:/app/backend/data
-  #   environment:
-  #     # OpenAI-Compatible API Configuration (Copilot API)
-  #     - OPENAI_API_BASE_URL=http://copilot-api:4141/v1
-  #     - OPENAI_API_KEY=sk-copilot-dummy  # Dummy key for copilot-api
-      
-  #     # Disable Ollama (using Copilot API instead)
-  #     - ENABLE_OLLAMA_API=false
-  #     - OLLAMA_BASE_URL=
-      
-  #     # WebUI Configuration
-  #     - WEBUI_NAME=Mimir
-  #     - WEBUI_URL=http://localhost:3000
-  #     - DEFAULT_MODELS=gpt-4.1  # Default selected model
-      
-  #     # Enable OpenAI API
-  #     - ENABLE_OPENAI_API=true
-  #   depends_on:
-  #     - mimir-server
-  #     - copilot-api
-  #   networks:
-  #     - mcp_network
-  #   restart: unless-stopped
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"  # Allow access to host's localhost
-
-# volumes:
-  # open-webui:
-  # ollama_models:
 
 networks:
   mcp_network:
