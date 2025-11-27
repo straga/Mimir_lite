@@ -431,6 +431,73 @@ func TestTrigFunctions(t *testing.T) {
 	}
 }
 
+func TestHyperbolicFunctions(t *testing.T) {
+	e := setupTestExecutor(t)
+
+	tests := []struct {
+		expr     string
+		expected float64
+		delta    float64
+	}{
+		{"sinh(0)", 0, 0.001},
+		{"sinh(1)", 1.1752011936438014, 0.001},
+		{"sinh(0.7)", 0.7585837018395334, 0.001},
+		{"cosh(0)", 1, 0.001},
+		{"cosh(1)", 1.5430806348152437, 0.001},
+		{"cosh(0.7)", 1.255169005630943, 0.001},
+		{"tanh(0)", 0, 0.001},
+		{"tanh(1)", 0.7615941559557649, 0.001},
+		{"tanh(0.7)", 0.6043677771171636, 0.001},
+		{"coth(1)", 1.3130352854993312, 0.001},
+		{"coth(0.7)", 1.6546216358026298, 0.001},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expr, func(t *testing.T) {
+			result := e.evaluateExpressionWithContext(tt.expr, nil, nil)
+			resultF, ok := result.(float64)
+			if !ok {
+				t.Fatalf("%s should return float64, got %T", tt.expr, result)
+			}
+			if math.Abs(resultF-tt.expected) > tt.delta {
+				t.Errorf("%s = %v, want %v", tt.expr, resultF, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPowerFunction(t *testing.T) {
+	e := setupTestExecutor(t)
+
+	tests := []struct {
+		expr     string
+		expected float64
+		delta    float64
+	}{
+		{"power(2, 3)", 8, 0.001},
+		{"power(2, 10)", 1024, 0.001},
+		{"power(10, 2)", 100, 0.001},
+		{"power(4, 0.5)", 2, 0.001},
+		{"power(27, 0.333333)", 3, 0.01},
+		{"power(2, -1)", 0.5, 0.001},
+		{"power(0, 5)", 0, 0.001},
+		{"power(5, 0)", 1, 0.001},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expr, func(t *testing.T) {
+			result := e.evaluateExpressionWithContext(tt.expr, nil, nil)
+			resultF, ok := result.(float64)
+			if !ok {
+				t.Fatalf("%s should return float64, got %T", tt.expr, result)
+			}
+			if math.Abs(resultF-tt.expected) > tt.delta {
+				t.Errorf("%s = %v, want %v", tt.expr, resultF, tt.expected)
+			}
+		})
+	}
+}
+
 func TestMathConstants(t *testing.T) {
 	e := setupTestExecutor(t)
 

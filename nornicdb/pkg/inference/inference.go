@@ -227,6 +227,9 @@ type Engine struct {
 	// Optional topology integration (NEW)
 	topologyIntegration *TopologyIntegration
 
+	// Optional cluster integration for GPU-accelerated search
+	clusterIntegration *ClusterIntegration
+
 	// Tier 1 features - enabled by default for production safety
 	cooldownTable   *CooldownTable           // Prevents rapid re-materialization
 	evidenceBuffer  *EvidenceBuffer          // Requires multiple signals before materializing
@@ -327,6 +330,49 @@ func (e *Engine) GetTopologyIntegration() *TopologyIntegration {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.topologyIntegration
+}
+
+// SetClusterIntegration enables GPU-accelerated k-means clustering for similarity search.
+//
+// When enabled, similarity searches are accelerated using cluster-based
+// approximate nearest neighbor search. This provides significant speedup
+// for large embedding indices (10K+ embeddings).
+//
+// Parameters:
+//   - integration: ClusterIntegration instance (nil to disable)
+//
+// Example:
+//
+//	engine := inference.New(inference.DefaultConfig())
+//
+//	// Enable clustering
+//	gpuManager, _ := gpu.NewManager(&gpu.Config{Enabled: true})
+//	clusterConfig := inference.DefaultClusterConfig()
+//	clusterConfig.Enabled = true
+//	clusterConfig.NumClustersSearch = 5
+//
+//	ci := inference.NewClusterIntegration(gpuManager, clusterConfig, nil, nil)
+//	engine.SetClusterIntegration(ci)
+//
+//	// Add embeddings during indexing
+//	ci.AddEmbedding(nodeID, embedding)
+//
+//	// Trigger clustering after bulk load
+//	ci.OnIndexComplete()
+//
+//	// Searches now use cluster acceleration
+//	results, _ := ci.Search(ctx, queryEmbedding, 10)
+func (e *Engine) SetClusterIntegration(integration *ClusterIntegration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.clusterIntegration = integration
+}
+
+// GetClusterIntegration returns the current cluster integration (or nil).
+func (e *Engine) GetClusterIntegration() *ClusterIntegration {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.clusterIntegration
 }
 
 // OnStore is called when a new node is stored in the graph.

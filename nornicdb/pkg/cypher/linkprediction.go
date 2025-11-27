@@ -64,7 +64,6 @@ package cypher
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -74,9 +73,90 @@ import (
 
 // callGdsLinkPredictionAdamicAdar implements gds.linkPrediction.adamicAdar.stream
 //
+// The Adamic-Adar algorithm predicts links based on common neighbors, giving more
+// weight to neighbors that are less connected. This favors connections through
+// "rare" intermediaries rather than highly-connected hubs.
+//
+// Formula: For each potential connection, sum 1/log(degree(common_neighbor))
+// across all common neighbors. Higher scores indicate stronger predictions.
+//
 // Syntax:
 //   CALL gds.linkPrediction.adamicAdar.stream({sourceNode: id, topK: 10})
 //   YIELD node1, node2, score
+//
+// Parameters:
+//   - sourceNode: Node ID to predict connections from (required)
+//   - topK: Number of predictions to return (default: 10)
+//   - relationshipTypes: Filter by relationship types (optional)
+//
+// Returns:
+//   - node1: Source node ID
+//   - node2: Predicted target node ID
+//   - score: Adamic-Adar score (higher = stronger prediction)
+//
+// Example 1 - Find Potential Collaborators:
+//
+//	MATCH (alice:Person {name: 'Alice'})
+//	CALL gds.linkPrediction.adamicAdar.stream({
+//	  sourceNode: id(alice),
+//	  topK: 5,
+//	  relationshipTypes: ['WORKS_WITH', 'KNOWS']
+//	})
+//	YIELD node1, node2, score
+//	MATCH (target) WHERE id(target) = node2
+//	RETURN target.name, score
+//	ORDER BY score DESC
+//	// Returns top 5 people Alice should connect with
+//
+// Example 2 - Friend Recommendations:
+//
+//	MATCH (user:User {id: 'user-123'})
+//	CALL gds.linkPrediction.adamicAdar.stream({
+//	  sourceNode: id(user),
+//	  topK: 10
+//	})
+//	YIELD node1, node2, score
+//	WHERE score > 0.5
+//	MATCH (friend) WHERE id(friend) = node2
+//	RETURN friend.name, friend.interests, score
+//
+// Example 3 - Research Paper Citations:
+//
+//	MATCH (paper:Paper {title: 'Machine Learning'})
+//	CALL gds.linkPrediction.adamicAdar.stream({
+//	  sourceNode: id(paper),
+//	  topK: 20,
+//	  relationshipTypes: ['CITES']
+//	})
+//	YIELD node1, node2, score
+//	MATCH (related) WHERE id(related) = node2
+//	RETURN related.title, score
+//
+// ELI12:
+//
+// Imagine you want to find new friends at school. Adamic-Adar says:
+//   "If you and someone else both know the SAME person, you should be friends!"
+//
+// BUT there's a twist: If your mutual friend knows EVERYONE in school (super popular),
+// that connection isn't very special. If your mutual friend only knows a FEW people,
+// that's a STRONG connection that really matters.
+//
+// Example:
+//   - You and Bob both know Alice (who knows 100 people) → Score: small
+//   - You and Bob both know Charlie (who only knows 3 people) → Score: BIG!
+//
+// It's like finding friends through rare, special connections rather than popular hubs.
+//
+// When to Use:
+//   - Social network friend recommendations
+//   - Academic collaboration suggestions
+//   - Product recommendation systems
+//   - Knowledge graph link completion
+//
+// Performance:
+//   - O(n * avg_degree²) where n = number of nodes
+//   - Fast for sparse graphs
+//   - Memory: ~O(nodes + edges)
 func (e *StorageExecutor) callGdsLinkPredictionAdamicAdar(cypher string) (*ExecuteResult, error) {
 	config, err := e.parseLinkPredictionConfig(cypher)
 	if err != nil {
@@ -97,6 +177,92 @@ func (e *StorageExecutor) callGdsLinkPredictionAdamicAdar(cypher string) (*Execu
 }
 
 // callGdsLinkPredictionCommonNeighbors implements gds.linkPrediction.commonNeighbors.stream
+//
+// The Common Neighbors algorithm predicts links by counting shared neighbors between nodes.
+// It's the simplest link prediction metric: the more neighbors two nodes share, the more
+// likely they should be connected.
+//
+// Formula: Count the number of neighbors both nodes have in common.
+//
+// Syntax:
+//   CALL gds.linkPrediction.commonNeighbors.stream({sourceNode: id, topK: 10})
+//   YIELD node1, node2, score
+//
+// Parameters:
+//   - sourceNode: Node ID to predict connections from (required)
+//   - topK: Number of predictions to return (default: 10)
+//   - relationshipTypes: Filter by relationship types (optional)
+//
+// Returns:
+//   - node1: Source node ID
+//   - node2: Predicted target node ID
+//   - score: Number of common neighbors (integer)
+//
+// Example 1 - Movie Recommendations:
+//
+//	MATCH (user:User {name: 'Alice'})
+//	CALL gds.linkPrediction.commonNeighbors.stream({
+//	  sourceNode: id(user),
+//	  topK: 10,
+//	  relationshipTypes: ['LIKES']
+//	})
+//	YIELD node1, node2, score
+//	MATCH (movie:Movie) WHERE id(movie) = node2
+//	RETURN movie.title, score AS common_fans
+//	ORDER BY score DESC
+//	// Shows movies liked by people with similar taste
+//
+// Example 2 - Professional Network:
+//
+//	MATCH (person:Person {id: 'p123'})
+//	CALL gds.linkPrediction.commonNeighbors.stream({
+//	  sourceNode: id(person),
+//	  topK: 5
+//	})
+//	YIELD node1, node2, score
+//	WHERE score >= 3
+//	MATCH (colleague) WHERE id(colleague) = node2
+//	RETURN colleague.name, colleague.company, score
+//
+// Example 3 - Tag-Based Content Discovery:
+//
+//	MATCH (article:Article {id: 'article-1'})
+//	CALL gds.linkPrediction.commonNeighbors.stream({
+//	  sourceNode: id(article),
+//	  relationshipTypes: ['TAGGED_WITH']
+//	})
+//	YIELD node1, node2, score
+//	MATCH (similar:Article) WHERE id(similar) = node2
+//	RETURN similar.title, score AS shared_tags
+//
+// ELI12:
+//
+// Imagine you're in a class and want to find who you might become friends with.
+// Common Neighbors says: "Count how many of the SAME people you both hang out with."
+//
+//   - You hang out with: Alice, Bob, Charlie
+//   - Sarah hangs out with: Bob, Charlie, David
+//   - Common friends: Bob and Charlie (2 people)
+//   - Score: 2
+//
+// The more friends you share, the higher the score, and the more likely you'd
+// get along! It's simple: people with overlapping social circles tend to connect.
+//
+// Real-world analogy:
+//   - "People who bought this also bought..." (Amazon)
+//   - "You may know..." (Facebook)
+//   - "Recommended for you" (Netflix)
+//
+// When to Use:
+//   - Simple, fast recommendations
+//   - Cold-start scenarios (new users/items)
+//   - Baseline for comparing other algorithms
+//   - When interpretability matters
+//
+// Performance:
+//   - O(n * avg_degree) where n = number of nodes
+//   - Fastest link prediction algorithm
+//   - Memory: ~O(nodes + edges)
 func (e *StorageExecutor) callGdsLinkPredictionCommonNeighbors(cypher string) (*ExecuteResult, error) {
 	config, err := e.parseLinkPredictionConfig(cypher)
 	if err != nil {
@@ -278,9 +444,8 @@ func (e *StorageExecutor) parseLinkPredictionConfig(cypher string) (*linkPredict
 		case "sourcenode":
 			// Could be id(n) or numeric
 			if strings.Contains(value, "id(") {
-				// Extract node variable
-				re := regexp.MustCompile(`id\((\w+)\)`)
-				matches := re.FindStringSubmatch(value)
+				// Extract node variable using pre-compiled pattern
+				matches := idFunctionPattern.FindStringSubmatch(value)
 				if len(matches) > 1 {
 					// This would need to be resolved from query context
 					// For now, treat as literal

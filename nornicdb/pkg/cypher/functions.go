@@ -5,13 +5,352 @@ package cypher
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/orneryd/nornicdb/pkg/storage"
 )
+
+// isFunctionCall checks if an expression is a standalone function call with balanced parentheses.
+//
+// This function validates that:
+//  1. Expression starts with funcName + "("
+//  2. All parentheses are properly balanced
+//  3. Expression ends right after the closing parenthesis
+//  4. Quotes are respected (parentheses inside quotes don't count)
+//
+// It's used to distinguish between standalone function calls like "date('2025-01-01')"
+// and complex expressions like "date('2025-01-01') + duration('P5D')".
+//
+// Parameters:
+//   - expr: The expression to check
+//   - funcName: The function name to look for (case-insensitive)
+//
+// Returns:
+//   - true if expr is a standalone call to funcName
+//   - false if expr is part of a larger expression or not a function call
+//
+// Example 1 - Standalone Function Calls (returns true):
+//
+//	isFunctionCall("date('2025-01-01')", "date")           // true
+//	isFunctionCall("toLower(n.name)", "tolower")           // true
+//	isFunctionCall("count(n)", "count")                    // true
+//	isFunctionCall("substring('hello', 0, 3)", "substring") // true
+//
+// Example 2 - Complex Expressions (returns false):
+//
+//	isFunctionCall("date('2025-01-01') + duration('P5D')", "date")  // false - has + after
+//	isFunctionCall("toLower(n.name) + ' suffix'", "tolower")        // false - has + after
+//	isFunctionCall("count(n) > 10", "count")                        // false - has > after
+//
+// Example 3 - Nested Calls (returns false for outer, true for specific):
+//
+//	expr := "toLower(substring(n.name, 0, 5))"
+//	isFunctionCall(expr, "substring")  // false - it's wrapped in toLower
+//	isFunctionCall(expr, "tolower")    // true - toLower is the outer function
+//
+// ELI12:
+//
+// Imagine you're reading math: "add(5, 3)"
+// This function checks: "Is this JUST the add() function, or is there more?"
+//
+//   - "add(5, 3)" → YES, that's just the function
+//   - "add(5, 3) * 2" → NO, there's multiplication after it
+//   - "multiply(add(5, 3), 2)" → For "add": NO (it's inside multiply)
+//     → For "multiply": YES (it's the whole thing)
+//
+// It's like asking "Is this sentence ONLY about one thing, or are there extra parts?"
+//
+// Use Cases:
+//   - Distinguishing function calls from arithmetic expressions
+//   - Parsing Cypher RETURN clauses
+//   - Validating function arguments
+func isFunctionCall(expr, funcName string) bool {
+	lower := strings.ToLower(expr)
+	if !strings.HasPrefix(lower, funcName+"(") {
+		return false
+	}
+
+	// Find the matching closing parenthesis for the opening one
+	depth := 0
+	inQuote := false
+	quoteChar := rune(0)
+
+	for i, ch := range expr {
+		switch {
+		case (ch == '\'' || ch == '"') && !inQuote:
+			inQuote = true
+			quoteChar = ch
+		case ch == quoteChar && inQuote:
+			inQuote = false
+			quoteChar = 0
+		case ch == '(' && !inQuote:
+			depth++
+		case ch == ')' && !inQuote:
+			depth--
+			if depth == 0 {
+				// Found the matching closing parenthesis
+				// Check if this is the end of the expression
+				return i == len(expr)-1
+			}
+		}
+	}
+	return false
+}
+
+// CypherDuration represents a Neo4j-compatible duration type.
+// Supports ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
+type CypherDuration struct {
+	Years   int64
+	Months  int64
+	Days    int64
+	Hours   int64
+	Minutes int64
+	Seconds int64
+	Nanos   int64
+}
+
+// String returns ISO 8601 duration format
+func (d *CypherDuration) String() string {
+	var sb strings.Builder
+	sb.WriteString("P")
+	if d.Years > 0 {
+		sb.WriteString(fmt.Sprintf("%dY", d.Years))
+	}
+	if d.Months > 0 {
+		sb.WriteString(fmt.Sprintf("%dM", d.Months))
+	}
+	if d.Days > 0 {
+		sb.WriteString(fmt.Sprintf("%dD", d.Days))
+	}
+	if d.Hours > 0 || d.Minutes > 0 || d.Seconds > 0 || d.Nanos > 0 {
+		sb.WriteString("T")
+		if d.Hours > 0 {
+			sb.WriteString(fmt.Sprintf("%dH", d.Hours))
+		}
+		if d.Minutes > 0 {
+			sb.WriteString(fmt.Sprintf("%dM", d.Minutes))
+		}
+		if d.Seconds > 0 || d.Nanos > 0 {
+			if d.Nanos > 0 {
+				sb.WriteString(fmt.Sprintf("%d.%09dS", d.Seconds, d.Nanos))
+			} else {
+				sb.WriteString(fmt.Sprintf("%dS", d.Seconds))
+			}
+		}
+	}
+	if sb.Len() == 1 {
+		sb.WriteString("T0S") // Empty duration
+	}
+	return sb.String()
+}
+
+// TotalDays returns the total number of days (approximate for months/years)
+func (d *CypherDuration) TotalDays() float64 {
+	return float64(d.Years)*365.25 + float64(d.Months)*30.44 + float64(d.Days) +
+		float64(d.Hours)/24 + float64(d.Minutes)/(24*60) + float64(d.Seconds)/(24*60*60)
+}
+
+// TotalSeconds returns the total number of seconds
+func (d *CypherDuration) TotalSeconds() float64 {
+	return float64(d.Years)*365.25*24*3600 + float64(d.Months)*30.44*24*3600 +
+		float64(d.Days)*24*3600 + float64(d.Hours)*3600 + float64(d.Minutes)*60 +
+		float64(d.Seconds) + float64(d.Nanos)/1e9
+}
+
+// ToTimeDuration converts to Go time.Duration (loses year/month precision)
+func (d *CypherDuration) ToTimeDuration() time.Duration {
+	totalNanos := d.Nanos +
+		d.Seconds*1e9 +
+		d.Minutes*60*1e9 +
+		d.Hours*3600*1e9 +
+		d.Days*24*3600*1e9 +
+		int64(float64(d.Months)*30.44*24*3600*1e9) +
+		int64(float64(d.Years)*365.25*24*3600*1e9)
+	return time.Duration(totalNanos)
+}
+
+// parseDuration parses ISO 8601 duration format (P[n]Y[n]M[n]DT[n]H[n]M[n]S)
+func parseDuration(s string) *CypherDuration {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(strings.ToUpper(s), "P") {
+		return nil
+	}
+
+	d := &CypherDuration{}
+	s = s[1:] // Remove 'P'
+
+	// Split into date and time parts
+	parts := strings.SplitN(strings.ToUpper(s), "T", 2)
+	datePart := parts[0]
+	timePart := ""
+	if len(parts) > 1 {
+		timePart = parts[1]
+	}
+
+	// Parse date part (Y, M, D) using pre-compiled pattern from regex_patterns.go
+	for _, match := range durationDatePartPattern.FindAllStringSubmatch(datePart, -1) {
+		val, _ := strconv.ParseInt(match[1], 10, 64)
+		switch match[2] {
+		case "Y":
+			d.Years = val
+		case "M":
+			d.Months = val
+		case "D":
+			d.Days = val
+		}
+	}
+
+	// Parse time part (H, M, S) using pre-compiled pattern from regex_patterns.go
+	for _, match := range durationTimePartPattern.FindAllStringSubmatch(timePart, -1) {
+		switch match[2] {
+		case "H":
+			val, _ := strconv.ParseInt(match[1], 10, 64)
+			d.Hours = val
+		case "M":
+			val, _ := strconv.ParseInt(match[1], 10, 64)
+			d.Minutes = val
+		case "S":
+			if strings.Contains(match[1], ".") {
+				parts := strings.Split(match[1], ".")
+				d.Seconds, _ = strconv.ParseInt(parts[0], 10, 64)
+				// Parse fractional seconds as nanoseconds
+				frac := parts[1]
+				for len(frac) < 9 {
+					frac += "0"
+				}
+				d.Nanos, _ = strconv.ParseInt(frac[:9], 10, 64)
+			} else {
+				d.Seconds, _ = strconv.ParseInt(match[1], 10, 64)
+			}
+		}
+	}
+
+	return d
+}
+
+// durationFromMap creates a duration from a map like {days: 5, hours: 3}
+func durationFromMap(m map[string]interface{}) *CypherDuration {
+	d := &CypherDuration{}
+
+	if v, ok := m["years"]; ok {
+		d.Years = toInt64(v)
+	}
+	if v, ok := m["months"]; ok {
+		d.Months = toInt64(v)
+	}
+	if v, ok := m["days"]; ok {
+		d.Days = toInt64(v)
+	}
+	if v, ok := m["hours"]; ok {
+		d.Hours = toInt64(v)
+	}
+	if v, ok := m["minutes"]; ok {
+		d.Minutes = toInt64(v)
+	}
+	if v, ok := m["seconds"]; ok {
+		d.Seconds = toInt64(v)
+	}
+
+	return d
+}
+
+// toInt64 converts various numeric types to int64
+func toInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case string:
+		i, _ := strconv.ParseInt(n, 10, 64)
+		return i
+	}
+	return 0
+}
+
+// durationBetween calculates the duration between two dates/datetimes
+func durationBetween(d1, d2 interface{}) *CypherDuration {
+	t1 := parseDateTime(d1)
+	t2 := parseDateTime(d2)
+	if t1.IsZero() || t2.IsZero() {
+		return nil
+	}
+
+	diff := t2.Sub(t1)
+	if diff < 0 {
+		diff = -diff
+	}
+
+	return &CypherDuration{
+		Days:    int64(diff.Hours()) / 24,
+		Hours:   int64(diff.Hours()) % 24,
+		Minutes: int64(diff.Minutes()) % 60,
+		Seconds: int64(diff.Seconds()) % 60,
+		Nanos:   int64(diff.Nanoseconds()) % 1e9,
+	}
+}
+
+// parseDateTime parses various datetime formats
+func parseDateTime(v interface{}) time.Time {
+	switch val := v.(type) {
+	case time.Time:
+		return val
+	case string:
+		s := strings.Trim(val, "'\"")
+		for _, layout := range []string{
+			time.RFC3339,
+			"2006-01-02T15:04:05",
+			"2006-01-02 15:04:05",
+			"2006-01-02",
+		} {
+			if parsed, err := time.Parse(layout, s); err == nil {
+				return parsed
+			}
+		}
+	}
+	return time.Time{}
+}
+
+// addDurationToDate adds a CypherDuration to a date/datetime
+func addDurationToDate(dateVal interface{}, dur *CypherDuration) string {
+	t := parseDateTime(dateVal)
+	if t.IsZero() || dur == nil {
+		return ""
+	}
+
+	// Add the duration components
+	t = t.AddDate(int(dur.Years), int(dur.Months), int(dur.Days))
+	t = t.Add(time.Duration(dur.Hours)*time.Hour +
+		time.Duration(dur.Minutes)*time.Minute +
+		time.Duration(dur.Seconds)*time.Second +
+		time.Duration(dur.Nanos)*time.Nanosecond)
+
+	return t.Format(time.RFC3339)
+}
+
+// subtractDurationFromDate subtracts a CypherDuration from a date/datetime
+func subtractDurationFromDate(dateVal interface{}, dur *CypherDuration) string {
+	t := parseDateTime(dateVal)
+	if t.IsZero() || dur == nil {
+		return ""
+	}
+
+	// Subtract the duration components
+	t = t.AddDate(-int(dur.Years), -int(dur.Months), -int(dur.Days))
+	t = t.Add(-(time.Duration(dur.Hours)*time.Hour +
+		time.Duration(dur.Minutes)*time.Minute +
+		time.Duration(dur.Seconds)*time.Second +
+		time.Duration(dur.Nanos)*time.Nanosecond))
+
+	return t.Format(time.RFC3339)
+}
 
 // evaluateExpression evaluates an expression for a single node context.
 func (e *StorageExecutor) evaluateExpression(expr string, varName string, node *storage.Node) interface{} {
@@ -579,7 +918,7 @@ func (e *StorageExecutor) evaluateExpressionWithContext(expr string, nodes map[s
 		case bool:
 			return v
 		case string:
-			return strings.ToLower(v) == "true"
+			return strings.EqualFold(v, "true")
 		}
 		return nil
 	}
@@ -956,28 +1295,542 @@ func (e *StorageExecutor) evaluateExpressionWithContext(expr string, nodes map[s
 		return nil
 	}
 
+	// reverse(string) - reverse a string
+	if strings.HasPrefix(lowerExpr, "reverse(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[8 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			runes := []rune(str)
+			for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+				runes[i], runes[j] = runes[j], runes[i]
+			}
+			return string(runes)
+		}
+		return nil
+	}
+
+	// lpad(string, length, padString) - left-pad string to specified length
+	if strings.HasPrefix(lowerExpr, "lpad(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[5 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			str := fmt.Sprintf("%v", e.evaluateExpressionWithContext(strings.TrimSpace(args[0]), nodes, rels))
+			length, err := strconv.Atoi(strings.TrimSpace(args[1]))
+			if err != nil {
+				return nil
+			}
+			padStr := " " // default pad character is space
+			if len(args) >= 3 {
+				padStr = fmt.Sprintf("%v", e.evaluateExpressionWithContext(strings.TrimSpace(args[2]), nodes, rels))
+				// Remove quotes if present
+				padStr = strings.Trim(padStr, "'\"")
+			}
+			if len(str) >= length {
+				return str[:length]
+			}
+			// Pad to the left
+			padLen := length - len(str)
+			padding := ""
+			for len(padding) < padLen {
+				padding += padStr
+			}
+			return padding[:padLen] + str
+		}
+		return nil
+	}
+
+	// rpad(string, length, padString) - right-pad string to specified length
+	if strings.HasPrefix(lowerExpr, "rpad(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[5 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			str := fmt.Sprintf("%v", e.evaluateExpressionWithContext(strings.TrimSpace(args[0]), nodes, rels))
+			length, err := strconv.Atoi(strings.TrimSpace(args[1]))
+			if err != nil {
+				return nil
+			}
+			padStr := " " // default pad character is space
+			if len(args) >= 3 {
+				padStr = fmt.Sprintf("%v", e.evaluateExpressionWithContext(strings.TrimSpace(args[2]), nodes, rels))
+				// Remove quotes if present
+				padStr = strings.Trim(padStr, "'\"")
+			}
+			if len(str) >= length {
+				return str[:length]
+			}
+			// Pad to the right
+			padLen := length - len(str)
+			padding := ""
+			for len(padding) < padLen {
+				padding += padStr
+			}
+			return str + padding[:padLen]
+		}
+		return nil
+	}
+
+	// format(template, ...args) - string formatting (printf-style)
+	if strings.HasPrefix(lowerExpr, "format(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[7 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 1 {
+			template := fmt.Sprintf("%v", e.evaluateExpressionWithContext(strings.TrimSpace(args[0]), nodes, rels))
+			// Remove quotes from template
+			template = strings.Trim(template, "'\"")
+
+			// Evaluate remaining arguments
+			formatArgs := make([]interface{}, 0, len(args)-1)
+			for i := 1; i < len(args); i++ {
+				val := e.evaluateExpressionWithContext(strings.TrimSpace(args[i]), nodes, rels)
+				formatArgs = append(formatArgs, val)
+			}
+
+			// Simple format string replacement
+			// Supports %s (string), %d (integer), %f (float), %v (any)
+			return fmt.Sprintf(template, formatArgs...)
+		}
+		return nil
+	}
+
 	// ========================================
-	// Date/Time Functions
+	// Date/Time Functions (Neo4j compatible)
 	// ========================================
 
 	// timestamp() - current Unix timestamp in milliseconds
 	if lowerExpr == "timestamp()" {
-		return e.idCounter() // Use counter as pseudo-timestamp for consistency
+		return time.Now().UnixMilli()
 	}
 
-	// datetime() - current datetime as string
-	if lowerExpr == "datetime()" {
-		return fmt.Sprintf("%d", e.idCounter())
+	// datetime() - current datetime as ISO 8601 string or parse from argument
+	if isFunctionCall(expr, "datetime") {
+		inner := strings.TrimSpace(expr[9 : len(expr)-1])
+		if inner == "" {
+			// No argument - return current datetime
+			return time.Now().Format(time.RFC3339)
+		}
+		// Try to parse argument as ISO 8601 string
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			// Try parsing various formats
+			for _, layout := range []string{
+				time.RFC3339,
+				"2006-01-02T15:04:05",
+				"2006-01-02 15:04:05",
+				"2006-01-02",
+			} {
+				if t, err := time.Parse(layout, str); err == nil {
+					return t.Format(time.RFC3339)
+				}
+			}
+		}
+		return nil
 	}
 
-	// date() - current date
-	if lowerExpr == "date()" {
-		return fmt.Sprintf("%d", e.idCounter())
+	// localdatetime() - current local datetime
+	if lowerExpr == "localdatetime()" {
+		return time.Now().Format("2006-01-02T15:04:05")
 	}
 
-	// time() - current time
-	if lowerExpr == "time()" {
-		return fmt.Sprintf("%d", e.idCounter())
+	// date() - current date or parse from argument
+	if isFunctionCall(expr, "date") {
+		inner := strings.TrimSpace(expr[5 : len(expr)-1])
+		if inner == "" {
+			// No argument - return current date
+			return time.Now().Format("2006-01-02")
+		}
+		// Try to parse argument
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				return t.Format("2006-01-02")
+			}
+			// Try parsing datetime and extracting date
+			for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05"} {
+				if t, err := time.Parse(layout, str); err == nil {
+					return t.Format("2006-01-02")
+				}
+			}
+		}
+		return nil
+	}
+
+	// time() - current time or parse from argument
+	if isFunctionCall(expr, "time") {
+		inner := strings.TrimSpace(expr[5 : len(expr)-1])
+		if inner == "" {
+			// No argument - return current time
+			return time.Now().Format("15:04:05")
+		}
+		// Try to parse argument
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			// Try parsing various time formats
+			for _, layout := range []string{"15:04:05", "15:04:05.000", "15:04"} {
+				if t, err := time.Parse(layout, str); err == nil {
+					return t.Format("15:04:05")
+				}
+			}
+		}
+		return nil
+	}
+
+	// localtime() - current local time
+	if lowerExpr == "localtime()" {
+		return time.Now().Format("15:04:05")
+	}
+
+	// date.year(date), date.month(date), date.day(date) - extract components
+	if strings.HasPrefix(lowerExpr, "date.year(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[10 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				return int64(t.Year())
+			}
+		}
+		return nil
+	}
+	if strings.HasPrefix(lowerExpr, "date.month(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[11 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				return int64(t.Month())
+			}
+		}
+		return nil
+	}
+	if strings.HasPrefix(lowerExpr, "date.day(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[9 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				return int64(t.Day())
+			}
+		}
+		return nil
+	}
+
+	// date.week(date) - ISO week number (1-53)
+	if strings.HasPrefix(lowerExpr, "date.week(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[10 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				_, week := t.ISOWeek()
+				return int64(week)
+			}
+		}
+		return nil
+	}
+
+	// date.quarter(date) - quarter of year (1-4)
+	if strings.HasPrefix(lowerExpr, "date.quarter(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[13 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				return int64((int(t.Month())-1)/3 + 1)
+			}
+		}
+		return nil
+	}
+
+	// date.dayOfWeek(date) - day of week (1=Monday, 7=Sunday, ISO 8601)
+	if strings.HasPrefix(lowerExpr, "date.dayofweek(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				dow := int64(t.Weekday())
+				if dow == 0 {
+					dow = 7 // Sunday = 7 in ISO 8601
+				}
+				return dow
+			}
+		}
+		return nil
+	}
+
+	// date.dayOfYear(date) - day of year (1-366)
+	if strings.HasPrefix(lowerExpr, "date.dayofyear(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				return int64(t.YearDay())
+			}
+		}
+		return nil
+	}
+
+	// date.ordinalDay(date) - same as dayOfYear
+	if strings.HasPrefix(lowerExpr, "date.ordinalday(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				return int64(t.YearDay())
+			}
+		}
+		return nil
+	}
+
+	// date.weekYear(date) - ISO week year (may differ from calendar year at year boundaries)
+	if strings.HasPrefix(lowerExpr, "date.weekyear(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			if t, err := time.Parse("2006-01-02", str); err == nil {
+				year, _ := t.ISOWeek()
+				return int64(year)
+			}
+		}
+		return nil
+	}
+
+	// date.truncate(unit, date) - truncate date to specified unit
+	if strings.HasPrefix(lowerExpr, "date.truncate(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			unit := strings.Trim(strings.TrimSpace(args[0]), "'\"")
+			val := e.evaluateExpressionWithContext(strings.TrimSpace(args[1]), nodes, rels)
+			if str, ok := val.(string); ok {
+				str = strings.Trim(str, "'\"")
+				if t, err := time.Parse("2006-01-02", str); err == nil {
+					switch strings.ToLower(unit) {
+					case "year":
+						return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location()).Format("2006-01-02")
+					case "quarter":
+						q := (int(t.Month())-1)/3*3 + 1
+						return time.Date(t.Year(), time.Month(q), 1, 0, 0, 0, 0, t.Location()).Format("2006-01-02")
+					case "month":
+						return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location()).Format("2006-01-02")
+					case "week":
+						// Go back to Monday of current week
+						offset := int(t.Weekday())
+						if offset == 0 {
+							offset = 7
+						}
+						return t.AddDate(0, 0, -(offset - 1)).Format("2006-01-02")
+					case "day":
+						return t.Format("2006-01-02")
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// datetime.truncate(unit, datetime) - truncate datetime to specified unit
+	if strings.HasPrefix(lowerExpr, "datetime.truncate(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[18 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			unit := strings.Trim(strings.TrimSpace(args[0]), "'\"")
+			val := e.evaluateExpressionWithContext(strings.TrimSpace(args[1]), nodes, rels)
+			if str, ok := val.(string); ok {
+				str = strings.Trim(str, "'\"")
+				t := parseDateTime(str)
+				if !t.IsZero() {
+					switch strings.ToLower(unit) {
+					case "year":
+						return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location()).Format(time.RFC3339)
+					case "quarter":
+						q := (int(t.Month())-1)/3*3 + 1
+						return time.Date(t.Year(), time.Month(q), 1, 0, 0, 0, 0, t.Location()).Format(time.RFC3339)
+					case "month":
+						return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location()).Format(time.RFC3339)
+					case "week":
+						offset := int(t.Weekday())
+						if offset == 0 {
+							offset = 7
+						}
+						return t.AddDate(0, 0, -(offset - 1)).Truncate(24 * time.Hour).Format(time.RFC3339)
+					case "day":
+						return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()).Format(time.RFC3339)
+					case "hour":
+						return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location()).Format(time.RFC3339)
+					case "minute":
+						return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, t.Location()).Format(time.RFC3339)
+					case "second":
+						return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location()).Format(time.RFC3339)
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// time.truncate(unit, time) - truncate time to specified unit
+	if strings.HasPrefix(lowerExpr, "time.truncate(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			unit := strings.Trim(strings.TrimSpace(args[0]), "'\"")
+			val := e.evaluateExpressionWithContext(strings.TrimSpace(args[1]), nodes, rels)
+			if str, ok := val.(string); ok {
+				str = strings.Trim(str, "'\"")
+				if t, err := time.Parse("15:04:05", str); err == nil {
+					switch strings.ToLower(unit) {
+					case "hour":
+						return time.Date(0, 1, 1, t.Hour(), 0, 0, 0, time.UTC).Format("15:04:05")
+					case "minute":
+						return time.Date(0, 1, 1, t.Hour(), t.Minute(), 0, 0, time.UTC).Format("15:04:05")
+					case "second":
+						return t.Format("15:04:05")
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// datetime.hour(datetime), datetime.minute(datetime), datetime.second(datetime)
+	if strings.HasPrefix(lowerExpr, "datetime.hour(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			t := parseDateTime(str)
+			if !t.IsZero() {
+				return int64(t.Hour())
+			}
+		}
+		return nil
+	}
+	if strings.HasPrefix(lowerExpr, "datetime.minute(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			t := parseDateTime(str)
+			if !t.IsZero() {
+				return int64(t.Minute())
+			}
+		}
+		return nil
+	}
+	if strings.HasPrefix(lowerExpr, "datetime.second(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			t := parseDateTime(str)
+			if !t.IsZero() {
+				return int64(t.Second())
+			}
+		}
+		return nil
+	}
+
+	// datetime.year(datetime), datetime.month(datetime), datetime.day(datetime)
+	if strings.HasPrefix(lowerExpr, "datetime.year(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			t := parseDateTime(str)
+			if !t.IsZero() {
+				return int64(t.Year())
+			}
+		}
+		return nil
+	}
+	if strings.HasPrefix(lowerExpr, "datetime.month(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			t := parseDateTime(str)
+			if !t.IsZero() {
+				return int64(t.Month())
+			}
+		}
+		return nil
+	}
+	if strings.HasPrefix(lowerExpr, "datetime.day(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[13 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			t := parseDateTime(str)
+			if !t.IsZero() {
+				return int64(t.Day())
+			}
+		}
+		return nil
+	}
+
+	// duration.inMonths(duration) - convert duration to months
+	if strings.HasPrefix(lowerExpr, "duration.inmonths(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[18 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if d, ok := val.(*CypherDuration); ok {
+			return d.Years*12 + d.Months
+		}
+		return nil
+	}
+
+	// duration() - create duration from ISO 8601 string (P1Y2M3DT4H5M6S)
+	// Returns a CypherDuration struct that can be used in arithmetic
+	if isFunctionCall(expr, "duration") {
+		inner := strings.TrimSpace(expr[9 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if str, ok := val.(string); ok {
+			str = strings.Trim(str, "'\"")
+			return parseDuration(str)
+		}
+		// Handle map format: duration({days: 5, hours: 3})
+		if m, ok := val.(map[string]interface{}); ok {
+			return durationFromMap(m)
+		}
+		return nil
+	}
+
+	// duration.between(d1, d2) - calculate duration between two dates/datetimes
+	if strings.HasPrefix(lowerExpr, "duration.between(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[17 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			d1 := e.evaluateExpressionWithContext(strings.TrimSpace(args[0]), nodes, rels)
+			d2 := e.evaluateExpressionWithContext(strings.TrimSpace(args[1]), nodes, rels)
+			return durationBetween(d1, d2)
+		}
+		return nil
+	}
+
+	// duration.inDays(duration) - convert duration to days
+	if strings.HasPrefix(lowerExpr, "duration.indays(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if d, ok := val.(*CypherDuration); ok {
+			return d.TotalDays()
+		}
+		return nil
+	}
+
+	// duration.inSeconds(duration) - convert duration to seconds
+	if strings.HasPrefix(lowerExpr, "duration.inseconds(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[19 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if d, ok := val.(*CypherDuration); ok {
+			return d.TotalSeconds()
+		}
+		return nil
 	}
 
 	// ========================================
@@ -1060,6 +1913,366 @@ func (e *StorageExecutor) evaluateExpressionWithContext(expr string, nodes map[s
 		// Convert to float between 0 and 1
 		val := float64(b[0]^b[1]^b[2]^b[3]) / 256.0
 		return val
+	}
+
+	// ========================================
+	// APOC Functions (Neo4j Community Extensions)
+	// ========================================
+
+	// apoc.create.uuid() - Generate a UUID (alias for randomUUID)
+	if lowerExpr == "apoc.create.uuid()" {
+		return e.generateUUID()
+	}
+
+	// apoc.text.join(list, separator) - Join list elements with separator
+	if isFunctionCall(expr, "apoc.text.join") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			listVal := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			sepVal := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			sep := ""
+			if s, ok := sepVal.(string); ok {
+				sep = strings.Trim(s, "'\"")
+			}
+			// Convert list to string slice
+			var parts []string
+			switch v := listVal.(type) {
+			case []interface{}:
+				for _, item := range v {
+					parts = append(parts, fmt.Sprintf("%v", item))
+				}
+			case []string:
+				parts = v
+			}
+			return strings.Join(parts, sep)
+		}
+		return nil
+	}
+
+	// apoc.coll.flatten(list) - Flatten nested lists into a single list
+	if isFunctionCall(expr, "apoc.coll.flatten") {
+		inner := strings.TrimSpace(expr[19 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return flattenList(listVal)
+	}
+
+	// apoc.coll.toSet(list) - Remove duplicates from list
+	if isFunctionCall(expr, "apoc.coll.toset") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return toSet(listVal)
+	}
+
+	// apoc.coll.sum(list) - Sum numeric values in list
+	if isFunctionCall(expr, "apoc.coll.sum") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return apocCollSum(listVal)
+	}
+
+	// apoc.coll.avg(list) - Average of numeric values in list
+	if isFunctionCall(expr, "apoc.coll.avg") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return apocCollAvg(listVal)
+	}
+
+	// apoc.coll.min(list) - Minimum value in list
+	if isFunctionCall(expr, "apoc.coll.min") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return apocCollMin(listVal)
+	}
+
+	// apoc.coll.max(list) - Maximum value in list
+	if isFunctionCall(expr, "apoc.coll.max") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return apocCollMax(listVal)
+	}
+
+	// apoc.coll.sort(list) - Sort list in ascending order
+	if isFunctionCall(expr, "apoc.coll.sort") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return apocCollSort(listVal)
+	}
+
+	// apoc.coll.sortNodes(nodes, property) - Sort nodes by property
+	if isFunctionCall(expr, "apoc.coll.sortnodes") {
+		inner := strings.TrimSpace(expr[20 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			listVal := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			propName := strings.Trim(args[1], "'\"")
+			return apocCollSortNodes(listVal, propName)
+		}
+		return nil
+	}
+
+	// apoc.coll.reverse(list) - Reverse a list
+	if isFunctionCall(expr, "apoc.coll.reverse") {
+		inner := strings.TrimSpace(expr[18 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return apocCollReverse(listVal)
+	}
+
+	// apoc.coll.union(list1, list2) - Union of two lists (removes duplicates)
+	if isFunctionCall(expr, "apoc.coll.union") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			list1 := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			list2 := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollUnion(list1, list2)
+		}
+		return nil
+	}
+
+	// apoc.coll.unionAll(list1, list2) - Union of two lists (keeps duplicates)
+	if isFunctionCall(expr, "apoc.coll.unionall") {
+		inner := strings.TrimSpace(expr[19 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			list1 := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			list2 := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollUnionAll(list1, list2)
+		}
+		return nil
+	}
+
+	// apoc.coll.intersection(list1, list2) - Intersection of two lists
+	if isFunctionCall(expr, "apoc.coll.intersection") {
+		inner := strings.TrimSpace(expr[23 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			list1 := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			list2 := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollIntersection(list1, list2)
+		}
+		return nil
+	}
+
+	// apoc.coll.subtract(list1, list2) - Elements in list1 but not in list2
+	if isFunctionCall(expr, "apoc.coll.subtract") {
+		inner := strings.TrimSpace(expr[20 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			list1 := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			list2 := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollSubtract(list1, list2)
+		}
+		return nil
+	}
+
+	// apoc.coll.contains(list, value) - Check if list contains value
+	if isFunctionCall(expr, "apoc.coll.contains") {
+		inner := strings.TrimSpace(expr[20 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			listVal := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			value := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollContains(listVal, value)
+		}
+		return false
+	}
+
+	// apoc.coll.containsAll(list1, list2) - Check if list1 contains all elements of list2
+	if isFunctionCall(expr, "apoc.coll.containsall") {
+		inner := strings.TrimSpace(expr[22 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			list1 := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			list2 := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollContainsAll(list1, list2)
+		}
+		return false
+	}
+
+	// apoc.coll.containsAny(list1, list2) - Check if list1 contains any element of list2
+	if isFunctionCall(expr, "apoc.coll.containsany") {
+		inner := strings.TrimSpace(expr[22 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			list1 := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			list2 := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollContainsAny(list1, list2)
+		}
+		return false
+	}
+
+	// apoc.coll.indexOf(list, value) - Find index of value in list (-1 if not found)
+	if isFunctionCall(expr, "apoc.coll.indexof") {
+		inner := strings.TrimSpace(expr[18 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			listVal := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			value := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollIndexOf(listVal, value)
+		}
+		return int64(-1)
+	}
+
+	// apoc.coll.split(list, value) - Split list at occurrences of value
+	if isFunctionCall(expr, "apoc.coll.split") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			listVal := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			value := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollSplit(listVal, value)
+		}
+		return nil
+	}
+
+	// apoc.coll.partition(list, size) - Partition list into sublists of given size
+	if isFunctionCall(expr, "apoc.coll.partition") {
+		inner := strings.TrimSpace(expr[20 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			listVal := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			sizeVal := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollPartition(listVal, sizeVal)
+		}
+		return nil
+	}
+
+	// apoc.coll.pairs(list) - Create pairs from consecutive elements [[a,b], [b,c], ...]
+	if isFunctionCall(expr, "apoc.coll.pairs") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return apocCollPairs(listVal)
+	}
+
+	// apoc.coll.zip(list1, list2) - Zip two lists into pairs [[a1,b1], [a2,b2], ...]
+	if isFunctionCall(expr, "apoc.coll.zip") {
+		inner := strings.TrimSpace(expr[14 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			list1 := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			list2 := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollZip(list1, list2)
+		}
+		return nil
+	}
+
+	// apoc.coll.frequencies(list) - Count frequency of each element
+	if isFunctionCall(expr, "apoc.coll.frequencies") {
+		inner := strings.TrimSpace(expr[22 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return apocCollFrequencies(listVal)
+	}
+
+	// apoc.coll.occurrences(list, value) - Count occurrences of value in list
+	if isFunctionCall(expr, "apoc.coll.occurrences") {
+		inner := strings.TrimSpace(expr[22 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			listVal := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			value := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return apocCollOccurrences(listVal, value)
+		}
+		return int64(0)
+	}
+
+	// apoc.convert.toJson(value) - Convert value to JSON string
+	if isFunctionCall(expr, "apoc.convert.tojson") {
+		inner := strings.TrimSpace(expr[20 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		jsonBytes, err := json.Marshal(val)
+		if err != nil {
+			return nil
+		}
+		return string(jsonBytes)
+	}
+
+	// apoc.convert.fromJsonMap(json) - Parse JSON string to map
+	if isFunctionCall(expr, "apoc.convert.fromjsonmap") {
+		inner := strings.TrimSpace(expr[24 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		jsonStr, ok := val.(string)
+		if !ok {
+			return nil
+		}
+		jsonStr = strings.Trim(jsonStr, "'\"")
+		var result map[string]interface{}
+		if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+			return nil
+		}
+		return result
+	}
+
+	// apoc.convert.fromJsonList(json) - Parse JSON string to list
+	if isFunctionCall(expr, "apoc.convert.fromjsonlist") {
+		inner := strings.TrimSpace(expr[25 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		jsonStr, ok := val.(string)
+		if !ok {
+			return nil
+		}
+		jsonStr = strings.Trim(jsonStr, "'\"")
+		var result []interface{}
+		if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+			return nil
+		}
+		return result
+	}
+
+	// apoc.meta.type(value) - Get the Cypher type name of a value
+	if isFunctionCall(expr, "apoc.meta.type") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return getCypherType(val)
+	}
+
+	// apoc.meta.isType(value, typeName) - Check if value is of given type
+	if isFunctionCall(expr, "apoc.meta.istype") {
+		inner := strings.TrimSpace(expr[17 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			val := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			typeVal := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			typeName, ok := typeVal.(string)
+			if !ok {
+				return false
+			}
+			typeName = strings.Trim(typeName, "'\"")
+			actualType := getCypherType(val)
+			return strings.EqualFold(actualType, typeName)
+		}
+		return false
+	}
+
+	// apoc.map.merge(map1, map2) - Merge two maps (map2 values override map1)
+	if isFunctionCall(expr, "apoc.map.merge") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			map1 := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			map2 := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return mergeMaps(map1, map2)
+		}
+		return nil
+	}
+
+	// apoc.map.fromPairs(list) - Create map from list of [key, value] pairs
+	if isFunctionCall(expr, "apoc.map.frompairs") {
+		inner := strings.TrimSpace(expr[19 : len(expr)-1])
+		listVal := e.evaluateExpressionWithContext(inner, nodes, rels)
+		return fromPairs(listVal)
+	}
+
+	// apoc.map.fromLists(keys, values) - Create map from parallel lists
+	if isFunctionCall(expr, "apoc.map.fromlists") {
+		inner := strings.TrimSpace(expr[19 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			keys := e.evaluateExpressionWithContext(args[0], nodes, rels)
+			values := e.evaluateExpressionWithContext(args[1], nodes, rels)
+			return fromLists(keys, values)
+		}
+		return nil
 	}
 
 	// ========================================
@@ -1224,6 +2437,64 @@ func (e *StorageExecutor) evaluateExpressionWithContext(expr string, nodes map[s
 		val := e.evaluateExpressionWithContext(inner, nodes, rels)
 		if f, ok := toFloat64(val); ok {
 			return (1 - math.Cos(f)) / 2
+		}
+		return nil
+	}
+
+	// sinh(x) - hyperbolic sine (Neo4j 2025.06+)
+	if strings.HasPrefix(lowerExpr, "sinh(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[5 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if f, ok := toFloat64(val); ok {
+			return math.Sinh(f)
+		}
+		return nil
+	}
+
+	// cosh(x) - hyperbolic cosine (Neo4j 2025.06+)
+	if strings.HasPrefix(lowerExpr, "cosh(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[5 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if f, ok := toFloat64(val); ok {
+			return math.Cosh(f)
+		}
+		return nil
+	}
+
+	// tanh(x) - hyperbolic tangent (Neo4j 2025.06+)
+	if strings.HasPrefix(lowerExpr, "tanh(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[5 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if f, ok := toFloat64(val); ok {
+			return math.Tanh(f)
+		}
+		return nil
+	}
+
+	// coth(x) - hyperbolic cotangent (Neo4j 2025.06+)
+	if strings.HasPrefix(lowerExpr, "coth(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[5 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if f, ok := toFloat64(val); ok {
+			sinh := math.Sinh(f)
+			if sinh == 0 {
+				return math.NaN()
+			}
+			return math.Cosh(f) / sinh
+		}
+		return nil
+	}
+
+	// power(base, exponent) - raise base to power of exponent
+	if strings.HasPrefix(lowerExpr, "power(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[6 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			base, ok1 := toFloat64(e.evaluateExpressionWithContext(strings.TrimSpace(args[0]), nodes, rels))
+			exp, ok2 := toFloat64(e.evaluateExpressionWithContext(strings.TrimSpace(args[1]), nodes, rels))
+			if ok1 && ok2 {
+				return math.Pow(base, exp)
+			}
 		}
 		return nil
 	}
@@ -1606,6 +2877,160 @@ func (e *StorageExecutor) evaluateExpressionWithContext(expr string, nodes map[s
 		return false
 	}
 
+	// point.x(point) - get x coordinate
+	if strings.HasPrefix(lowerExpr, "point.x(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[8 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if m, ok := val.(map[string]interface{}); ok {
+			if x, ok := m["x"]; ok {
+				if v, ok := toFloat64(x); ok {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+
+	// point.y(point) - get y coordinate
+	if strings.HasPrefix(lowerExpr, "point.y(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[8 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if m, ok := val.(map[string]interface{}); ok {
+			if y, ok := m["y"]; ok {
+				if v, ok := toFloat64(y); ok {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+
+	// point.z(point) - get z coordinate (3D points)
+	if strings.HasPrefix(lowerExpr, "point.z(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[8 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if m, ok := val.(map[string]interface{}); ok {
+			if z, ok := m["z"]; ok {
+				if v, ok := toFloat64(z); ok {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+
+	// point.latitude(point) - get latitude
+	if strings.HasPrefix(lowerExpr, "point.latitude(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if m, ok := val.(map[string]interface{}); ok {
+			if lat, ok := m["latitude"]; ok {
+				if v, ok := toFloat64(lat); ok {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+
+	// point.longitude(point) - get longitude
+	if strings.HasPrefix(lowerExpr, "point.longitude(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[16 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if m, ok := val.(map[string]interface{}); ok {
+			if lon, ok := m["longitude"]; ok {
+				if v, ok := toFloat64(lon); ok {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+
+	// point.srid(point) - get SRID (Spatial Reference System Identifier)
+	if strings.HasPrefix(lowerExpr, "point.srid(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[11 : len(expr)-1])
+		val := e.evaluateExpressionWithContext(inner, nodes, rels)
+		if m, ok := val.(map[string]interface{}); ok {
+			if srid, ok := m["srid"]; ok {
+				return srid
+			}
+			// Default SRID based on coordinate type
+			if _, ok := m["latitude"]; ok {
+				return int64(4326) // WGS84
+			}
+			return int64(7203) // Cartesian 2D
+		}
+		return nil
+	}
+
+	// point.distance(p1, p2) - alias for distance(p1, p2)
+	if strings.HasPrefix(lowerExpr, "point.distance(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[15 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) >= 2 {
+			p1 := e.evaluateExpressionWithContext(strings.TrimSpace(args[0]), nodes, rels)
+			p2 := e.evaluateExpressionWithContext(strings.TrimSpace(args[1]), nodes, rels)
+
+			m1, ok1 := p1.(map[string]interface{})
+			m2, ok2 := p2.(map[string]interface{})
+
+			if ok1 && ok2 {
+				// Try x/y coordinates
+				x1, y1, hasXY1 := getXY(m1)
+				x2, y2, hasXY2 := getXY(m2)
+				if hasXY1 && hasXY2 {
+					return math.Sqrt((x2-x1)*(x2-x1) + (y2-y1)*(y2-y1))
+				}
+
+				// Try lat/long (haversine distance in meters)
+				lat1, lon1, hasLatLon1 := getLatLon(m1)
+				lat2, lon2, hasLatLon2 := getLatLon(m2)
+				if hasLatLon1 && hasLatLon2 {
+					return haversineDistance(lat1, lon1, lat2, lon2)
+				}
+			}
+		}
+		return nil
+	}
+
+	// point.withinBBox(point, lowerLeft, upperRight) - alias for withinBBox
+	if strings.HasPrefix(lowerExpr, "point.withinbbox(") && strings.HasSuffix(expr, ")") {
+		inner := strings.TrimSpace(expr[17 : len(expr)-1])
+		args := e.splitFunctionArgs(inner)
+		if len(args) < 3 {
+			return false
+		}
+		point := e.evaluateExpressionWithContext(strings.TrimSpace(args[0]), nodes, rels)
+		lowerLeft := e.evaluateExpressionWithContext(strings.TrimSpace(args[1]), nodes, rels)
+		upperRight := e.evaluateExpressionWithContext(strings.TrimSpace(args[2]), nodes, rels)
+
+		pm, ok1 := point.(map[string]interface{})
+		llm, ok2 := lowerLeft.(map[string]interface{})
+		urm, ok3 := upperRight.(map[string]interface{})
+		if !ok1 || !ok2 || !ok3 {
+			return false
+		}
+
+		px, py, hasXY := getXY(pm)
+		llx, lly, hasLL := getXY(llm)
+		urx, ury, hasUR := getXY(urm)
+
+		if hasXY && hasLL && hasUR {
+			return px >= llx && px <= urx && py >= lly && py <= ury
+		}
+
+		plat, plon, hasLatLon := getLatLon(pm)
+		lllat, lllon, hasLLLatLon := getLatLon(llm)
+		urlat, urlon, hasURLatLon := getLatLon(urm)
+
+		if hasLatLon && hasLLLatLon && hasURLatLon {
+			return plat >= lllat && plat <= urlat && plon >= lllon && plon <= urlon
+		}
+
+		return false
+	}
+
 	// ========================================
 	// List Predicate Functions
 	// ========================================
@@ -1846,15 +3271,6 @@ func (e *StorageExecutor) evaluateExpressionWithContext(expr string, nodes map[s
 	}
 
 	// ========================================
-	// String Concatenation (+ operator)
-	// ========================================
-	// Only check for concatenation if + is outside of string literals
-	// to avoid infinite recursion when property values contain " + "
-	if e.hasConcatOperator(expr) {
-		return e.evaluateStringConcatWithContext(expr, nodes, rels)
-	}
-
-	// ========================================
 	// CASE WHEN Expressions (must be before operators)
 	// ========================================
 	if strings.HasPrefix(lowerExpr, "case") && strings.HasSuffix(lowerExpr, "end") {
@@ -1915,10 +3331,23 @@ func (e *StorageExecutor) evaluateExpressionWithContext(expr string, nodes map[s
 		return e.evaluateComparisonExpr(expr, nodes, rels)
 	}
 
-	// Arithmetic operators (*, /, %, -)
-	// Note: + is handled separately for string concatenation
+	// Arithmetic operators (*, /, %, -, +)
+	// NOTE: Arithmetic is checked BEFORE string concatenation to support date/duration arithmetic
 	if e.hasArithmeticOperator(expr) {
-		return e.evaluateArithmeticExpr(expr, nodes, rels)
+		result := e.evaluateArithmeticExpr(expr, nodes, rels)
+		if result != nil {
+			return result
+		}
+		// If arithmetic returned nil, fall through to string concatenation for + operator
+	}
+
+	// ========================================
+	// String Concatenation (+ operator)
+	// ========================================
+	// Only check for concatenation if + is outside of string literals
+	// This is a fallback when arithmetic didn't apply (e.g., string + string)
+	if e.hasConcatOperator(expr) {
+		return e.evaluateStringConcatWithContext(expr, nodes, rels)
 	}
 
 	// Unary minus
@@ -2310,8 +3739,8 @@ func (e *StorageExecutor) evaluateComparisonExpr(expr string, nodes map[string]*
 
 // hasArithmeticOperator checks if the expression has arithmetic operators (*, /, %, -)
 func (e *StorageExecutor) hasArithmeticOperator(expr string) bool {
-	// Note: + is handled by string concatenation
-	ops := []string{"*", "/", "%", " - "}
+	// Include + for date arithmetic (date + duration)
+	ops := []string{" + ", "*", "/", "%", " - "}
 	for _, op := range ops {
 		if e.hasOperatorOutsideQuotes(expr, op) {
 			return true
@@ -2322,6 +3751,13 @@ func (e *StorageExecutor) hasArithmeticOperator(expr string) bool {
 
 // evaluateArithmeticExpr evaluates arithmetic expressions
 func (e *StorageExecutor) evaluateArithmeticExpr(expr string, nodes map[string]*storage.Node, rels map[string]*storage.Edge) interface{} {
+	// Handle + operator (date + duration, or numeric addition)
+	if parts := e.splitByOperator(expr, " + "); len(parts) == 2 {
+		left := e.evaluateExpressionWithContext(parts[0], nodes, rels)
+		right := e.evaluateExpressionWithContext(parts[1], nodes, rels)
+		return e.add(left, right)
+	}
+
 	// Handle * operator
 	if parts := e.splitByOperator(expr, "*"); len(parts) == 2 {
 		left := e.evaluateExpressionWithContext(parts[0], nodes, rels)
@@ -2393,6 +3829,40 @@ func (e *StorageExecutor) splitByOperator(expr, op string) []string {
 }
 
 // Arithmetic helper functions
+
+// add handles addition including date + duration
+func (e *StorageExecutor) add(left, right interface{}) interface{} {
+	// Handle date/datetime + duration
+	if dur, ok := right.(*CypherDuration); ok {
+		result := addDurationToDate(left, dur)
+		if result != "" {
+			return result
+		}
+	}
+	// Handle duration + date/datetime (commutative)
+	if dur, ok := left.(*CypherDuration); ok {
+		result := addDurationToDate(right, dur)
+		if result != "" {
+			return result
+		}
+	}
+
+	// Standard numeric addition
+	l, okL := toFloat64(left)
+	r, okR := toFloat64(right)
+	if !okL || !okR {
+		return nil
+	}
+	result := l + r
+	// Return integer if both were integers
+	if _, isInt := left.(int64); isInt {
+		if _, isInt := right.(int64); isInt {
+			return int64(result)
+		}
+	}
+	return result
+}
+
 func (e *StorageExecutor) multiply(left, right interface{}) interface{} {
 	l, okL := toFloat64(left)
 	r, okR := toFloat64(right)
@@ -2428,6 +3898,22 @@ func (e *StorageExecutor) modulo(left, right interface{}) interface{} {
 }
 
 func (e *StorageExecutor) subtract(left, right interface{}) interface{} {
+	// Handle date - duration = date
+	if dur, ok := right.(*CypherDuration); ok {
+		result := subtractDurationFromDate(left, dur)
+		if result != "" {
+			return result
+		}
+	}
+
+	// Handle date - date = duration
+	leftTime := parseDateTime(left)
+	rightTime := parseDateTime(right)
+	if !leftTime.IsZero() && !rightTime.IsZero() {
+		return durationBetween(left, right)
+	}
+
+	// Standard numeric subtraction
 	l, okL := toFloat64(left)
 	r, okR := toFloat64(right)
 	if !okL || !okR {
@@ -2478,4 +3964,576 @@ func (e *StorageExecutor) hasStringPredicate(expr, predicate string) bool {
 		}
 	}
 	return false
+}
+
+// ========================================
+// APOC Helper Functions
+// ========================================
+
+// flattenList recursively flattens nested lists into a single list
+func flattenList(val interface{}) []interface{} {
+	var result []interface{}
+	switch v := val.(type) {
+	case []interface{}:
+		for _, item := range v {
+			// Check if item is also a list
+			switch inner := item.(type) {
+			case []interface{}:
+				result = append(result, flattenList(inner)...)
+			default:
+				result = append(result, item)
+			}
+		}
+	case []string:
+		for _, s := range v {
+			result = append(result, s)
+		}
+	default:
+		result = append(result, val)
+	}
+	return result
+}
+
+// toSet removes duplicates from a list while preserving order
+func toSet(val interface{}) []interface{} {
+	var result []interface{}
+	seen := make(map[string]bool)
+
+	addUnique := func(item interface{}) {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, item)
+		}
+	}
+
+	switch v := val.(type) {
+	case []interface{}:
+		for _, item := range v {
+			addUnique(item)
+		}
+	case []string:
+		for _, s := range v {
+			addUnique(s)
+		}
+	}
+	return result
+}
+
+// ========================================
+// APOC Collection Function Helpers
+// ========================================
+
+// apocCollSum sums numeric values in a list
+func apocCollSum(val interface{}) float64 {
+	var sum float64
+	switch v := val.(type) {
+	case []interface{}:
+		for _, item := range v {
+			if f, ok := toFloat64(item); ok {
+				sum += f
+			}
+		}
+	}
+	return sum
+}
+
+// apocCollAvg calculates average of numeric values in a list
+func apocCollAvg(val interface{}) interface{} {
+	switch v := val.(type) {
+	case []interface{}:
+		if len(v) == 0 {
+			return nil
+		}
+		var sum float64
+		for _, item := range v {
+			if f, ok := toFloat64(item); ok {
+				sum += f
+			}
+		}
+		return sum / float64(len(v))
+	}
+	return nil
+}
+
+// apocCollMin finds minimum value in a list
+func apocCollMin(val interface{}) interface{} {
+	switch v := val.(type) {
+	case []interface{}:
+		if len(v) == 0 {
+			return nil
+		}
+		min := v[0]
+		minFloat, _ := toFloat64(min)
+		for _, item := range v[1:] {
+			if f, ok := toFloat64(item); ok && f < minFloat {
+				min = item
+				minFloat = f
+			}
+		}
+		return min
+	}
+	return nil
+}
+
+// apocCollMax finds maximum value in a list
+func apocCollMax(val interface{}) interface{} {
+	switch v := val.(type) {
+	case []interface{}:
+		if len(v) == 0 {
+			return nil
+		}
+		max := v[0]
+		maxFloat, _ := toFloat64(max)
+		for _, item := range v[1:] {
+			if f, ok := toFloat64(item); ok && f > maxFloat {
+				max = item
+				maxFloat = f
+			}
+		}
+		return max
+	}
+	return nil
+}
+
+// apocCollSort sorts a list in ascending order
+func apocCollSort(val interface{}) []interface{} {
+	switch v := val.(type) {
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		copy(result, v)
+		// Sort by converting to float64 for comparison
+		for i := 0; i < len(result)-1; i++ {
+			for j := i + 1; j < len(result); j++ {
+				fj, _ := toFloat64(result[j])
+				fi, _ := toFloat64(result[i])
+				if fj < fi {
+					result[i], result[j] = result[j], result[i]
+				}
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// apocCollSortNodes sorts nodes by a property value
+func apocCollSortNodes(val interface{}, propName string) []interface{} {
+	switch v := val.(type) {
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		copy(result, v)
+		// Sort by property value
+		for i := 0; i < len(result)-1; i++ {
+			for j := i + 1; j < len(result); j++ {
+				vi := getNodeProperty(result[i], propName)
+				vj := getNodeProperty(result[j], propName)
+				fj, _ := toFloat64(vj)
+				fi, _ := toFloat64(vi)
+				if fj < fi {
+					result[i], result[j] = result[j], result[i]
+				}
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// getNodeProperty extracts a property from a node (map or *storage.Node)
+func getNodeProperty(node interface{}, propName string) interface{} {
+	switch n := node.(type) {
+	case map[string]interface{}:
+		if props, ok := n["properties"].(map[string]interface{}); ok {
+			return props[propName]
+		}
+		return n[propName]
+	case *storage.Node:
+		return n.Properties[propName]
+	}
+	return nil
+}
+
+// apocCollReverse reverses a list
+func apocCollReverse(val interface{}) []interface{} {
+	switch v := val.(type) {
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			result[len(v)-1-i] = item
+		}
+		return result
+	}
+	return nil
+}
+
+// apocCollUnion returns union of two lists (unique elements)
+func apocCollUnion(list1, list2 interface{}) []interface{} {
+	combined := apocCollUnionAll(list1, list2)
+	return toSet(combined)
+}
+
+// apocCollUnionAll returns union of two lists (keeps duplicates)
+func apocCollUnionAll(list1, list2 interface{}) []interface{} {
+	var result []interface{}
+	if l1, ok := list1.([]interface{}); ok {
+		result = append(result, l1...)
+	}
+	if l2, ok := list2.([]interface{}); ok {
+		result = append(result, l2...)
+	}
+	return result
+}
+
+// apocCollIntersection returns elements present in both lists
+func apocCollIntersection(list1, list2 interface{}) []interface{} {
+	var result []interface{}
+	l1, ok1 := list1.([]interface{})
+	l2, ok2 := list2.([]interface{})
+	if !ok1 || !ok2 {
+		return result
+	}
+
+	// Build set from list2
+	set2 := make(map[string]bool)
+	for _, item := range l2 {
+		key := fmt.Sprintf("%T:%v", item, item)
+		set2[key] = true
+	}
+
+	// Find elements in list1 that are also in list2
+	seen := make(map[string]bool)
+	for _, item := range l1 {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if set2[key] && !seen[key] {
+			seen[key] = true
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// apocCollSubtract returns elements in list1 but not in list2
+func apocCollSubtract(list1, list2 interface{}) []interface{} {
+	var result []interface{}
+	l1, ok1 := list1.([]interface{})
+	l2, ok2 := list2.([]interface{})
+	if !ok1 {
+		return result
+	}
+
+	// Build set from list2
+	set2 := make(map[string]bool)
+	if ok2 {
+		for _, item := range l2 {
+			key := fmt.Sprintf("%T:%v", item, item)
+			set2[key] = true
+		}
+	}
+
+	// Find elements in list1 that are not in list2
+	for _, item := range l1 {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if !set2[key] {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// apocCollContains checks if list contains value
+func apocCollContains(listVal, value interface{}) bool {
+	l, ok := listVal.([]interface{})
+	if !ok {
+		return false
+	}
+	targetKey := fmt.Sprintf("%T:%v", value, value)
+	for _, item := range l {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if key == targetKey {
+			return true
+		}
+	}
+	return false
+}
+
+// apocCollContainsAll checks if list1 contains all elements of list2
+func apocCollContainsAll(list1, list2 interface{}) bool {
+	l1, ok1 := list1.([]interface{})
+	l2, ok2 := list2.([]interface{})
+	if !ok1 || !ok2 {
+		return false
+	}
+
+	// Build set from list1
+	set1 := make(map[string]bool)
+	for _, item := range l1 {
+		key := fmt.Sprintf("%T:%v", item, item)
+		set1[key] = true
+	}
+
+	// Check all elements of list2 are in list1
+	for _, item := range l2 {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if !set1[key] {
+			return false
+		}
+	}
+	return true
+}
+
+// apocCollContainsAny checks if list1 contains any element of list2
+func apocCollContainsAny(list1, list2 interface{}) bool {
+	l1, ok1 := list1.([]interface{})
+	l2, ok2 := list2.([]interface{})
+	if !ok1 || !ok2 {
+		return false
+	}
+
+	// Build set from list1
+	set1 := make(map[string]bool)
+	for _, item := range l1 {
+		key := fmt.Sprintf("%T:%v", item, item)
+		set1[key] = true
+	}
+
+	// Check if any element of list2 is in list1
+	for _, item := range l2 {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if set1[key] {
+			return true
+		}
+	}
+	return false
+}
+
+// apocCollIndexOf finds index of value in list (-1 if not found)
+func apocCollIndexOf(listVal, value interface{}) int64 {
+	l, ok := listVal.([]interface{})
+	if !ok {
+		return -1
+	}
+	targetKey := fmt.Sprintf("%T:%v", value, value)
+	for i, item := range l {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if key == targetKey {
+			return int64(i)
+		}
+	}
+	return -1
+}
+
+// apocCollSplit splits list at occurrences of value
+func apocCollSplit(listVal, value interface{}) []interface{} {
+	l, ok := listVal.([]interface{})
+	if !ok {
+		return nil
+	}
+	targetKey := fmt.Sprintf("%T:%v", value, value)
+	var result []interface{}
+	var current []interface{}
+
+	for _, item := range l {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if key == targetKey {
+			result = append(result, current)
+			current = nil
+		} else {
+			current = append(current, item)
+		}
+	}
+	result = append(result, current)
+	return result
+}
+
+// apocCollPartition partitions list into sublists of given size
+func apocCollPartition(listVal, sizeVal interface{}) []interface{} {
+	l, ok := listVal.([]interface{})
+	if !ok {
+		return nil
+	}
+	size := int(toInt64(sizeVal))
+	if size <= 0 {
+		return nil
+	}
+
+	var result []interface{}
+	for i := 0; i < len(l); i += size {
+		end := i + size
+		if end > len(l) {
+			end = len(l)
+		}
+		result = append(result, l[i:end])
+	}
+	return result
+}
+
+// apocCollPairs creates pairs from consecutive elements
+func apocCollPairs(val interface{}) []interface{} {
+	l, ok := val.([]interface{})
+	if !ok || len(l) < 2 {
+		return nil
+	}
+
+	var result []interface{}
+	for i := 0; i < len(l)-1; i++ {
+		pair := []interface{}{l[i], l[i+1]}
+		result = append(result, pair)
+	}
+	return result
+}
+
+// apocCollZip zips two lists into pairs
+func apocCollZip(list1, list2 interface{}) []interface{} {
+	l1, ok1 := list1.([]interface{})
+	l2, ok2 := list2.([]interface{})
+	if !ok1 || !ok2 {
+		return nil
+	}
+
+	// Use shorter length
+	length := len(l1)
+	if len(l2) < length {
+		length = len(l2)
+	}
+
+	result := make([]interface{}, length)
+	for i := 0; i < length; i++ {
+		result[i] = []interface{}{l1[i], l2[i]}
+	}
+	return result
+}
+
+// apocCollFrequencies counts frequency of each element
+func apocCollFrequencies(val interface{}) map[string]interface{} {
+	l, ok := val.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	counts := make(map[string]int64)
+	for _, item := range l {
+		key := fmt.Sprintf("%v", item)
+		counts[key]++
+	}
+
+	// Convert to result format
+	result := make(map[string]interface{})
+	for k, v := range counts {
+		result[k] = v
+	}
+	return result
+}
+
+// apocCollOccurrences counts occurrences of value in list
+func apocCollOccurrences(listVal, value interface{}) int64 {
+	l, ok := listVal.([]interface{})
+	if !ok {
+		return 0
+	}
+	targetKey := fmt.Sprintf("%T:%v", value, value)
+	var count int64
+	for _, item := range l {
+		key := fmt.Sprintf("%T:%v", item, item)
+		if key == targetKey {
+			count++
+		}
+	}
+	return count
+}
+
+// getCypherType returns the Cypher type name for a value
+func getCypherType(val interface{}) string {
+	if val == nil {
+		return "NULL"
+	}
+	switch v := val.(type) {
+	case bool:
+		return "BOOLEAN"
+	case int, int32, int64:
+		return "INTEGER"
+	case float32, float64:
+		return "FLOAT"
+	case string:
+		return "STRING"
+	case []interface{}, []string:
+		return "LIST"
+	case map[string]interface{}:
+		return "MAP"
+	case *storage.Node:
+		return "NODE"
+	case *storage.Edge:
+		return "RELATIONSHIP"
+	case *CypherDuration:
+		return "DURATION"
+	default:
+		_ = v
+		return "ANY"
+	}
+}
+
+// mergeMaps merges two maps, with map2 values overriding map1
+func mergeMaps(map1, map2 interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Copy map1
+	if m1, ok := map1.(map[string]interface{}); ok {
+		for k, v := range m1 {
+			result[k] = v
+		}
+	}
+
+	// Override with map2
+	if m2, ok := map2.(map[string]interface{}); ok {
+		for k, v := range m2 {
+			result[k] = v
+		}
+	}
+
+	return result
+}
+
+// fromPairs creates a map from a list of [key, value] pairs
+func fromPairs(val interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	list, ok := val.([]interface{})
+	if !ok {
+		return result
+	}
+
+	for _, item := range list {
+		pair, ok := item.([]interface{})
+		if !ok || len(pair) < 2 {
+			continue
+		}
+		key, ok := pair[0].(string)
+		if !ok {
+			key = fmt.Sprintf("%v", pair[0])
+		}
+		result[key] = pair[1]
+	}
+
+	return result
+}
+
+// fromLists creates a map from parallel lists of keys and values
+func fromLists(keys, values interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	keyList, ok1 := keys.([]interface{})
+	valList, ok2 := values.([]interface{})
+	if !ok1 || !ok2 {
+		return result
+	}
+
+	for i := 0; i < len(keyList) && i < len(valList); i++ {
+		key, ok := keyList[i].(string)
+		if !ok {
+			key = fmt.Sprintf("%v", keyList[i])
+		}
+		result[key] = valList[i]
+	}
+
+	return result
 }

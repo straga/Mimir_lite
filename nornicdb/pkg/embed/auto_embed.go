@@ -433,6 +433,82 @@ func (ae *AutoEmbedder) Embed(ctx context.Context, text string) ([]float32, erro
 }
 
 // EmbedNode extracts embeddable text from node properties and generates embedding.
+//
+// This is a convenience method that combines text extraction and embedding generation.
+// It automatically extracts relevant textual content from node properties (like "content",
+// "description", "title") and generates a semantic embedding vector.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeouts
+//   - properties: Node property map (e.g., {"content": "...", "title": "..."})
+//
+// Returns:
+//   - Embedding vector as float32 slice (nil if no embeddable text found)
+//   - Error if embedding generation fails
+//
+// Example 1 - Embedding a Document Node:
+//
+//	properties := map[string]any{
+//		"title":   "Introduction to Graph Databases",
+//		"content": "Graph databases store data as nodes and relationships...",
+//		"author":  "Alice",
+//		"year":    2024,
+//	}
+//	
+//	embedding, err := autoEmbedder.EmbedNode(ctx, properties)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	// embedding is based on title + content (author and year ignored)
+//	fmt.Printf("Generated %d-dimensional embedding\n", len(embedding))
+//
+// Example 2 - User Profile Node:
+//
+//	user := map[string]any{
+//		"name":        "Bob",
+//		"bio":         "Software engineer passionate about databases",
+//		"description": "10+ years experience in distributed systems",
+//		"email":       "bob@example.com", // Not embeddable
+//		"age":         35,                 // Not embeddable
+//	}
+//	
+//	embedding, _ := autoEmbedder.EmbedNode(ctx, user)
+//	// embedding is based on: bio + description
+//
+// Example 3 - Empty or Non-textual Node:
+//
+//	numbers := map[string]any{
+//		"value": 42,
+//		"count": 100,
+//		"id":    "node-123",
+//	}
+//	
+//	embedding, _ := autoEmbedder.EmbedNode(ctx, numbers)
+//	// embedding == nil (no embeddable text found)
+//
+// ELI12:
+//
+// Imagine you're creating a "smell" for a book:
+//   1. First, you read the title and main content (not page numbers or ISBN)
+//   2. Then you create a "scent profile" that represents what the book is about
+//   3. Later, you can find similar books by comparing their scents
+//
+// EmbedNode does this for data:
+//   - It reads the important text (content, description, etc.)
+//   - Creates a numerical "fingerprint" (embedding)
+//   - You can find similar nodes by comparing fingerprints
+//
+// Embeddable Properties (default):
+//   - content, description, title, name, text, summary, bio, note, body
+//
+// Ignored Properties:
+//   - Numbers (age, count, id)
+//   - Booleans (active, verified)
+//   - Technical fields (email, url, created_at)
+//
+// Thread Safety:
+//   Safe to call concurrently from multiple goroutines.
 func (ae *AutoEmbedder) EmbedNode(ctx context.Context, properties map[string]any) ([]float32, error) {
 	text := ExtractEmbeddableText(properties)
 	if text == "" {

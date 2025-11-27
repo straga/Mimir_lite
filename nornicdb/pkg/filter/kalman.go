@@ -141,6 +141,102 @@ type Kalman struct {
 }
 
 // NewKalman creates a new Kalman filter with the given configuration.
+//
+// The Kalman filter provides optimal state estimation by combining predictions
+// with noisy measurements. It's widely used in aerospace, robotics, and signal
+// processing for tracking and smoothing time-series data.
+//
+// Parameters:
+//   - cfg: Configuration parameters (use DefaultConfig() for general use)
+//
+// Returns:
+//   - *Kalman ready to process measurements
+//
+// Example 1 - Smoothing Noisy Sensor Data:
+//
+//	filter := filter.NewKalman(filter.DefaultConfig())
+//	
+//	// Simulate noisy temperature readings
+//	trueTemp := 25.0
+//	for i := 0; i < 10; i++ {
+//		// Measurement with noise
+//		noisy := trueTemp + (rand.Float64()-0.5)*2.0 // ±1°C noise
+//		
+//		filtered := filter.Process(noisy, trueTemp)
+//		fmt.Printf("Raw: %.2f°C, Filtered: %.2f°C\n", noisy, filtered)
+//	}
+//	// Filtered values are much smoother than raw readings
+//
+// Example 2 - Memory Decay Score Prediction:
+//
+//	filter := filter.NewKalman(filter.DecayPredictionConfig())
+//	
+//	// Track memory decay over time
+//	for day := 0; day < 30; day++ {
+//		// Calculate current decay score
+//		score := calculateDecayScore(memory, day)
+//		
+//		// Filter the score
+//		smoothed := filter.Process(score, 0.5) // Target: keep at 0.5
+//		
+//		// Predict score 7 days ahead
+//		predicted := filter.Predict(7)
+//		
+//		if predicted < 0.1 {
+//			fmt.Println("Memory will decay below threshold in a week!")
+//		}
+//	}
+//
+// Example 3 - Query Latency Tracking:
+//
+//	filter := filter.NewKalman(filter.DefaultConfig())
+//	
+//	// Track database query latency
+//	for {
+//		start := time.Now()
+//		executeQuery()
+//		latencyMs := time.Since(start).Milliseconds()
+//		
+//		// Smooth latency measurements
+//		smoothed := filter.Process(float64(latencyMs), 0)
+//		
+//		// Alert if smoothed latency exceeds threshold
+//		if smoothed > 100 {
+//			log.Printf("High latency detected: %.1fms", smoothed)
+//		}
+//	}
+//
+// ELI12:
+//
+// Imagine you're trying to guess your friend's bedtime by asking them every day:
+//   - Day 1: "11pm" → Your guess: 11pm
+//   - Day 2: "10pm" → Your guess: 10:30pm (average of old guess + new info)
+//   - Day 3: "11pm" → Your guess: 10:45pm (slowly adjusting)
+//
+// But sometimes they lie or make mistakes! The Kalman filter is like being
+// EXTRA smart:
+//   - If they usually say 11pm, and suddenly say "2am", you don't believe it
+//     completely (measurement noise handling)
+//   - If bedtime has been getting earlier (velocity), you predict it'll keep
+//     getting earlier
+//   - When your guess is WAY off, you trust new measurements more (error boosting)
+//
+// This makes your guess better than simple averaging!
+//
+// When to Use:
+//   - Smoothing noisy sensor data (temperature, GPS, accelerometer)
+//   - Tracking trends with predictions (decay scores, query latency)
+//   - Filtering user behavior patterns (access frequency, session length)
+//   - Real-time state estimation (object tracking, signal processing)
+//
+// Performance:
+//   - O(1) per measurement - extremely fast
+//   - No matrix operations - pure scalar math
+//   - Memory: ~200 bytes per filter
+//   - Thread-safe with mutex protection
+//
+// Thread Safety:
+//   All methods are thread-safe for concurrent access.
 func NewKalman(cfg Config) *Kalman {
 	return &Kalman{
 		x:             0,
@@ -167,14 +263,106 @@ func NewKalmanWithInitial(cfg Config, initialState float64) *Kalman {
 
 // Process updates the filter with a new measurement and optional setpoint target.
 //
+// This is the core Kalman filter update step. It combines the current prediction
+// with the new measurement to produce an optimal estimate. The filter automatically
+// adapts to measurement noise and uses velocity-based projection for prediction.
+//
 // Parameters:
-//   - measurement: The observed value
-//   - target: The desired setpoint (use 0 if no target)
+//   - measurement: The observed value at this timestep
+//   - target: The desired setpoint (use 0 if no specific target)
 //
-// Returns the filtered state estimate.
+// Returns:
+//   - Filtered state estimate (smoothed value)
 //
-// The setpoint affects error boosting: when far from target, the filter
-// becomes more responsive to new measurements (from imu-f design).
+// Example 1 - Simple Smoothing:
+//
+//	filter := filter.NewKalman(filter.DefaultConfig())
+//	
+//	measurements := []float64{10.2, 9.8, 10.5, 9.9, 10.1, 10.3}
+//	for _, m := range measurements {
+//		smoothed := filter.Process(m, 0)
+//		fmt.Printf("Raw: %.2f → Filtered: %.2f\n", m, smoothed)
+//	}
+//	// Output shows smoothed values with reduced noise
+//
+// Example 2 - With Target Setpoint:
+//
+//	filter := filter.NewKalman(filter.DefaultConfig())
+//	
+//	// Try to maintain temperature at 25°C
+//	targetTemp := 25.0
+//	for {
+//		currentTemp := readSensor()
+//		filtered := filter.Process(currentTemp, targetTemp)
+//		
+//		// When far from target, filter becomes more responsive
+//		error := targetTemp - filtered
+//		adjustHeater(error)
+//	}
+//
+// Example 3 - Real-time Anomaly Detection:
+//
+//	filter := filter.NewKalman(filter.DefaultConfig())
+//	
+//	for {
+//		value := getMetric()
+//		expected := filter.Process(value, 0)
+//		
+//		// Check if measurement deviates significantly from prediction
+//		deviation := math.Abs(value - expected)
+//		if deviation > 3*filter.Covariance() { // 3-sigma rule
+//			log.Printf("ANOMALY: Expected %.2f, got %.2f", expected, value)
+//		}
+//	}
+//
+// Example 4 - Memory Decay with Reinforcement:
+//
+//	filter := filter.NewKalman(filter.DecayPredictionConfig())
+//	targetScore := 0.6 // Want to maintain this decay score
+//	
+//	for day := 0; day < 30; day++ {
+//		score := calculateDecayScore(memory)
+//		smoothed := filter.Process(score, targetScore)
+//		
+//		// If smoothed score drops below target, reinforce the memory
+//		if smoothed < targetScore {
+//			reinforceMemory(memory)
+//		}
+//	}
+//
+// ELI12:
+//
+// Think of Process like updating your guess about the weather:
+//
+//   1. You predicted: "It'll be 70°F"
+//   2. Thermometer says: "72°F"
+//   3. You think: "My prediction was close, but I'll adjust slightly"
+//   4. New guess: "71°F" (between prediction and measurement)
+//
+// The cool part: If you said "70°F" and the thermometer says "90°F", you don't
+// immediately believe it! You think: "That's weird, maybe the thermometer is broken.
+// I'll adjust a little, but not all the way." That's measurement noise handling.
+//
+// If the temperature has been rising (velocity), you'll predict it'll keep rising.
+// That's velocity-based projection.
+//
+// The target parameter is like a goal: "I want it to be 72°F". When you're far
+// from the goal, you trust new measurements MORE to get back on track faster.
+// That's error boosting.
+//
+// How it Decides:
+//   - Far from measurement → Trust measurement more
+//   - Far from target → Trust measurement more (error boosting)
+//   - High measurement noise → Trust prediction more
+//   - Consistent trend (velocity) → Project forward
+//
+// Performance:
+//   - O(1) constant time
+//   - Pure scalar math, no allocations
+//   - Adaptive noise handling for changing conditions
+//
+// Thread Safety:
+//   Safe to call concurrently from multiple goroutines.
 func (k *Kalman) Process(measurement, target float64) float64 {
 	k.mu.Lock()
 	defer k.mu.Unlock()

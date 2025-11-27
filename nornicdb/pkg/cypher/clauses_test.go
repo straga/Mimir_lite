@@ -612,6 +612,53 @@ func TestReturnExpressions(t *testing.T) {
 	}
 }
 
+func TestReturnMathFunctions(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	e := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	tests := []struct {
+		query    string
+		expected float64
+		delta    float64
+	}{
+		{"RETURN sinh(0.7)", 0.7585837018395334, 0.001},
+		{"RETURN cosh(0.7)", 1.255169005630943, 0.001},
+		{"RETURN tanh(0.7)", 0.6043677771171636, 0.001},
+		{"RETURN coth(1)", 1.3130352854993312, 0.001},
+		{"RETURN power(2, 10)", 1024, 0.001},
+		{"RETURN power(4, 0.5)", 2, 0.001},
+		{"RETURN sin(0)", 0, 0.001},
+		{"RETURN cos(0)", 1, 0.001},
+		{"RETURN sqrt(16)", 4, 0.001},
+		{"RETURN abs(-5)", 5, 0.001},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			result, err := e.Execute(ctx, tt.query, nil)
+			if err != nil {
+				t.Fatalf("Query failed: %v", err)
+			}
+			if len(result.Rows) != 1 || len(result.Rows[0]) != 1 {
+				t.Fatalf("Expected 1 row with 1 column, got %d rows", len(result.Rows))
+			}
+			var resultF float64
+			switch v := result.Rows[0][0].(type) {
+			case float64:
+				resultF = v
+			case int64:
+				resultF = float64(v)
+			default:
+				t.Fatalf("Expected numeric result, got %T", result.Rows[0][0])
+			}
+			if resultF < tt.expected-tt.delta || resultF > tt.expected+tt.delta {
+				t.Errorf("got %v, want %v (±%v)", resultF, tt.expected, tt.delta)
+			}
+		})
+	}
+}
+
 // ========================================
 // Neo4j Vector Index Procedure Tests (CRITICAL for Mimir)
 // ========================================
@@ -2030,7 +2077,7 @@ func TestShowDatabase(t *testing.T) {
 	}
 }
 
-func TestCallDbInfo(t *testing.T) {
+func TestCallDbInfo_Basic(t *testing.T) {
 	store := storage.NewMemoryEngine()
 	defer store.Close()
 	e := NewStorageExecutor(store)
@@ -2045,7 +2092,7 @@ func TestCallDbInfo(t *testing.T) {
 	}
 }
 
-func TestCallDbPing(t *testing.T) {
+func TestCallDbPing_Basic(t *testing.T) {
 	store := storage.NewMemoryEngine()
 	defer store.Close()
 	e := NewStorageExecutor(store)
@@ -2063,7 +2110,7 @@ func TestCallDbPing(t *testing.T) {
 	}
 }
 
-func TestCallDbmsInfo(t *testing.T) {
+func TestCallDbmsInfo_Basic(t *testing.T) {
 	store := storage.NewMemoryEngine()
 	defer store.Close()
 	e := NewStorageExecutor(store)
@@ -2078,7 +2125,7 @@ func TestCallDbmsInfo(t *testing.T) {
 	}
 }
 
-func TestCallDbmsListConfig(t *testing.T) {
+func TestCallDbmsListConfig_Basic(t *testing.T) {
 	store := storage.NewMemoryEngine()
 	defer store.Close()
 	e := NewStorageExecutor(store)
@@ -2093,7 +2140,7 @@ func TestCallDbmsListConfig(t *testing.T) {
 	}
 }
 
-func TestCallDbIndexFulltextListAvailableAnalyzers(t *testing.T) {
+func TestCallDbIndexFulltextListAvailableAnalyzers_Basic(t *testing.T) {
 	store := storage.NewMemoryEngine()
 	defer store.Close()
 	e := NewStorageExecutor(store)

@@ -20,7 +20,6 @@ package cypher
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -264,7 +263,7 @@ func (e *StorageExecutor) analyzeMatchClause(query string) *PlanOperator {
 	}
 
 	// Check for variable-length path
-	if regexp.MustCompile(`\[\*\d*\.?\.\d*\]`).MatchString(query) {
+	if varLengthPathPattern.MatchString(query) {
 		return &PlanOperator{
 			OperatorType:  "VarLengthExpand",
 			Description:   "Variable length path expansion",
@@ -291,8 +290,7 @@ func (e *StorageExecutor) analyzeMatchClause(query string) *PlanOperator {
 // analyzeNodeScan determines the type of node scan needed
 func (e *StorageExecutor) analyzeNodeScan(query string) *PlanOperator {
 	// Check for label in pattern (n:Label)
-	labelRe := regexp.MustCompile(`\(\w*:(\w+)`)
-	if matches := labelRe.FindStringSubmatch(query); matches != nil {
+	if matches := labelExtractPattern.FindStringSubmatch(query); matches != nil {
 		label := matches[1]
 
 		// Check for property filter (n:Label {prop: value})
@@ -381,7 +379,7 @@ func (e *StorageExecutor) analyzeReturnClause(query string) *PlanOperator {
 	returnClause = strings.TrimSpace(returnClause)
 
 	// Check for aggregations
-	hasAggregation := regexp.MustCompile(`(?i)(COUNT|SUM|AVG|MIN|MAX|COLLECT)\s*\(`).MatchString(returnClause)
+	hasAggregation := aggregationPattern.MatchString(returnClause)
 
 	if hasAggregation {
 		return &PlanOperator{
@@ -395,7 +393,7 @@ func (e *StorageExecutor) analyzeReturnClause(query string) *PlanOperator {
 	}
 
 	// Check for DISTINCT
-	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(returnClause)), "DISTINCT") {
+	if len(returnClause) >= 8 && strings.EqualFold(strings.TrimSpace(returnClause)[:8], "DISTINCT") {
 		return &PlanOperator{
 			OperatorType:  "Distinct",
 			Description:   "Remove duplicates",
@@ -423,22 +421,18 @@ func (e *StorageExecutor) analyzeLimitSkip(query string) *PlanOperator {
 	}
 
 	// Extract LIMIT value
-	if limitRe := regexp.MustCompile(`(?i)LIMIT\s+(\d+)`); true {
-		if matches := limitRe.FindStringSubmatch(query); matches != nil {
-			op.Arguments["limit"] = matches[1]
-			op.Description = fmt.Sprintf("Limit to %s rows", matches[1])
-		}
+	if matches := limitPattern.FindStringSubmatch(query); matches != nil {
+		op.Arguments["limit"] = matches[1]
+		op.Description = fmt.Sprintf("Limit to %s rows", matches[1])
 	}
 
 	// Extract SKIP value
-	if skipRe := regexp.MustCompile(`(?i)SKIP\s+(\d+)`); true {
-		if matches := skipRe.FindStringSubmatch(query); matches != nil {
-			op.Arguments["skip"] = matches[1]
-			if op.Description != "" {
-				op.Description += fmt.Sprintf(", skip %s", matches[1])
-			} else {
-				op.Description = fmt.Sprintf("Skip %s rows", matches[1])
-			}
+	if matches := skipPattern.FindStringSubmatch(query); matches != nil {
+		op.Arguments["skip"] = matches[1]
+		if op.Description != "" {
+			op.Description += fmt.Sprintf(", skip %s", matches[1])
+		} else {
+			op.Description = fmt.Sprintf("Skip %s rows", matches[1])
 		}
 	}
 
@@ -455,8 +449,7 @@ func (e *StorageExecutor) analyzeLimitSkip(query string) *PlanOperator {
 // analyzeCallClause analyzes CALL procedure invocations
 func (e *StorageExecutor) analyzeCallClause(query string) *PlanOperator {
 	// Extract procedure name
-	callRe := regexp.MustCompile(`(?i)CALL\s+([\w.]+)`)
-	matches := callRe.FindStringSubmatch(query)
+	matches := callProcedurePattern.FindStringSubmatch(query)
 
 	procName := "unknown"
 	if matches != nil {

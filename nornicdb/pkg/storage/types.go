@@ -88,30 +88,31 @@ type EdgeID string
 
 // Node represents a graph node (vertex) in the labeled property graph.
 //
-// Nodes follow the Neo4j data model:
-//   - Unique ID
-//   - Multiple labels (type tags)
-//   - Key-value properties
-//   - Optional metadata
+// Nodes follow the Neo4j data model with NornicDB-specific extensions for
+// memory decay, semantic search, and access tracking. Nodes are the fundamental
+// entities in the graph and can represent people, documents, concepts, or any
+// other entity in your domain.
 //
-// NornicDB Extensions (stored separately, not in Neo4j export):
-//   - CreatedAt, UpdatedAt: Timestamps for auditing
-//   - DecayScore: Memory decay score (0.0-1.0)
-//   - LastAccessed: For decay calculation
-//   - AccessCount: Frequency tracking
-//   - Embedding: Vector representation for semantic search
+// Core Neo4j Fields:
+//   - ID: Unique identifier (must be unique across all nodes)
+//   - Labels: Type tags like ["Person", "User"] (Neo4j :Person:User)
+//   - Properties: Key-value data (any JSON-serializable types)
 //
-// These extensions are stored with "_" prefix when exported to Neo4j format
-// for compatibility with Neo4j's system property convention.
+// NornicDB Extensions (not exported to Neo4j):
+//   - CreatedAt: When the node was first created
+//   - UpdatedAt: Last modification timestamp
+//   - DecayScore: Memory importance (1.0=fresh, 0.0=decayed)
+//   - LastAccessed: Last time node was queried/updated
+//   - AccessCount: Total access frequency
+//   - Embedding: 1024-dim vector for semantic similarity
 //
-// Example:
+// Example 1 - Basic User Node:
 //
-//	// Create a person node
 //	node := &storage.Node{
-//		ID:     storage.NodeID("person-123"),
+//		ID:     storage.NodeID("user-alice"),
 //		Labels: []string{"Person", "User"},
 //		Properties: map[string]any{
-//			"name":     "Alice",
+//			"name":     "Alice Johnson",
 //			"age":      30,
 //			"email":    "alice@example.com",
 //			"verified": true,
@@ -120,11 +121,63 @@ type EdgeID string
 //		DecayScore:  1.0, // Fresh memory
 //		AccessCount: 0,
 //	}
+//	engine.CreateNode(node)
+//
+// Example 2 - Document Node with Metadata:
+//
+//	doc := &storage.Node{
+//		ID:     storage.NodeID("doc-readme"),
+//		Labels: []string{"Document", "Markdown"},
+//		Properties: map[string]any{
+//			"title":    "README.md",
+//			"content":  "# Welcome to...",
+//			"path":     "./README.md",
+//			"size":     4096,
+//			"language": "markdown",
+//		},
+//		CreatedAt: time.Now(),
+//		Embedding: generateEmbedding("# Welcome to..."), // For semantic search
+//	}
+//
+// Example 3 - Concept Node for Knowledge Graph:
+//
+//	concept := &storage.Node{
+//		ID:     storage.NodeID("concept-database"),
+//		Labels: []string{"Concept", "Technology"},
+//		Properties: map[string]any{
+//			"name":        "Database Systems",
+//			"definition":  "Systems for storing and retrieving data",
+//			"category":    "Software",
+//			"importance":  "high",
+//		},
+//		DecayScore:   0.95, // Slightly aged but still relevant
+//		AccessCount:  42,   // Accessed 42 times
+//		LastAccessed: time.Now().Add(-24 * time.Hour),
+//	}
+//
+// ELI12:
+//
+// Think of a Node like a character card in a trading card game:
+//   - ID: The card's unique number (no two cards have the same)
+//   - Labels: The types on the card (["Hero", "Warrior"])
+//   - Properties: Stats on the card (name: "Alice", strength: 10, health: 100)
+//
+// NornicDB adds extra info:
+//   - DecayScore: How "fresh" the card is (new cards = 1.0, old forgotten cards = 0.2)
+//   - AccessCount: How many times you've played this card
+//   - Embedding: A secret code that helps find similar cards
+//
+// Just like trading cards can be rare or common, frequently used or forgotten,
+// Nodes track their usage and importance in the graph!
 //
 // Neo4j Compatibility:
-//   Labels map to Neo4j labels (e.g., :Person:User)
-//   Properties map to Neo4j properties
-//   ID must be unique across all nodes
+//   - Labels map to Neo4j labels (e.g., :Person:User)
+//   - Properties map to Neo4j properties
+//   - ID must be unique across all nodes
+//   - Extensions stored with "_" prefix in Neo4j exports
+//
+// Thread Safety:
+//   Node structs are NOT thread-safe. The storage engine handles concurrency.
 type Node struct {
 	ID         NodeID            `json:"id"`
 	Labels     []string          `json:"labels"`
@@ -141,53 +194,101 @@ type Node struct {
 
 // Edge represents a directed graph relationship (arc) between two nodes.
 //
-// Edges follow the Neo4j relationship model:
-//   - Unique ID
-//   - Start node (source)
-//   - End node (target)
-//   - Relationship type
-//   - Properties
+// Edges are directed connections that link nodes together, representing relationships
+// like "Alice KNOWS Bob" or "Document CITES Paper". They follow the Neo4j relationship
+// model with NornicDB extensions for automatic relationship inference and confidence scoring.
+//
+// Core Neo4j Fields:
+//   - ID: Unique identifier for the relationship
+//   - StartNode: Source node ID (where the arrow starts)
+//   - EndNode: Target node ID (where the arrow points)
+//   - Type: Relationship type (e.g., "KNOWS", "FOLLOWS", "CONTAINS")
+//   - Properties: Key-value data about the relationship
 //
 // NornicDB Extensions:
-//   - CreatedAt: When relationship was created
-//   - Confidence: Confidence score for inferred relationships (0.0-1.0)
-//   - AutoGenerated: Whether relationship was auto-detected by inference engine
+//   - CreatedAt: When the relationship was created
+//   - Confidence: How certain we are this relationship exists (0.0-1.0)
+//   - AutoGenerated: True if detected by ML/inference, false if manually created
 //
-// Example:
+// Example 1 - Social Network Relationship:
 //
-//	// Manual relationship
 //	edge := &storage.Edge{
-//		ID:         storage.EdgeID("knows-1"),
+//		ID:         storage.EdgeID("friendship-123"),
 //		StartNode:  storage.NodeID("alice"),
 //		EndNode:    storage.NodeID("bob"),
 //		Type:       "KNOWS",
 //		Properties: map[string]any{
-//			"since": "2020-01-15",
+//			"since":    "2020-01-15",
 //			"strength": "close_friend",
+//			"mutuality": true,
 //		},
 //		CreatedAt:     time.Now(),
-//		Confidence:    1.0, // Manually created = certain
+//		Confidence:    1.0,  // Manually created = 100% certain
 //		AutoGenerated: false,
 //	}
+//	engine.CreateEdge(edge)
 //
-//	// Auto-detected relationship
-//	autoEdge := &storage.Edge{
-//		ID:         storage.EdgeID("relates-to-42"),
-//		StartNode:  storage.NodeID("note-1"),
-//		EndNode:    storage.NodeID("note-2"),
-//		Type:       "RELATES_TO",
-//		Confidence:    0.85, // 85% confidence
-//		AutoGenerated: true,
+// Example 2 - Document Citation:
+//
+//	citation := &storage.Edge{
+//		ID:        storage.EdgeID("cite-paper-5"),
+//		StartNode: storage.NodeID("paper-123"),
+//		EndNode:   storage.NodeID("paper-456"),
+//		Type:      "CITES",
 //		Properties: map[string]any{
-//			"reason": "High embedding similarity",
-//			"method": "similarity",
+//			"context":    "Methods section",
+//			"page":       12,
+//			"importance": "high",
+//		},
+//		CreatedAt: time.Now(),
+//		Confidence: 1.0,
+//	}
+//
+// Example 3 - Auto-Detected Semantic Relationship:
+//
+//	// NornicDB inference engine detected similarity
+//	autoEdge := &storage.Edge{
+//		ID:            storage.EdgeID("similar-42"),
+//		StartNode:     storage.NodeID("note-1"),
+//		EndNode:       storage.NodeID("note-2"),
+//		Type:          "SIMILAR_TO",
+//		Confidence:    0.87,  // 87% confidence from embedding similarity
+//		AutoGenerated: true,  // Created automatically
+//		Properties: map[string]any{
+//			"similarity":  0.87,
+//			"method":      "cosine_similarity",
+//			"detected_at": time.Now(),
+//			"reason":      "High semantic similarity in embeddings",
 //		},
 //	}
 //
+// ELI12:
+//
+// Think of an Edge like a string connecting two beads (nodes):
+//   - StartNode: The first bead (where you start)
+//   - EndNode: The second bead (where the string goes to)
+//   - Type: What kind of string? ("FRIENDS_WITH", "PARENT_OF", "LIKES")
+//   - Properties: Info about the connection ("since when?", "how strong?")
+//
+// The arrow matters! "Alice KNOWS Bob" is different from "Bob KNOWS Alice"
+// (they could both be true, but they're separate relationships).
+//
+// NornicDB's cool additions:
+//   - Confidence: "I'm 85% sure these two things are related"
+//   - AutoGenerated: "I found this connection myself!" vs "A human told me"
+//
+// Imagine your brain automatically connecting ideas: "Oh, these two notes
+// seem related!" That's what AutoGenerated edges do - the system notices
+// patterns and creates connections for you!
+//
 // Neo4j Compatibility:
-//   Type maps to Neo4j relationship type (e.g., -[:KNOWS]->)
-//   StartNode/EndNode map to Neo4j node IDs
-//   Properties map to Neo4j relationship properties
+//   - Type maps to Neo4j relationship type (e.g., -[:KNOWS]->)
+//   - StartNode/EndNode map to Neo4j node IDs
+//   - Properties map to Neo4j relationship properties
+//   - Direction is always preserved (Neo4j requirement)
+//
+// Thread Safety:
+//   Edge structs are NOT thread-safe. The storage engine handles concurrency.
 type Edge struct {
 	ID         EdgeID            `json:"id"`
 	StartNode  NodeID            `json:"startNode"`

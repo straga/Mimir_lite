@@ -125,19 +125,98 @@ type MemoryEngine struct {
 
 // NewMemoryEngine creates a new in-memory storage engine with empty indexes.
 //
-// The engine starts with no data and all indexes empty. It's immediately ready
-// for use and requires no initialization beyond this constructor.
+// This creates a fast, thread-safe, in-memory graph database perfect for testing,
+// development, and small datasets. All data is stored in RAM and lost when the
+// process exits. No disk I/O means extremely fast operations.
 //
-// Example:
+// Returns:
+//   - *MemoryEngine ready for immediate concurrent use
 //
+// Example 1 - Basic Testing:
+//
+//	func TestMyGraph(t *testing.T) {
+//		engine := storage.NewMemoryEngine()
+//		defer engine.Close()
+//		
+//		// Fast, clean test environment
+//		node := &storage.Node{
+//			ID:     storage.NodeID("test-1"),
+//			Labels: []string{"Test"},
+//			Properties: map[string]any{"value": 42},
+//		}
+//		engine.CreateNode(node)
+//		
+//		// Verify
+//		retrieved, _ := engine.GetNode(storage.NodeID("test-1"))
+//		assert.Equal(t, 42, retrieved.Properties["value"])
+//	}
+//
+// Example 2 - Loading Neo4j Export for Analysis:
+//
+//	// Load 10,000 nodes from Neo4j export into memory
 //	engine := storage.NewMemoryEngine()
 //	defer engine.Close()
+//	
+//	export := loadNeo4jExport("graph-export.json")
+//	engine.BulkCreateNodes(export.Nodes)
+//	engine.BulkCreateEdges(export.Edges)
+//	
+//	// Now analyze in memory (fast!)
+//	users, _ := engine.GetNodesByLabel("User")
+//	fmt.Printf("Loaded %d users\n", len(users))
 //
-//	// Engine is ready to use
-//	node := &storage.Node{ID: "test", Labels: []string{"Test"}}
-//	engine.CreateNode(node)
+// Example 3 - Temporary Processing Pipeline:
 //
-// Returns a new MemoryEngine ready for concurrent use.
+//	func processDocuments(docs []Document) *Graph {
+//		engine := storage.NewMemoryEngine()
+//		defer engine.Close()
+//		
+//		// Build graph in memory
+//		for _, doc := range docs {
+//			node := &storage.Node{
+//				ID:     storage.NodeID(doc.ID),
+//				Labels: []string{"Document"},
+//				Properties: map[string]any{
+//					"title":   doc.Title,
+//					"content": doc.Content,
+//				},
+//			}
+//			engine.CreateNode(node)
+//		}
+//		
+//		// Detect relationships
+//		detectRelationships(engine)
+//		
+//		// Export results
+//		return exportGraph(engine)
+//	}
+//
+// ELI12:
+//
+// Think of NewMemoryEngine like opening a new notebook:
+//   - It's completely blank and ready to write in
+//   - Everything you write stays in the notebook (RAM)
+//   - When you close the notebook (program ends), everything disappears
+//   - It's SUPER FAST because you're not saving to a hard drive
+//
+// Perfect for:
+//   - Practice and learning (mess up all you want!)
+//   - Testing your code (clean slate every test)
+//   - Quick experiments (no setup needed)
+//
+// NOT good for:
+//   - Saving important data (it disappears!)
+//   - Huge datasets (runs out of memory)
+//   - Production databases (use BadgerEngine instead)
+//
+// Memory Usage:
+//   - ~200-500 bytes per node (depends on properties)
+//   - ~100-200 bytes per edge
+//   - 10,000 nodes ≈ 2-5 MB
+//   - 100,000 nodes ≈ 20-50 MB
+//
+// Thread Safety:
+//   Safe for concurrent use from multiple goroutines.
 func NewMemoryEngine() *MemoryEngine {
 	return &MemoryEngine{
 		nodes:         make(map[NodeID]*Node),
@@ -839,6 +918,18 @@ func (m *MemoryEngine) BulkCreateNodes(nodes []*Node) error {
 		}
 	}
 
+	// Check unique constraints for all nodes BEFORE inserting any
+	// This ensures atomicity - either all nodes are inserted or none
+	for _, node := range nodes {
+		for _, label := range node.Labels {
+			for propName, propValue := range node.Properties {
+				if err := m.schema.CheckUniqueConstraint(label, propName, propValue, ""); err != nil {
+					return fmt.Errorf("constraint violation: %w", err)
+				}
+			}
+		}
+	}
+
 	// Insert all nodes
 	for _, node := range nodes {
 		stored := m.copyNode(node)
@@ -850,6 +941,13 @@ func (m *MemoryEngine) BulkCreateNodes(nodes []*Node) error {
 				m.nodesByLabel[normalLabel] = make(map[NodeID]struct{})
 			}
 			m.nodesByLabel[normalLabel][node.ID] = struct{}{}
+		}
+
+		// Register unique constraint values
+		for _, label := range node.Labels {
+			for propName, propValue := range node.Properties {
+				m.schema.RegisterUniqueValue(label, propName, propValue, node.ID)
+			}
 		}
 	}
 

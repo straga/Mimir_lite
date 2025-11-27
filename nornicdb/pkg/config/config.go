@@ -277,6 +277,175 @@ type FeatureFlagsConfig struct {
 //
 // Returns a fully populated Config with defaults applied where environment
 // variables are not set.
+//
+// Example 1 - Basic Development Setup:
+//
+//	// No environment variables set - use defaults
+//	config := config.LoadFromEnv()
+//	
+//	// Auth disabled by default (NEO4J_AUTH=none)
+//	fmt.Printf("Auth enabled: %v\n", config.Auth.Enabled) // false
+//	
+//	// Bolt server on default port
+//	fmt.Printf("Bolt: %s:%d\n",
+//		config.Server.BoltAddress, config.Server.BoltPort) // 0.0.0.0:7687
+//	
+//	// Memory decay enabled by default
+//	fmt.Printf("Decay enabled: %v\n", config.Memory.DecayEnabled) // true
+//
+// Example 2 - Production with Authentication:
+//
+//	// Set environment variables
+//	os.Setenv("NEO4J_AUTH", "admin/SecurePassword123!")
+//	os.Setenv("NEO4J_dbms_connector_bolt_listen__address_port", "7687")
+//	os.Setenv("NORNICDB_AUTH_JWT_SECRET", "your-32-char-secret-key-here!!")
+//	os.Setenv("NORNICDB_AUDIT_ENABLED", "true")
+//	
+//	config := config.LoadFromEnv()
+//	
+//	// Validate before use
+//	if err := config.Validate(); err != nil {
+//		log.Fatal("Invalid config:", err)
+//	}
+//	
+//	// Auth now enabled
+//	fmt.Printf("Admin: %s\n", config.Auth.InitialUsername) // admin
+//	fmt.Printf("Audit: %s\n", config.Compliance.AuditLogPath)
+//
+// Example 3 - Docker Compose Setup:
+//
+//	# docker-compose.yml
+//	services:
+//	  nornicdb:
+//	    image: nornicdb:latest
+//	    environment:
+//	      - NEO4J_AUTH=neo4j/password
+//	      - NEO4J_dbms_directories_data=/data
+//	      - NORNICDB_MEMORY_DECAY_ENABLED=true
+//	      - NORNICDB_EMBEDDING_PROVIDER=ollama
+//	      - NORNICDB_EMBEDDING_API_URL=http://ollama:11434
+//	      - NORNICDB_AUDIT_ENABLED=true
+//	      - NORNICDB_AUDIT_LOG_PATH=/logs/audit.log
+//	    volumes:
+//	      - nornicdb-data:/data
+//	      - nornicdb-logs:/logs
+//	    ports:
+//	      - "7687:7687"
+//	      - "7474:7474"
+//	
+//	// In application code
+//	config := config.LoadFromEnv()
+//	// All environment variables automatically loaded
+//
+// Example 4 - HIPAA Compliance Configuration:
+//
+//	// Set HIPAA-required environment variables
+//	os.Setenv("NEO4J_AUTH", "admin/ComplexPassword123!")
+//	os.Setenv("NORNICDB_AUTH_TOKEN_EXPIRY", "4h")
+//	os.Setenv("NORNICDB_AUDIT_ENABLED", "true")
+//	os.Setenv("NORNICDB_AUDIT_RETENTION_DAYS", "2555") // 7 years
+//	os.Setenv("NORNICDB_ENCRYPTION_AT_REST", "true")
+//	os.Setenv("NORNICDB_ENCRYPTION_IN_TRANSIT", "true")
+//	os.Setenv("NORNICDB_MAX_FAILED_LOGINS", "3")
+//	os.Setenv("NORNICDB_LOCKOUT_DURATION", "30m")
+//	os.Setenv("NORNICDB_SESSION_TIMEOUT", "15m")
+//	
+//	config := config.LoadFromEnv()
+//	
+//	// Verify HIPAA requirements met
+//	if !config.Compliance.AuditEnabled {
+//		log.Fatal("HIPAA requires audit logging")
+//	}
+//	if config.Compliance.AuditRetentionDays < 2555 {
+//		log.Fatal("HIPAA requires 7-year audit retention")
+//	}
+//
+// Example 5 - Multi-Environment Setup:
+//
+//	// Load from .env file first
+//	err := godotenv.Load(".env." + os.Getenv("ENV"))
+//	if err != nil {
+//		log.Printf("No .env file: %v", err)
+//	}
+//	
+//	// Then load from environment
+//	config := config.LoadFromEnv()
+//	
+//	// Override for specific environment
+//	switch os.Getenv("ENV") {
+//	case "production":
+//		if !config.Auth.Enabled {
+//			log.Fatal("Production requires authentication!")
+//		}
+//	case "development":
+//		config.Logging.Level = "DEBUG"
+//	case "test":
+//		config.Database.DataDir = os.TempDir()
+//	}
+//
+// ELI12:
+//
+// Think of LoadFromEnv like reading a recipe from sticky notes on your fridge:
+//
+//   - Each sticky note is an environment variable (e.g., "PORT=7687")
+//   - If there's no sticky note, use the default ("PORT not found? Use 7687")
+//   - The function reads ALL the sticky notes and builds a complete recipe
+//
+// Why use environment variables?
+//   1. Security: Keep secrets out of code (passwords, API keys)
+//   2. Flexibility: Change settings without recompiling
+//   3. Docker-friendly: Easy to configure containers
+//   4. 12-Factor App: Industry best practice
+//
+// Neo4j Compatibility:
+//   - NEO4J_AUTH format: "username/password" or "none"
+//   - NEO4J_dbms_* settings match Neo4j exactly
+//   - Tools like Neo4j Desktop work out of the box
+//
+// Common Environment Variables:
+//
+//   Authentication:
+//   - NEO4J_AUTH="neo4j/password" (enable auth)
+//   - NEO4J_AUTH="none" (disable auth, dev only)
+//   - NORNICDB_AUTH_JWT_SECRET="..." (32+ chars)
+//
+//   Network:
+//   - NEO4J_dbms_connector_bolt_listen__address_port=7687
+//   - NEO4J_dbms_connector_http_listen__address_port=7474
+//
+//   Storage:
+//   - NEO4J_dbms_directories_data="./data"
+//   - NEO4J_dbms_default__database="nornicdb"
+//
+//   Memory (NornicDB-specific):
+//   - NORNICDB_MEMORY_DECAY_ENABLED=true
+//   - NORNICDB_EMBEDDING_PROVIDER=ollama
+//   - NORNICDB_EMBEDDING_MODEL=mxbai-embed-large
+//
+//   Compliance:
+//   - NORNICDB_AUDIT_ENABLED=true
+//   - NORNICDB_AUDIT_RETENTION_DAYS=2555
+//   - NORNICDB_ENCRYPTION_AT_REST=true
+//
+// Configuration Priority:
+//   1. Environment variables (highest)
+//   2. Default values (if env var not set)
+//   3. No config files (environment-only by design)
+//
+// Validation:
+//   Always call config.Validate() after LoadFromEnv() to catch errors:
+//   - Missing required fields
+//   - Invalid values (negative numbers, bad formats)
+//   - Conflicting settings
+//
+// Performance:
+//   - O(n) where n = number of environment variables
+//   - Typically <1ms to load full configuration
+//   - Config is loaded once at startup
+//
+// Thread Safety:
+//   LoadFromEnv reads environment variables which are process-global and
+//   should not be modified after startup. The returned Config is immutable.
 func LoadFromEnv() *Config {
 	config := &Config{}
 

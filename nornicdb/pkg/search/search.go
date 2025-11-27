@@ -225,6 +225,74 @@ type Service struct {
 //	}
 //
 // Returns a new Service ready for indexing and searching.
+//
+// Example 1 - Basic Setup:
+//
+//	engine := storage.NewMemoryEngine()
+//	svc := search.NewService(engine)
+//	defer svc.Close()
+//	
+//	// Build indexes from existing nodes
+//	if err := svc.BuildIndexes(ctx); err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	// Now ready to search
+//	results, _ := svc.Search(ctx, "machine learning", nil, nil)
+//
+// Example 2 - With Embedder Integration:
+//
+//	engine := storage.NewBadgerEngine("./data")
+//	svc := search.NewService(engine)
+//	
+//	// Create embedder
+//	embedder := embed.NewOllama(embed.DefaultOllamaConfig())
+//	
+//	// Index documents with embeddings
+//	for _, doc := range documents {
+//		node := &storage.Node{
+//			ID: storage.NodeID(doc.ID),
+//			Labels: []string{"Document"},
+//			Properties: map[string]any{
+//				"title":   doc.Title,
+//				"content": doc.Content,
+//			},
+//			Embedding: embedder.Embed(ctx, doc.Content),
+//		}
+//		engine.CreateNode(node)
+//		svc.IndexNode(node)
+//	}
+//
+// Example 3 - Real-time Indexing:
+//
+//	svc := search.NewService(engine)
+//	
+//	// Index as nodes are created
+//	onCreate := func(node *storage.Node) {
+//		if err := svc.IndexNode(node); err != nil {
+//			log.Printf("Index failed: %v", err)
+//		}
+//	}
+//	
+//	// Hook into storage engine
+//	engine.OnNodeCreate(onCreate)
+//
+// ELI12:
+//
+// Think of NewService like building a library with two special catalogs:
+//   1. A "similarity catalog" (vector index) - finds books that are LIKE what you want
+//   2. A "keyword catalog" (fulltext index) - finds books with specific words
+//
+// When you search, the library assistant checks BOTH catalogs and shows you
+// the books that appear in both lists first. That's hybrid search!
+//
+// Performance:
+//   - Vector index: HNSW algorithm, O(log n) search
+//   - Fulltext index: Inverted index, O(k + m) where k = unique terms, m = matches
+//   - Memory: ~4KB per 1000-dim embedding + ~500 bytes per document
+//
+// Thread Safety:
+//   Safe for concurrent searches from multiple goroutines.
 func NewService(engine storage.Engine) *Service {
 	return &Service{
 		engine:        engine,

@@ -168,6 +168,85 @@ type EvidenceStats struct {
 }
 
 // NewEvidenceBuffer creates a new evidence buffer with default thresholds.
+//
+// The evidence buffer accumulates "signals" about potential relationships before
+// materializing them as actual edges in the graph. This prevents creating edges
+// from single weak signals and ensures only well-supported relationships exist.
+//
+// Returns:
+//   - *EvidenceBuffer with default thresholds for all edge types
+//
+// Default Thresholds:
+//   - RELATED_TO: 3 occurrences, score 0.3, 2 sessions
+//   - SIMILAR_TO: 2 occurrences, score 0.5, 1 session
+//   - REFERENCES: 2 occurrences, score 0.4, 1 session
+//
+// Example 1 - Basic Usage:
+//
+//	buffer := inference.NewEvidenceBuffer()
+//	
+//	// Add signals as they occur
+//	buffer.AddEvidence("doc-1", "doc-2", "RELATED_TO", 0.8, "cosine_similarity", "session-123")
+//	buffer.AddEvidence("doc-1", "doc-2", "RELATED_TO", 0.7, "co_occurrence", "session-123")
+//	
+//	// Third signal crosses threshold
+//	shouldCreate := buffer.AddEvidence("doc-1", "doc-2", "RELATED_TO", 0.9, "user_link", "session-456")
+//	if shouldCreate {
+//		// Create actual edge in graph
+//		createEdge("doc-1", "doc-2", "RELATED_TO")
+//	}
+//
+// Example 2 - Integration with Inference Engine:
+//
+//	buffer := inference.NewEvidenceBuffer()
+//	engine := inference.New(inference.DefaultConfig())
+//	engine.SetEvidenceBuffer(buffer)
+//	
+//	// Engine automatically accumulates evidence
+//	engine.OnAccess("doc-1", "doc-2", 0.85, "access_pattern")
+//	engine.OnAccess("doc-1", "doc-2", 0.90, "semantic_similarity")
+//	engine.OnAccess("doc-1", "doc-2", 0.75, "temporal_proximity")
+//	
+//	// Periodically check for materializable edges
+//	ready := buffer.GetReadyToMaterialize()
+//	for _, evidence := range ready {
+//		createEdge(evidence.Key.Src, evidence.Key.Dst, evidence.Key.Label)
+//	}
+//
+// Example 3 - Custom Thresholds:
+//
+//	// For stricter requirements
+//	buffer := inference.NewEvidenceBuffer()
+//	buffer.SetThreshold("COLLABORATES_WITH", inference.EvidenceThreshold{
+//		MinCount:    5,     // Need 5 signals
+//		MinScore:    2.5,   // Total score >= 2.5
+//		MinSessions: 3,     // Across 3+ sessions
+//	})
+//
+// ELI12:
+//
+// Think of the evidence buffer like a "voting box" for potential friendships:
+//
+//   - Alice and Bob work together → +1 vote, "coworker" ballot
+//   - They chat during lunch → +1 vote, "social" ballot
+//   - They're in same project → +1 vote, "project" ballot
+//
+// Once they get 3 votes (threshold), we officially mark them as friends!
+// This prevents marking people as friends after just ONE interaction.
+//
+// Real-world Use Cases:
+//   - Document similarity (don't link after one keyword match)
+//   - User behavior patterns (need repeated evidence)
+//   - Recommendation engines (confidence from multiple signals)
+//   - Knowledge graph construction (verify relationships)
+//
+// Performance:
+//   - O(1) evidence addition
+//   - Memory: ~100-200 bytes per evidence entry
+//   - Automatic cleanup of expired/materialized entries
+//
+// Thread Safety:
+//   All methods are thread-safe for concurrent access.
 func NewEvidenceBuffer() *EvidenceBuffer {
 	return &EvidenceBuffer{
 		entries:    make(map[string]*Evidence),

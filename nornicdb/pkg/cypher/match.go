@@ -6,7 +6,6 @@ package cypher
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -131,6 +130,11 @@ func (e *StorageExecutor) executeMatch(ctx context.Context, cypher string) (*Exe
 		return nil, fmt.Errorf("storage error: %w", err)
 	}
 
+	// Apply property filter from MATCH pattern (e.g., {name: 'Alice'})
+	if len(nodePattern.properties) > 0 {
+		nodes = e.filterNodesByProperties(nodes, nodePattern.properties)
+	}
+
 	// Apply WHERE filter if present
 	if whereIdx > 0 {
 		// Find end of WHERE clause (before RETURN)
@@ -218,13 +222,7 @@ func (e *StorageExecutor) executeMatch(ctx context.Context, cypher string) (*Exe
 // executeAggregation handles aggregate functions (COUNT, SUM, AVG, etc.)
 // with implicit GROUP BY for non-aggregated columns (Neo4j compatible)
 func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable string, items []returnItem, result *ExecuteResult) (*ExecuteResult, error) {
-	// Case-insensitive regex patterns for aggregation functions
-	countPropRe := regexp.MustCompile(`(?i)COUNT\((\w+)\.(\w+)\)`)
-	sumRe := regexp.MustCompile(`(?i)SUM\((\w+)\.(\w+)\)`)
-	avgRe := regexp.MustCompile(`(?i)AVG\((\w+)\.(\w+)\)`)
-	minRe := regexp.MustCompile(`(?i)MIN\((\w+)\.(\w+)\)`)
-	maxRe := regexp.MustCompile(`(?i)MAX\((\w+)\.(\w+)\)`)
-	collectRe := regexp.MustCompile(`(?i)COLLECT\((\w+)(?:\.(\w+))?\)`)
+	// Use pre-compiled case-insensitive regex patterns for aggregation functions
 
 	// Identify which columns are aggregations and which are grouping keys
 	type colInfo struct {
@@ -263,7 +261,7 @@ func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable str
 
 	// If no grouping columns OR no nodes, return single aggregated row (old behavior)
 	if !hasGrouping || len(nodes) == 0 {
-		return e.executeAggregationSingleGroup(nodes, variable, items, result, countPropRe, sumRe, avgRe, minRe, maxRe, collectRe)
+		return e.executeAggregationSingleGroup(nodes, variable, items, result)
 	}
 
 	// Group nodes by the non-aggregated column values
@@ -313,7 +311,7 @@ func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable str
 					row[i] = int64(len(groupNodes))
 				} else {
 					// COUNT(n.property) - count non-null values
-					propMatch := countPropRe.FindStringSubmatch(item.expr)
+					propMatch := countPropPattern.FindStringSubmatch(item.expr)
 					if len(propMatch) == 3 {
 						count := int64(0)
 						for _, node := range groupNodes {
@@ -328,7 +326,7 @@ func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable str
 				}
 
 			case strings.HasPrefix(upperExpr, "SUM("):
-				propMatch := sumRe.FindStringSubmatch(item.expr)
+				propMatch := sumPropPattern.FindStringSubmatch(item.expr)
 				if len(propMatch) == 3 {
 					sum := float64(0)
 					for _, node := range groupNodes {
@@ -344,7 +342,7 @@ func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable str
 				}
 
 			case strings.HasPrefix(upperExpr, "AVG("):
-				propMatch := avgRe.FindStringSubmatch(item.expr)
+				propMatch := avgPropPattern.FindStringSubmatch(item.expr)
 				if len(propMatch) == 3 {
 					sum := float64(0)
 					count := 0
@@ -366,7 +364,7 @@ func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable str
 				}
 
 			case strings.HasPrefix(upperExpr, "MIN("):
-				propMatch := minRe.FindStringSubmatch(item.expr)
+				propMatch := minPropPattern.FindStringSubmatch(item.expr)
 				if len(propMatch) == 3 {
 					var min *float64
 					for _, node := range groupNodes {
@@ -389,7 +387,7 @@ func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable str
 				}
 
 			case strings.HasPrefix(upperExpr, "MAX("):
-				propMatch := maxRe.FindStringSubmatch(item.expr)
+				propMatch := maxPropPattern.FindStringSubmatch(item.expr)
 				if len(propMatch) == 3 {
 					var max *float64
 					for _, node := range groupNodes {
@@ -412,7 +410,7 @@ func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable str
 				}
 
 			case strings.HasPrefix(upperExpr, "COLLECT("):
-				propMatch := collectRe.FindStringSubmatch(item.expr)
+				propMatch := collectPropPattern.FindStringSubmatch(item.expr)
 				collected := make([]interface{}, 0)
 				if len(propMatch) >= 2 {
 					for _, node := range groupNodes {
@@ -442,13 +440,10 @@ func (e *StorageExecutor) executeAggregation(nodes []*storage.Node, variable str
 }
 
 // executeAggregationSingleGroup handles aggregation without grouping (original behavior)
-func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, variable string, items []returnItem, result *ExecuteResult,
-	countPropRe, sumRe, avgRe, minRe, maxRe, collectRe *regexp.Regexp) (*ExecuteResult, error) {
+func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, variable string, items []returnItem, result *ExecuteResult) (*ExecuteResult, error) {
 	row := make([]interface{}, len(items))
 
-	// Additional regex for COUNT(DISTINCT n.property) and COLLECT(DISTINCT n.property)
-	countDistinctPropRe := regexp.MustCompile(`(?i)COUNT\(\s*DISTINCT\s+(\w+)\.(\w+)\)`)
-	collectDistinctPropRe := regexp.MustCompile(`(?i)COLLECT\(\s*DISTINCT\s+(\w+)\.(\w+)\)`)
+	// Use pre-compiled regex patterns from regex_patterns.go
 
 	for i, item := range items {
 		upperExpr := strings.ToUpper(item.expr)
@@ -456,11 +451,11 @@ func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, v
 		switch {
 		// Handle SUM() + SUM() arithmetic expressions first
 		case strings.Contains(upperExpr, "+") && strings.Contains(upperExpr, "SUM("):
-			row[i] = e.evaluateSumArithmetic(item.expr, nodes, variable, sumRe)
+			row[i] = e.evaluateSumArithmetic(item.expr, nodes, variable)
 
 		// Handle COUNT(DISTINCT n.property)
 		case strings.HasPrefix(upperExpr, "COUNT(") && strings.Contains(upperExpr, "DISTINCT"):
-			propMatch := countDistinctPropRe.FindStringSubmatch(item.expr)
+			propMatch := countDistinctPropPattern.FindStringSubmatch(item.expr)
 			if len(propMatch) == 3 {
 				seen := make(map[interface{}]bool)
 				for _, node := range nodes {
@@ -478,7 +473,7 @@ func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, v
 			if strings.Contains(upperExpr, "*") || strings.Contains(upperExpr, "("+strings.ToUpper(variable)+")") {
 				row[i] = int64(len(nodes))
 			} else {
-				propMatch := countPropRe.FindStringSubmatch(item.expr)
+				propMatch := countPropPattern.FindStringSubmatch(item.expr)
 				if len(propMatch) == 3 {
 					count := int64(0)
 					for _, node := range nodes {
@@ -493,7 +488,7 @@ func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, v
 			}
 
 		case strings.HasPrefix(upperExpr, "SUM("):
-			propMatch := sumRe.FindStringSubmatch(item.expr)
+			propMatch := sumPropPattern.FindStringSubmatch(item.expr)
 			if len(propMatch) == 3 {
 				sum := float64(0)
 				for _, node := range nodes {
@@ -509,7 +504,7 @@ func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, v
 			}
 
 		case strings.HasPrefix(upperExpr, "AVG("):
-			propMatch := avgRe.FindStringSubmatch(item.expr)
+			propMatch := avgPropPattern.FindStringSubmatch(item.expr)
 			if len(propMatch) == 3 {
 				sum := float64(0)
 				count := 0
@@ -531,7 +526,7 @@ func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, v
 			}
 
 		case strings.HasPrefix(upperExpr, "MIN("):
-			propMatch := minRe.FindStringSubmatch(item.expr)
+			propMatch := minPropPattern.FindStringSubmatch(item.expr)
 			if len(propMatch) == 3 {
 				var min *float64
 				for _, node := range nodes {
@@ -554,7 +549,7 @@ func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, v
 			}
 
 		case strings.HasPrefix(upperExpr, "MAX("):
-			propMatch := maxRe.FindStringSubmatch(item.expr)
+			propMatch := maxPropPattern.FindStringSubmatch(item.expr)
 			if len(propMatch) == 3 {
 				var max *float64
 				for _, node := range nodes {
@@ -578,7 +573,7 @@ func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, v
 
 		// Handle COLLECT(DISTINCT n.property)
 		case strings.HasPrefix(upperExpr, "COLLECT(") && strings.Contains(upperExpr, "DISTINCT"):
-			propMatch := collectDistinctPropRe.FindStringSubmatch(item.expr)
+			propMatch := collectDistinctPropPattern.FindStringSubmatch(item.expr)
 			seen := make(map[interface{}]bool)
 			collected := make([]interface{}, 0)
 			if len(propMatch) == 3 {
@@ -594,7 +589,7 @@ func (e *StorageExecutor) executeAggregationSingleGroup(nodes []*storage.Node, v
 			row[i] = collected
 
 		case strings.HasPrefix(upperExpr, "COLLECT("):
-			propMatch := collectRe.FindStringSubmatch(item.expr)
+			propMatch := collectPropPattern.FindStringSubmatch(item.expr)
 			collected := make([]interface{}, 0)
 			if len(propMatch) >= 2 {
 				for _, node := range nodes {
@@ -708,6 +703,11 @@ func (e *StorageExecutor) executeMatchWithClause(ctx context.Context, cypher str
 	}
 	if err != nil {
 		return nil, fmt.Errorf("storage error: %w", err)
+	}
+
+	// Apply property filter from MATCH pattern (e.g., {name: 'Alice'})
+	if len(nodePattern.properties) > 0 {
+		nodes = e.filterNodesByProperties(nodes, nodePattern.properties)
 	}
 
 	// Extract WITH clause expressions
@@ -886,7 +886,8 @@ func (e *StorageExecutor) executeMatchWithClause(ctx context.Context, cypher str
 }
 
 // evaluateSumArithmetic handles expressions like SUM(n.a) + SUM(n.b)
-func (e *StorageExecutor) evaluateSumArithmetic(expr string, nodes []*storage.Node, variable string, sumRe *regexp.Regexp) float64 {
+// Uses pre-compiled sumPropPattern from regex_patterns.go
+func (e *StorageExecutor) evaluateSumArithmetic(expr string, nodes []*storage.Node, variable string) float64 {
 	// Split by + and - operators (respecting parentheses)
 	parts := splitArithmeticExpression(expr)
 	result := float64(0)
@@ -908,7 +909,7 @@ func (e *StorageExecutor) evaluateSumArithmetic(expr string, nodes []*storage.No
 		upperPart := strings.ToUpper(part)
 
 		if strings.HasPrefix(upperPart, "SUM(") {
-			propMatch := sumRe.FindStringSubmatch(part)
+			propMatch := sumPropPattern.FindStringSubmatch(part)
 			if len(propMatch) == 3 {
 				for _, node := range nodes {
 					if val, exists := node.Properties[propMatch[2]]; exists {
@@ -969,6 +970,34 @@ func splitArithmeticExpression(expr string) []string {
 	}
 
 	return parts
+}
+
+// filterNodesByProperties filters nodes to only include those matching ALL specified properties.
+// This is used for MATCH pattern property filtering like MATCH (n:Label {prop: value}).
+func (e *StorageExecutor) filterNodesByProperties(nodes []*storage.Node, props map[string]interface{}) []*storage.Node {
+	if len(props) == 0 {
+		return nodes
+	}
+
+	var result []*storage.Node
+	for _, node := range nodes {
+		matches := true
+		for key, expectedVal := range props {
+			actualVal, exists := node.Properties[key]
+			if !exists {
+				matches = false
+				break
+			}
+			if !e.compareEqual(actualVal, expectedVal) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			result = append(result, node)
+		}
+	}
+	return result
 }
 
 // executeCreate handles CREATE queries.

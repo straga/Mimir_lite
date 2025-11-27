@@ -19,7 +19,7 @@ func TestShortestPathCypher(t *testing.T) {
 	exec.Execute(ctx, `CREATE (b:Person {name: 'Bob'})`, nil)
 	exec.Execute(ctx, `CREATE (c:Person {name: 'Carol'})`, nil)
 	exec.Execute(ctx, `CREATE (d:Person {name: 'Dave'})`, nil)
-	
+
 	// Create relationships using MATCH...CREATE
 	exec.Execute(ctx, `MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)`, nil)
 	exec.Execute(ctx, `MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Carol'}) CREATE (b)-[:KNOWS]->(c)`, nil)

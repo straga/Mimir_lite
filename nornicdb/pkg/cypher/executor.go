@@ -116,6 +116,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/orneryd/nornicdb/pkg/storage"
 )
@@ -157,8 +158,10 @@ import (
 //
 //	The executor is thread-safe and can handle concurrent queries.
 type StorageExecutor struct {
-	parser  *Parser
-	storage storage.Engine
+	parser    *Parser
+	storage   storage.Engine
+	txContext *TransactionContext // Active transaction context
+	cache     *QueryCache         // Query result cache
 }
 
 // NewStorageExecutor creates a new Cypher executor with the given storage backend.
@@ -184,6 +187,7 @@ func NewStorageExecutor(store storage.Engine) *StorageExecutor {
 	return &StorageExecutor{
 		parser:  NewParser(),
 		storage: store,
+		cache:   NewQueryCache(1000), // Cache up to 1000 query results
 	}
 }
 
@@ -258,6 +262,27 @@ func (e *StorageExecutor) Execute(ctx context.Context, cypher string, params map
 	// Substitute parameters
 	cypher = e.substituteParams(cypher, params)
 
+	// Check if query is read-only and cacheable
+	upperQuery := strings.ToUpper(cypher)
+	isReadOnly := strings.HasPrefix(upperQuery, "MATCH") ||
+		strings.HasPrefix(upperQuery, "CALL DB.") ||
+		strings.HasPrefix(upperQuery, "SHOW") ||
+		strings.HasPrefix(upperQuery, "EXPLAIN") ||
+		strings.HasPrefix(upperQuery, "PROFILE") ||
+		strings.HasPrefix(upperQuery, "RETURN")
+
+	// Try cache for read-only queries
+	if isReadOnly && e.cache != nil {
+		if cached, found := e.cache.Get(cypher, params); found {
+			return cached, nil
+		}
+	}
+
+	// Check for transaction control statements FIRST
+	if result, err := e.parseTransactionStatement(cypher); result != nil || err != nil {
+		return result, err
+	}
+
 	// Check for EXPLAIN/PROFILE execution modes
 	mode, innerQuery := parseExecutionMode(cypher)
 	if mode == ModeExplain {
@@ -267,45 +292,122 @@ func (e *StorageExecutor) Execute(ctx context.Context, cypher string, params map
 		return e.executeProfile(ctx, innerQuery)
 	}
 
-	// Route to appropriate handler based on query type
-	upperQuery := strings.ToUpper(cypher)
+	// If in explicit transaction, execute within it
+	if e.txContext != nil && e.txContext.active {
+		return e.executeInTransaction(ctx, cypher, upperQuery)
+	}
 
+	// Otherwise, auto-commit single query (implicit transaction)
+	// This maintains Neo4j compatibility: single queries are atomic
+	result, err := e.executeImplicit(ctx, cypher, upperQuery)
+
+	// Cache successful read-only queries
+	if err == nil && isReadOnly && e.cache != nil {
+		// Determine TTL based on query type
+		ttl := 60 * time.Second // Default: 60s for data queries
+		if strings.Contains(upperQuery, "CALL DB.") || strings.Contains(upperQuery, "SHOW") {
+			ttl = 300 * time.Second // 5 minutes for schema queries
+		}
+		e.cache.Put(cypher, params, result, ttl)
+	}
+
+	// Invalidate cache on write operations
+	if !isReadOnly && e.cache != nil {
+		e.cache.Invalidate()
+	}
+
+	return result, err
+}
+
+// executeImplicit wraps a single query in an implicit transaction.
+func (e *StorageExecutor) executeImplicit(ctx context.Context, cypher string, upperQuery string) (*ExecuteResult, error) {
+	// Start implicit transaction
+	if _, err := e.handleBegin(); err != nil {
+		return nil, fmt.Errorf("implicit transaction begin failed: %w", err)
+	}
+
+	// Execute query
+	result, err := e.executeInTransaction(ctx, cypher, upperQuery)
+
+	// Auto-commit or rollback
+	if err != nil {
+		e.handleRollback()
+		return nil, err
+	}
+
+	if _, commitErr := e.handleCommit(); commitErr != nil {
+		return nil, fmt.Errorf("implicit transaction commit failed: %w", commitErr)
+	}
+
+	return result, nil
+}
+
+// executeWithoutTransaction executes query without transaction wrapping (original path).
+func (e *StorageExecutor) executeWithoutTransaction(ctx context.Context, cypher string, upperQuery string) (*ExecuteResult, error) {
+	// Route to appropriate handler based on query type
+	// upperQuery is passed in to avoid redundant conversion
+	
+	// Cache keyword checks to avoid repeated searches
+	startsWithMatch := strings.HasPrefix(upperQuery, "MATCH")
+	startsWithCreate := strings.HasPrefix(upperQuery, "CREATE")
+	startsWithMerge := strings.HasPrefix(upperQuery, "MERGE")
+	
 	// MERGE queries get special handling - they have their own ON CREATE SET / ON MATCH SET logic
-	if strings.HasPrefix(upperQuery, "MERGE") {
+	if startsWithMerge {
 		return e.executeMerge(ctx, cypher)
 	}
 
+	// Cache findKeywordIndex results for compound query detection
+	var mergeIdx, createIdx, withIdx, deleteIdx, optionalMatchIdx int = -1, -1, -1, -1, -1
+	
+	if startsWithMatch {
+		// Only search for keywords if query starts with MATCH
+		mergeIdx = findKeywordIndex(cypher, "MERGE")
+		createIdx = findKeywordIndex(cypher, "CREATE")
+		optionalMatchIdx = findKeywordIndex(cypher, "OPTIONAL MATCH")
+	} else if startsWithCreate {
+		// Only search for WITH/DELETE if query starts with CREATE
+		withIdx = findKeywordIndex(cypher, "WITH")
+		if withIdx > 0 {
+			deleteIdx = findKeywordIndex(cypher, "DELETE")
+		}
+	}
+
 	// Compound queries: MATCH ... MERGE ... (with variable references)
-	// This is more complex than simple MERGE and requires executing MATCH first
-	// Must check for MERGE with any whitespace before it (space, newline, tab)
-	if strings.HasPrefix(upperQuery, "MATCH") && findKeywordIndex(cypher, "MERGE") > 0 {
+	if startsWithMatch && mergeIdx > 0 {
 		return e.executeCompoundMatchMerge(ctx, cypher)
 	}
 
 	// Compound queries: MATCH ... CREATE ... (create relationship between matched nodes)
-	// Must check for CREATE with any whitespace before it
-	if strings.HasPrefix(upperQuery, "MATCH") && findKeywordIndex(cypher, "CREATE") > 0 {
+	if startsWithMatch && createIdx > 0 {
 		return e.executeCompoundMatchCreate(ctx, cypher)
 	}
 
 	// Compound queries: CREATE ... WITH ... DELETE (create then delete in same statement)
-	// This pattern is used for testing: CREATE (t:Test) WITH t DELETE t RETURN count(t)
-	if strings.HasPrefix(upperQuery, "CREATE") && findKeywordIndex(cypher, "WITH") > 0 && findKeywordIndex(cypher, "DELETE") > 0 {
+	if startsWithCreate && withIdx > 0 && deleteIdx > 0 {
 		return e.executeCompoundCreateWithDelete(ctx, cypher)
 	}
 
+	// Cache contains checks for DELETE
+	hasDeleteSpace := strings.Contains(upperQuery, " DELETE ")
+	hasDeleteEnd := strings.HasSuffix(upperQuery, " DELETE")
+	hasDetachDelete := strings.Contains(upperQuery, "DETACH DELETE")
+	
 	// Check for compound queries - MATCH ... DELETE, MATCH ... SET, etc.
-	// These need special handling (but not MERGE queries which handle SET internally)
-	if strings.Contains(upperQuery, " DELETE ") || strings.HasSuffix(upperQuery, " DELETE") ||
-		strings.Contains(upperQuery, "DETACH DELETE") {
+	if hasDeleteSpace || hasDeleteEnd || hasDetachDelete {
 		return e.executeDelete(ctx, cypher)
 	}
-	// Only route to executeSet if it's a MATCH ... SET or standalone SET, not ON CREATE SET / ON MATCH SET
-	// Normalize whitespace for SET detection (handle newlines/tabs before SET)
+	
+	// Normalize whitespace once for SET/REMOVE detection
 	normalizedUpper := strings.ReplaceAll(strings.ReplaceAll(upperQuery, "\n", " "), "\t", " ")
-	if strings.Contains(normalizedUpper, " SET ") &&
-		!strings.Contains(normalizedUpper, "ON CREATE SET") &&
-		!strings.Contains(normalizedUpper, "ON MATCH SET") {
+	
+	// Cache SET-related checks
+	hasSet := strings.Contains(normalizedUpper, " SET ")
+	hasOnCreateSet := strings.Contains(normalizedUpper, "ON CREATE SET")
+	hasOnMatchSet := strings.Contains(normalizedUpper, "ON MATCH SET")
+	
+	// Only route to executeSet if it's a MATCH ... SET or standalone SET
+	if hasSet && !hasOnCreateSet && !hasOnMatchSet {
 		return e.executeSet(ctx, cypher)
 	}
 
@@ -314,23 +416,22 @@ func (e *StorageExecutor) Execute(ctx context.Context, cypher string, params map
 		return e.executeRemove(ctx, cypher)
 	}
 
-	// Compound queries: MATCH ... OPTIONAL MATCH ... (left outer join pattern)
-	// This handles queries like: MATCH (f:File) OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk) WITH ... RETURN ...
-	if strings.HasPrefix(upperQuery, "MATCH") && findKeywordIndex(cypher, "OPTIONAL MATCH") > 0 {
+	// Compound queries: MATCH ... OPTIONAL MATCH ...
+	if startsWithMatch && optionalMatchIdx > 0 {
 		return e.executeCompoundMatchOptionalMatch(ctx, cypher)
 	}
 
 	switch {
 	case strings.HasPrefix(upperQuery, "OPTIONAL MATCH"):
 		return e.executeOptionalMatch(ctx, cypher)
-	case strings.HasPrefix(upperQuery, "MATCH") && isShortestPathQuery(cypher):
+	case startsWithMatch && isShortestPathQuery(cypher):
 		// Handle shortestPath() and allShortestPaths() queries
 		query, err := e.parseShortestPathQuery(cypher)
 		if err != nil {
 			return nil, err
 		}
 		return e.executeShortestPathQuery(query)
-	case strings.HasPrefix(upperQuery, "MATCH"):
+	case startsWithMatch:
 		return e.executeMatch(ctx, cypher)
 	case strings.HasPrefix(upperQuery, "CREATE CONSTRAINT"),
 		strings.HasPrefix(upperQuery, "CREATE FULLTEXT INDEX"),
@@ -338,9 +439,9 @@ func (e *StorageExecutor) Execute(ctx context.Context, cypher string, params map
 		strings.HasPrefix(upperQuery, "CREATE INDEX"):
 		// Schema commands - constraints and indexes (check more specific patterns first)
 		return e.executeSchemaCommand(ctx, cypher)
-	case strings.HasPrefix(upperQuery, "CREATE"):
+	case startsWithCreate:
 		return e.executeCreate(ctx, cypher)
-	case strings.HasPrefix(upperQuery, "DELETE"), strings.HasPrefix(upperQuery, "DETACH DELETE"):
+	case strings.HasPrefix(upperQuery, "DELETE"), hasDetachDelete:
 		return e.executeDelete(ctx, cypher)
 	case strings.HasPrefix(upperQuery, "CALL"):
 		return e.executeCall(ctx, cypher)
@@ -388,7 +489,7 @@ func (e *StorageExecutor) executeReturn(ctx context.Context, cypher string) (*Ex
 	returnClause := strings.TrimSpace(cypher[returnIdx+6:])
 
 	// Handle simple literal returns like "RETURN 1" or "RETURN true"
-	parts := strings.Split(returnClause, ",")
+	parts := splitReturnExpressions(returnClause)
 	columns := make([]string, 0, len(parts))
 	values := make([]interface{}, 0, len(parts))
 
@@ -404,6 +505,13 @@ func (e *StorageExecutor) executeReturn(ctx context.Context, cypher string) (*Ex
 		}
 
 		columns = append(columns, alias)
+
+		// Try to evaluate as a function or expression first
+		result := e.evaluateExpressionWithContext(part, nil, nil)
+		if result != nil {
+			values = append(values, result)
+			continue
+		}
 
 		// Parse literal value
 		if part == "1" || strings.HasPrefix(strings.ToLower(part), "true") {
@@ -431,6 +539,45 @@ func (e *StorageExecutor) executeReturn(ctx context.Context, cypher string) (*Ex
 		Columns: columns,
 		Rows:    [][]interface{}{values},
 	}, nil
+}
+
+// splitReturnExpressions splits RETURN expressions by comma, respecting parentheses depth
+func splitReturnExpressions(clause string) []string {
+	var parts []string
+	var current strings.Builder
+	depth := 0
+	inQuote := false
+	quoteChar := rune(0)
+
+	for _, ch := range clause {
+		switch {
+		case (ch == '\'' || ch == '"') && !inQuote:
+			inQuote = true
+			quoteChar = ch
+			current.WriteRune(ch)
+		case ch == quoteChar && inQuote:
+			inQuote = false
+			quoteChar = 0
+			current.WriteRune(ch)
+		case ch == '(' && !inQuote:
+			depth++
+			current.WriteRune(ch)
+		case ch == ')' && !inQuote:
+			depth--
+			current.WriteRune(ch)
+		case ch == ',' && depth == 0 && !inQuote:
+			parts = append(parts, current.String())
+			current.Reset()
+		default:
+			current.WriteRune(ch)
+		}
+	}
+
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+
+	return parts
 }
 
 // validateSyntax performs basic syntax validation.
@@ -527,11 +674,9 @@ func (e *StorageExecutor) substituteParams(cypher string, params map[string]inte
 		return cypher
 	}
 
-	// Use regex to find all parameter references
+	// Use pre-compiled regex to find all parameter references
 	// Parameters are: $name or $name123 (alphanumeric starting with letter)
-	paramPattern := regexp.MustCompile(`\$([a-zA-Z_][a-zA-Z0-9_]*)`)
-
-	result := paramPattern.ReplaceAllStringFunc(cypher, func(match string) string {
+	result := parameterPattern.ReplaceAllStringFunc(cypher, func(match string) string {
 		// Extract parameter name (without $)
 		paramName := match[1:]
 
@@ -773,7 +918,7 @@ func (e *StorageExecutor) evaluateSetExpression(expr string) interface{} {
 	expr = strings.TrimSpace(expr)
 
 	// Handle null
-	if strings.ToLower(expr) == "null" {
+	if strings.EqualFold(expr, "null") {
 		return nil
 	}
 
@@ -983,29 +1128,117 @@ func (e *StorageExecutor) evaluateSubstring(expr string) string {
 	return str[start:end]
 }
 
-// splitFunctionArgs splits function arguments by comma, respecting parentheses
+// splitFunctionArgs splits function arguments by comma, respecting parentheses and quotes.
+//
+// This function intelligently parses function arguments, handling:
+//   - Nested parentheses: function(a, func(b, c), d)
+//   - Quoted strings: "hello, world" treated as single argument
+//   - Escape sequences: \"escaped quote\" within strings
+//   - Mixed quotes: 'single' and "double" quotes
+//
+// Parameters:
+//   - args: The argument string to split (without outer parentheses)
+//
+// Returns:
+//   - []string: List of individual arguments, trimmed of whitespace
+//
+// Example 1 - Simple Arguments:
+//
+//	args := "name, age, email"
+//	result := executor.splitFunctionArgs(args)
+//	// result = ["name", "age", "email"]
+//
+// Example 2 - Nested Function Calls:
+//
+//	args := "toLower(n.name), toUpper(n.city)"
+//	result := executor.splitFunctionArgs(args)
+//	// result = ["toLower(n.name)", "toUpper(n.city)"]
+//	// The nested parentheses are respected
+//
+// Example 3 - Quoted Strings with Commas:
+//
+//	args := `"Hello, World", 'Test, Data', 42`
+//	result := executor.splitFunctionArgs(args)
+//	// result = ["\"Hello, World\"", "'Test, Data'", "42"]
+//	// Commas inside quotes don't split
+//
+// Example 4 - Complex Nested Case:
+//
+//	args := "n.name, count(n.id), substring(n.desc, 0, 10), 'status: active, verified'"
+//	result := executor.splitFunctionArgs(args)
+//	// result = ["n.name", "count(n.id)", "substring(n.desc, 0, 10)", "'status: active, verified'"]
+//
+// ELI12:
+//
+// Imagine you're reading a sentence: "I like pizza, pasta, and ice cream"
+// You need to split it by commas, but what if someone says:
+// "I like pizza, 'pasta, with sauce', and ice cream"
+//
+// You can't just split at every comma! The comma inside the quotes is PART of
+// the item, not a separator. This function is smart enough to know:
+//   - Commas outside quotes = split here
+//   - Commas inside quotes = keep them
+//   - Parentheses = keep everything inside together
+//
+// It's like reading with understanding, not just blindly cutting at commas.
+//
+// Use Cases:
+//   - Parsing Cypher function arguments
+//   - Splitting RETURN clause items
+//   - Processing WITH clause expressions
 func (e *StorageExecutor) splitFunctionArgs(args string) []string {
 	var result []string
 	var current strings.Builder
 	parenDepth := 0
+	inSingleQuote := false
+	inDoubleQuote := false
 
-	for _, c := range args {
+	for i := 0; i < len(args); i++ {
+		c := args[i]
 		switch c {
+		case '\'':
+			if !inDoubleQuote {
+				// Check for escape sequence
+				if i > 0 && args[i-1] == '\\' {
+					current.WriteByte(c)
+				} else {
+					inSingleQuote = !inSingleQuote
+					current.WriteByte(c)
+				}
+			} else {
+				current.WriteByte(c)
+			}
+		case '"':
+			if !inSingleQuote {
+				// Check for escape sequence
+				if i > 0 && args[i-1] == '\\' {
+					current.WriteByte(c)
+				} else {
+					inDoubleQuote = !inDoubleQuote
+					current.WriteByte(c)
+				}
+			} else {
+				current.WriteByte(c)
+			}
 		case '(':
-			parenDepth++
-			current.WriteRune(c)
+			if !inSingleQuote && !inDoubleQuote {
+				parenDepth++
+			}
+			current.WriteByte(c)
 		case ')':
-			parenDepth--
-			current.WriteRune(c)
+			if !inSingleQuote && !inDoubleQuote {
+				parenDepth--
+			}
+			current.WriteByte(c)
 		case ',':
-			if parenDepth == 0 {
+			if parenDepth == 0 && !inSingleQuote && !inDoubleQuote {
 				result = append(result, strings.TrimSpace(current.String()))
 				current.Reset()
 			} else {
-				current.WriteRune(c)
+				current.WriteByte(c)
 			}
 		default:
-			current.WriteRune(c)
+			current.WriteByte(c)
 		}
 	}
 
@@ -1026,21 +1259,23 @@ func (e *StorageExecutor) generateUUID() string {
 
 // nodeToMap converts a storage.Node to a map for result output.
 // Filters out internal properties like embeddings which are huge.
+// Properties are included at the top level for Neo4j compatibility.
 func (e *StorageExecutor) nodeToMap(node *storage.Node) map[string]interface{} {
-	// Filter out internal/large properties
-	filteredProps := make(map[string]interface{})
+	// Start with node metadata
+	result := map[string]interface{}{
+		"id":     string(node.ID),
+		"labels": node.Labels,
+	}
+
+	// Add properties at top level for Neo4j compatibility
 	for k, v := range node.Properties {
 		if e.isInternalProperty(k) {
 			continue
 		}
-		filteredProps[k] = v
+		result[k] = v
 	}
 
-	return map[string]interface{}{
-		"id":         string(node.ID),
-		"labels":     node.Labels,
-		"properties": filteredProps,
-	}
+	return result
 }
 
 // edgeToMap converts a storage.Edge to a map for result output.
@@ -1073,9 +1308,7 @@ func (e *StorageExecutor) isInternalProperty(propName string) bool {
 // extractVarName extracts the variable name from a pattern like "(n:Label {...})"
 func (e *StorageExecutor) extractVarName(pattern string) string {
 	pattern = strings.TrimSpace(pattern)
-	if strings.HasPrefix(pattern, "(") {
-		pattern = pattern[1:]
-	}
+	pattern = strings.TrimPrefix(pattern, "(")
 	// Find first : or { or )
 	for i, c := range pattern {
 		if c == ':' || c == '{' || c == ')' || c == ' ' {
@@ -1092,12 +1325,8 @@ func (e *StorageExecutor) extractVarName(pattern string) string {
 // extractLabels extracts labels from a pattern like "(n:Label1:Label2 {...})"
 func (e *StorageExecutor) extractLabels(pattern string) []string {
 	pattern = strings.TrimSpace(pattern)
-	if strings.HasPrefix(pattern, "(") {
-		pattern = pattern[1:]
-	}
-	if strings.HasSuffix(pattern, ")") {
-		pattern = pattern[:len(pattern)-1]
-	}
+	pattern = strings.TrimPrefix(pattern, "(")
+	pattern = strings.TrimSuffix(pattern, ")")
 
 	// Remove properties block
 	if propsStart := strings.Index(pattern, "{"); propsStart > 0 {
@@ -1617,7 +1846,7 @@ func (e *StorageExecutor) parsePropertyValue(valueStr string) interface{} {
 	}
 
 	// Handle null
-	if strings.ToLower(valueStr) == "null" {
+	if strings.EqualFold(valueStr, "null") {
 		return nil
 	}
 
@@ -1895,6 +2124,12 @@ func (e *StorageExecutor) evaluateWhere(node *storage.Node, variable, whereClaus
 		return e.evaluateExistsSubquery(node, variable, whereClause)
 	}
 
+	// Handle COUNT { } subquery with comparison
+	// Examples: COUNT { MATCH (n)-[:KNOWS]->(m) } > 5
+	if strings.Contains(upperClause, "COUNT {") {
+		return e.evaluateCountSubqueryComparison(node, variable, whereClause)
+	}
+
 	// Handle AND conditions (but not inside EXISTS subqueries)
 	if strings.Contains(upperClause, " AND ") && !strings.Contains(whereClause, "{") {
 		andIdx := strings.Index(upperClause, " AND ")
@@ -1952,6 +2187,47 @@ func (e *StorageExecutor) evaluateWhere(node *storage.Node, variable, whereClaus
 
 	left := strings.TrimSpace(whereClause[:opIdx])
 	right := strings.TrimSpace(whereClause[opIdx+len(op):])
+
+	// Handle id(variable) = value comparisons
+	lowerLeft := strings.ToLower(left)
+	if strings.HasPrefix(lowerLeft, "id(") && strings.HasSuffix(left, ")") {
+		// Extract variable name from id(varName)
+		idVar := strings.TrimSpace(left[3 : len(left)-1])
+		if idVar == variable {
+			// Compare node ID with expected value
+			expectedVal := e.parseValue(right)
+			actualId := string(node.ID)
+			switch op {
+			case "=":
+				return e.compareEqual(actualId, expectedVal)
+			case "<>", "!=":
+				return !e.compareEqual(actualId, expectedVal)
+			default:
+				return true
+			}
+		}
+		return true // Different variable, not our concern
+	}
+
+	// Handle elementId(variable) = value comparisons
+	if strings.HasPrefix(lowerLeft, "elementid(") && strings.HasSuffix(left, ")") {
+		// Extract variable name from elementId(varName)
+		idVar := strings.TrimSpace(left[10 : len(left)-1])
+		if idVar == variable {
+			// Compare node ID with expected value
+			expectedVal := e.parseValue(right)
+			actualId := string(node.ID)
+			switch op {
+			case "=":
+				return e.compareEqual(actualId, expectedVal)
+			case "<>", "!=":
+				return !e.compareEqual(actualId, expectedVal)
+			default:
+				return true
+			}
+		}
+		return true // Different variable, not our concern
+	}
 
 	// Extract property from left side (e.g., "n.name")
 	if !strings.HasPrefix(left, variable+".") {

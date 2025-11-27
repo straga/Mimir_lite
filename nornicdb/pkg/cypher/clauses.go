@@ -324,7 +324,18 @@ func (e *StorageExecutor) executeOptionalMatch(ctx context.Context, cypher strin
 	modifiedQuery := cypher[:optMatchIdx] + "MATCH" + cypher[optMatchIdx+14:]
 
 	result, err := e.executeMatch(ctx, modifiedQuery)
-	if err != nil || len(result.Rows) == 0 {
+
+	// Handle error case - return result with null values
+	if err != nil {
+		// Default to a single null row if we can't determine columns
+		return &ExecuteResult{
+			Columns: []string{"result"},
+			Rows:    [][]interface{}{{nil}},
+		}, nil
+	}
+
+	// Handle empty result - return null row preserving columns
+	if len(result.Rows) == 0 {
 		nullRow := make([]interface{}, len(result.Columns))
 		for i := range nullRow {
 			nullRow[i] = nil

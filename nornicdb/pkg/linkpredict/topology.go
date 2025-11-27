@@ -183,12 +183,81 @@ func BuildGraphFromEngine(ctx context.Context, engine storage.Engine, undirected
 //   - Biased toward high-degree nodes
 //   - Doesn't account for neighbor importance
 //
-// Example:
+// Example 1 - Friend Recommendations:
 //
-//	predictions := linkpredict.CommonNeighbors(graph, "user-123", 10)
+//	graph := linkpredict.BuildGraphFromEngine(ctx, engine, true)
+//	predictions := linkpredict.CommonNeighbors(graph, "alice", 5)
+//	
+//	fmt.Println("People Alice should meet:")
 //	for _, p := range predictions {
-//		fmt.Printf("→ %s: %d common neighbors\n", p.TargetID, int(p.Score))
+//		fmt.Printf("  → %s: %d mutual friends\n", p.TargetID, int(p.Score))
 //	}
+//	// Output:
+//	//   → diana: 3 mutual friends
+//	//   → emily: 2 mutual friends
+//
+// Example 2 - Research Collaboration Network:
+//
+//	// Build citation graph
+//	graph := linkpredict.BuildGraphFromEngine(ctx, engine, false)
+//	
+//	// Find potential collaborators for a researcher
+//	predictions := linkpredict.CommonNeighbors(graph, "researcher-123", 10)
+//	
+//	for _, p := range predictions {
+//		// High common neighbor count = strong collaboration potential
+//		if p.Score >= 3 {
+//			fmt.Printf("Strong collaboration signal: %s\n", p.TargetID)
+//			sendCollabInvite(p.TargetID)
+//		}
+//	}
+//
+// Example 3 - Document Clustering:
+//
+//	// Documents connected by citations or references
+//	graph := buildDocumentGraph(documents)
+//	
+//	// Find related documents
+//	predictions := linkpredict.CommonNeighbors(graph, "paper-456", 20)
+//	
+//	relatedDocs := make([]string, 0)
+//	for _, p := range predictions {
+//		if p.Score >= 2 { // At least 2 common references
+//			relatedDocs = append(relatedDocs, string(p.TargetID))
+//		}
+//	}
+//	
+//	createCluster(relatedDocs)
+//
+// ELI12:
+//
+// Imagine you're at a party and want to find new friends. Common Neighbors says:
+// "Count how many friends you have IN COMMON with each person."
+//
+//   - You and Sarah both know: Alex, Jamie, Charlie → 3 common friends
+//   - You and Mike both know: Alex → 1 common friend
+//   - Prediction: You should meet Sarah! (higher score)
+//
+// It's like Facebook's "People You May Know" - they show you people who have
+// lots of mutual friends with you, because you probably move in similar circles!
+//
+// Real-world Example:
+//   - You know: [Alice, Bob, Charlie, Diana]
+//   - Sarah knows: [Bob, Charlie, Diana, Emily]
+//   - Common: [Bob, Charlie, Diana] = 3 friends
+//   - Score: 3 (raw count)
+//
+// Pros & Cons:
+//   ✅ Simple and intuitive
+//   ✅ Works well for social networks
+//   ✅ Fast to compute
+//   ❌ Biased toward popular nodes (everyone knows them!)
+//   ❌ Doesn't normalize by total friends
+//
+// Performance:
+//   - O(|neighbors| × avg_degree) per source node
+//   - Fast for sparse graphs (most real-world graphs)
+//   - Memory: O(candidates) for score tracking
 func CommonNeighbors(graph Graph, source storage.NodeID, topK int) []Prediction {
 	neighbors, exists := graph[source]
 	if !exists {
@@ -234,12 +303,91 @@ func CommonNeighbors(graph Graph, source storage.NodeID, topK int) []Prediction 
 //   - May underweight important connections
 //   - Sensitive to degree imbalance
 //
-// Example:
+// Example 1 - Document Similarity:
 //
-//	predictions := linkpredict.Jaccard(graph, "doc-456", 20)
+//	graph := buildDocumentGraph(documents)
+//	predictions := linkpredict.Jaccard(graph, "paper-123", 10)
+//	
+//	fmt.Println("Similar documents:")
 //	for _, p := range predictions {
-//		fmt.Printf("→ %s: %.2f%% similarity\n", p.TargetID, p.Score*100)
+//		fmt.Printf("  → %s: %.1f%% overlap\n", p.TargetID, p.Score*100)
 //	}
+//	// Output:
+//	//   → paper-789: 45.2% overlap (high similarity)
+//	//   → paper-456: 12.8% overlap (moderate)
+//
+// Example 2 - Balanced Friend Recommendations:
+//
+//	graph := linkpredict.BuildGraphFromEngine(ctx, engine, true)
+//	
+//	// Jaccard normalizes for degree (better than raw common neighbors)
+//	predictions := linkpredict.Jaccard(graph, "user-123", 5)
+//	
+//	for _, p := range predictions {
+//		// 0.3 = 30% of combined neighborhood overlaps
+//		if p.Score > 0.3 {
+//			fmt.Printf("Strong match: %s (%.0f%% similar networks)\n", 
+//				p.TargetID, p.Score*100)
+//		}
+//	}
+//
+// Example 3 - Tag-Based Content Recommendation:
+//
+//	// Items connected by shared tags
+//	graph := Graph{
+//		"movie-action-1": {"action": {}, "scifi": {}, "thriller": {}},
+//		"movie-action-2": {"action": {}, "scifi": {}, "drama": {}},
+//		"movie-comedy-1": {"comedy": {}, "romance": {}},
+//	}
+//	
+//	predictions := linkpredict.Jaccard(graph, "movie-action-1", 10)
+//	
+//	for _, p := range predictions {
+//		// High Jaccard = similar tag profiles
+//		fmt.Printf("Recommend %s: %.2f similarity\n", p.TargetID, p.Score)
+//	}
+//	// movie-action-2 will rank high (2/4 = 0.5 Jaccard)
+//
+// ELI12:
+//
+// Jaccard is like comparing your playlist with a friend's:
+//
+//   Your songs: [A, B, C, D, E] = 5 songs
+//   Friend's songs: [C, D, E, F, G] = 5 songs
+//   In common: [C, D, E] = 3 songs
+//   
+//   Jaccard = 3 / (5 + 5 - 3) = 3/7 = 42.9% similar taste!
+//
+// Why subtract 3? Because C, D, E appear in BOTH lists, so we don't count
+// them twice in the total. That's the "union" part.
+//
+// Compare to Common Neighbors:
+//   - Common Neighbors: "You share 3 songs" (raw count)
+//   - Jaccard: "42.9% of your combined music overlaps" (percentage)
+//
+// Jaccard is BETTER when comparing things of different sizes:
+//   - You: 100 friends, share 10 with Alice
+//   - You: 20 friends, share 10 with Bob
+//   
+//   Common Neighbors: Both score 10 (seems equal)
+//   Jaccard: Alice = 10/110 = 9%, Bob = 10/30 = 33% (Bob is closer!)
+//
+// Real-world Use:
+//   - Content recommendation (movies, articles, products)
+//   - Duplicate detection (similar documents, profiles)
+//   - Community detection (overlapping friend groups)
+//
+// Pros & Cons:
+//   ✅ Normalized (0-1 range, comparable)
+//   ✅ Handles different network sizes fairly
+//   ✅ Standard similarity metric
+//   ❌ Sensitive to rare connections (small denominator)
+//   ❌ Slower than raw common neighbors
+//
+// Performance:
+//   - O(|N(u)| + |N(v)|) per candidate pair
+//   - Requires set intersection/union calculation
+//   - Memory: O(candidates) for tracking
 func Jaccard(graph Graph, source storage.NodeID, topK int) []Prediction {
 	neighbors, exists := graph[source]
 	if !exists {

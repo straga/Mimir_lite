@@ -17,24 +17,126 @@ import (
 	"sync"
 )
 
+// ConstraintType represents the type of constraint.
+type ConstraintType string
+
+const (
+	ConstraintUnique  ConstraintType = "UNIQUE"
+	ConstraintNodeKey ConstraintType = "NODE_KEY"
+	ConstraintExists  ConstraintType = "EXISTS"
+)
+
+// Constraint represents a Neo4j-compatible schema constraint.
+type Constraint struct {
+	Name       string
+	Type       ConstraintType
+	Label      string
+	Properties []string
+}
+
 // SchemaManager manages database schema including constraints and indexes.
 type SchemaManager struct {
 	mu sync.RWMutex
 
 	// Constraints
 	uniqueConstraints map[string]*UniqueConstraint // key: "Label:property"
+	constraints       map[string]Constraint        // key: constraint name, stores all constraint types
 
 	// Indexes
-	propertyIndexes   map[string]*PropertyIndex   // key: "Label:property" (single property)
-	compositeIndexes  map[string]*CompositeIndex  // key: index name
-	fulltextIndexes   map[string]*FulltextIndex   // key: index_name
-	vectorIndexes     map[string]*VectorIndex     // key: index_name
+	propertyIndexes  map[string]*PropertyIndex  // key: "Label:property" (single property)
+	compositeIndexes map[string]*CompositeIndex // key: index name
+	fulltextIndexes  map[string]*FulltextIndex  // key: index_name
+	vectorIndexes    map[string]*VectorIndex    // key: index_name
 }
 
-// NewSchemaManager creates a new schema manager.
+// NewSchemaManager creates a new schema manager with empty constraint and index collections.
+//
+// The schema manager provides thread-safe management of database schema including:
+//   - Unique constraints (enforce uniqueness on properties)
+//   - Node key constraints (composite unique keys)
+//   - Existence constraints (require properties to exist)
+//   - Property indexes (speed up lookups)
+//   - Vector indexes (semantic similarity search)
+//   - Full-text indexes (text search with scoring)
+//
+// Returns:
+//   - *SchemaManager ready for use
+//
+// Example 1 - Basic Usage:
+//
+//	schema := storage.NewSchemaManager()
+//	
+//	// Add unique constraint
+//	constraint := &storage.UniqueConstraint{
+//		Name:     "unique_user_email",
+//		Label:    "User",
+//		Property: "email",
+//	}
+//	schema.AddUniqueConstraint(constraint)
+//	
+//	// Validate before creating node
+//	err := schema.ValidateUnique("User", "email", "alice@example.com", "")
+//	if err != nil {
+//		log.Fatal("Email already exists!")
+//	}
+//
+// Example 2 - Multiple Constraints:
+//
+//	schema := storage.NewSchemaManager()
+//	
+//	// Email must be unique
+//	schema.AddUniqueConstraint(&storage.UniqueConstraint{
+//		Name: "unique_email", Label: "User", Property: "email",
+//	})
+//	
+//	// Username must be unique
+//	schema.AddUniqueConstraint(&storage.UniqueConstraint{
+//		Name: "unique_username", Label: "User", Property: "username",
+//	})
+//	
+//	// All users must have email property
+//	schema.AddConstraint(storage.Constraint{
+//		Name: "user_must_have_email",
+//		Type: storage.ConstraintExists,
+//		Label: "User",
+//		Properties: []string{"email"},
+//	})
+//
+// Example 3 - With Indexes for Performance:
+//
+//	schema := storage.NewSchemaManager()
+//	
+//	// Index for fast lookups
+//	schema.AddPropertyIndex(&storage.PropertyIndex{
+//		Name:       "idx_user_email",
+//		Label:      "User",
+//		Properties: []string{"email"},
+//	})
+//	
+//	// Vector index for semantic search
+//	schema.AddVectorIndex(&storage.VectorIndex{
+//		Name:       "doc_embeddings",
+//		Label:      "Document",
+//		Property:   "embedding",
+//		Dimensions: 1024,
+//	})
+//
+// ELI12:
+//
+// Think of a SchemaManager like a rule book for your database:
+//   - "Every person must have a unique name" (unique constraint)
+//   - "You can't create a person without an age" (existence constraint)
+//   - "Make a quick-lookup list for emails" (index)
+//
+// Before you add data, the SchemaManager checks: "Does this follow the rules?"
+// If yes, data goes in. If no, you get an error. It keeps your database clean!
+//
+// Thread Safety:
+//   All methods are thread-safe for concurrent access.
 func NewSchemaManager() *SchemaManager {
 	return &SchemaManager{
 		uniqueConstraints: make(map[string]*UniqueConstraint),
+		constraints:       make(map[string]Constraint),
 		propertyIndexes:   make(map[string]*PropertyIndex),
 		compositeIndexes:  make(map[string]*CompositeIndex),
 		fulltextIndexes:   make(map[string]*FulltextIndex),
@@ -68,6 +170,72 @@ type CompositeKey struct {
 }
 
 // NewCompositeKey creates a composite key from multiple property values.
+//
+// Composite keys enable uniqueness constraints and indexes on multiple properties
+// together (e.g., unique combination of firstName + lastName). The key is hashed
+// using SHA-256 for efficient map lookups while preserving the original values.
+//
+// Parameters:
+//   - values: Variable number of property values to combine
+//
+// Returns:
+//   - CompositeKey with hash for lookup and original values
+//
+// Example 1 - Unique Person Name:
+//
+//	// Ensure no two people have the same first AND last name combination
+//	key := storage.NewCompositeKey("Alice", "Johnson")
+//	// key.Hash = "a1b2c3..." (SHA-256)
+//	// key.Values = ["Alice", "Johnson"]
+//	
+//	// Can store in map for O(1) lookup
+//	uniqueKeys := make(map[string]bool)
+//	uniqueKeys[key.Hash] = true
+//
+// Example 2 - Multi-Column Unique Constraint:
+//
+//	// Email + domain must be unique together
+//	key1 := storage.NewCompositeKey("user", "example.com")
+//	key2 := storage.NewCompositeKey("user", "different.com")
+//	// key1.Hash != key2.Hash (different combinations)
+//	
+//	key3 := storage.NewCompositeKey("user", "example.com")
+//	// key3.Hash == key1.Hash (same combination)
+//
+// Example 3 - Geographic Uniqueness:
+//
+//	// Store locations - no duplicate (lat, lon) pairs
+//	locations := make(map[string]storage.NodeID)
+//	
+//	loc1 := storage.NewCompositeKey(40.7128, -74.0060) // NYC
+//	locations[loc1.Hash] = storage.NodeID("loc-nyc")
+//	
+//	loc2 := storage.NewCompositeKey(40.7128, -74.0060) // Same coords
+//	if _, exists := locations[loc2.Hash]; exists {
+//		fmt.Println("Location already exists!")
+//	}
+//
+// ELI12:
+//
+// Imagine you're making sure no two people in your class have the SAME
+// full name (first + last together):
+//
+//   - Alice Smith → Create a "fingerprint" (hash) from "Alice" + "Smith"
+//   - Bob Johnson → Different fingerprint
+//   - Alice Smith → SAME fingerprint as the first Alice Smith!
+//
+// The hash is like a unique barcode for the combination. If two combinations
+// have the same barcode, they're duplicates!
+//
+// Why hash instead of just combining strings?
+//   - Fast lookups (constant time)
+//   - Handles any data types (numbers, strings, booleans)
+//   - Consistent length (SHA-256 always 64 chars)
+//
+// Use Cases:
+//   - Composite unique constraints (email + tenant_id)
+//   - Multi-column indexes
+//   - Deduplication of complex records
 func NewCompositeKey(values ...interface{}) CompositeKey {
 	// Create deterministic string representation
 	var parts []string
@@ -129,11 +297,11 @@ type FulltextIndex struct {
 
 // VectorIndex represents a vector similarity index.
 type VectorIndex struct {
-	Name             string
-	Label            string
-	Property         string
-	Dimensions       int
-	SimilarityFunc   string // "cosine", "euclidean", "dot"
+	Name           string
+	Label          string
+	Property       string
+	Dimensions     int
+	SimilarityFunc string // "cosine", "euclidean", "dot"
 }
 
 // AddUniqueConstraint adds a unique constraint.
@@ -528,6 +696,54 @@ func (sm *SchemaManager) GetConstraints() []UniqueConstraint {
 	return constraints
 }
 
+// GetConstraintsForLabels returns all constraints for given labels.
+// Returns constraints from the constraints map, preserving their original types.
+func (sm *SchemaManager) GetConstraintsForLabels(labels []string) []Constraint {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	result := make([]Constraint, 0)
+
+	// Get constraints from the constraints map (preserves original type)
+	for _, c := range sm.constraints {
+		for _, label := range labels {
+			if c.Label == label {
+				result = append(result, c)
+				break
+			}
+		}
+	}
+
+	return result
+}
+
+// AddConstraint adds a constraint to the schema.
+// Stores constraint in both the constraints map and uniqueConstraints (for backward compatibility).
+func (sm *SchemaManager) AddConstraint(c Constraint) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Store in the constraints map (preserves type)
+	if _, exists := sm.constraints[c.Name]; !exists {
+		sm.constraints[c.Name] = c
+	}
+
+	// For UNIQUE constraints, also add to legacy uniqueConstraints map
+	if c.Type == ConstraintUnique && len(c.Properties) == 1 {
+		key := fmt.Sprintf("%s:%s", c.Label, c.Properties[0])
+		if _, exists := sm.uniqueConstraints[key]; !exists {
+			sm.uniqueConstraints[key] = &UniqueConstraint{
+				Name:     c.Name,
+				Label:    c.Label,
+				Property: c.Properties[0],
+				values:   make(map[interface{}]NodeID),
+			}
+		}
+	}
+
+	return nil
+}
+
 // GetIndexes returns all indexes.
 func (sm *SchemaManager) GetIndexes() []interface{} {
 	sm.mu.RLock()
@@ -564,12 +780,12 @@ func (sm *SchemaManager) GetIndexes() []interface{} {
 
 	for _, idx := range sm.vectorIndexes {
 		indexes = append(indexes, map[string]interface{}{
-			"name":            idx.Name,
-			"type":            "VECTOR",
-			"label":           idx.Label,
-			"property":        idx.Property,
-			"dimensions":      idx.Dimensions,
-			"similarityFunc":  idx.SimilarityFunc,
+			"name":           idx.Name,
+			"type":           "VECTOR",
+			"label":          idx.Label,
+			"property":       idx.Property,
+			"dimensions":     idx.Dimensions,
+			"similarityFunc": idx.SimilarityFunc,
 		})
 	}
 

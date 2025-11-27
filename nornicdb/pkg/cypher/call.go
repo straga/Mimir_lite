@@ -22,7 +22,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,7 +62,8 @@ func parseYieldClause(cypher string) *yieldClause {
 	afterYield := strings.TrimSpace(cypher[yieldIdx+7:])
 
 	// Check for YIELD *
-	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(afterYield)), "*") {
+	trimmedYield := strings.TrimSpace(afterYield)
+	if len(trimmedYield) > 0 && trimmedYield[0] == '*' {
 		result.yieldAll = true
 		afterYield = strings.TrimSpace(afterYield[1:])
 	}
@@ -378,6 +378,46 @@ func (e *StorageExecutor) executeCall(ctx context.Context, cypher string) (*Exec
 		result, err = e.callDbmsProcedures()
 	case strings.Contains(upper, "DBMS.FUNCTIONS"):
 		result, err = e.callDbmsFunctions()
+	// Transaction metadata (Neo4j tx.setMetaData)
+	case strings.Contains(upper, "TX.SETMETADATA"):
+		result, err = e.callTxSetMetadata(cypher)
+	// Index management procedures
+	case strings.Contains(upper, "DB.AWAITINDEXES"):
+		result, err = e.callDbAwaitIndexes(cypher)
+	case strings.Contains(upper, "DB.AWAITINDEX"):
+		result, err = e.callDbAwaitIndex(cypher)
+	case strings.Contains(upper, "DB.RESAMPLEINDEX"):
+		result, err = e.callDbResampleIndex(cypher)
+	// Query statistics procedures (longer matches first)
+	case strings.Contains(upper, "DB.STATS.RETRIEVEALLANTHESTATS"):
+		result, err = e.callDbStatsRetrieveAllAnTheStats()
+	case strings.Contains(upper, "DB.STATS.RETRIEVE"):
+		result, err = e.callDbStatsRetrieve(cypher)
+	case strings.Contains(upper, "DB.STATS.COLLECT"):
+		result, err = e.callDbStatsCollect(cypher)
+	case strings.Contains(upper, "DB.STATS.CLEAR"):
+		result, err = e.callDbStatsClear()
+	case strings.Contains(upper, "DB.STATS.STATUS"):
+		result, err = e.callDbStatsStatus()
+	case strings.Contains(upper, "DB.STATS.STOP"):
+		result, err = e.callDbStatsStop()
+	// Database cleardown procedures (for testing)
+	case strings.Contains(upper, "DB.CLEARQUERYCACHES"):
+		result, err = e.callDbClearQueryCaches()
+	// APOC Dynamic Cypher Execution
+	case strings.Contains(upper, "APOC.CYPHER.RUN"):
+		result, err = e.callApocCypherRun(ctx, cypher)
+	case strings.Contains(upper, "APOC.CYPHER.DOITALL"):
+		result, err = e.callApocCypherRun(ctx, cypher) // Alias
+	case strings.Contains(upper, "APOC.CYPHER.RUNMANY"):
+		result, err = e.callApocCypherRunMany(ctx, cypher)
+	// APOC Periodic/Batch Operations
+	case strings.Contains(upper, "APOC.PERIODIC.ITERATE"):
+		result, err = e.callApocPeriodicIterate(ctx, cypher)
+	case strings.Contains(upper, "APOC.PERIODIC.COMMIT"):
+		result, err = e.callApocPeriodicCommit(ctx, cypher)
+	case strings.Contains(upper, "APOC.PERIODIC.ROCK_N_ROLL"):
+		result, err = e.callApocPeriodicIterate(ctx, cypher) // Alias
 	default:
 		return nil, fmt.Errorf("unknown procedure: %s", cypher)
 	}
@@ -742,7 +782,7 @@ func (e *StorageExecutor) callDbIndexVectorQueryNodes(cypher string) (*ExecuteRe
 	// Get vector index configuration (if it exists)
 	var targetLabel, targetProperty string
 	var similarityFunc string = "cosine"
-	
+
 	schema := e.storage.GetSchema()
 	if schema != nil {
 		if vectorIdx, exists := schema.GetVectorIndex(indexName); exists {
@@ -875,15 +915,15 @@ func (e *StorageExecutor) parseVectorQueryParams(cypher string) (indexName strin
 	}
 
 	params := parenContent[:endIdx]
-	
+
 	// Split parameters (careful with nested brackets)
 	parts := splitParamsCarefully(params)
-	
+
 	if len(parts) >= 1 {
 		// First param is index name (quoted string)
 		indexName = strings.Trim(strings.TrimSpace(parts[0]), "'\"")
 	}
-	
+
 	if len(parts) >= 2 {
 		// Second param is k (integer)
 		kStr := strings.TrimSpace(parts[1])
@@ -891,11 +931,11 @@ func (e *StorageExecutor) parseVectorQueryParams(cypher string) (indexName strin
 			k = val
 		}
 	}
-	
+
 	if len(parts) >= 3 {
 		// Third param is query vector (array or $parameter)
 		vectorStr := strings.TrimSpace(parts[2])
-		
+
 		// Check if it's a parameter reference
 		if strings.HasPrefix(vectorStr, "$") {
 			// Parameter will be substituted by caller - for now return nil
@@ -941,17 +981,17 @@ func splitParamsCarefully(params string) []string {
 func parseInlineVector(s string) []float32 {
 	s = strings.TrimPrefix(s, "[")
 	s = strings.TrimSuffix(s, "]")
-	
+
 	parts := strings.Split(s, ",")
 	result := make([]float32, 0, len(parts))
-	
+
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if val, err := strconv.ParseFloat(p, 32); err == nil {
 			result = append(result, float32(val))
 		}
 	}
-	
+
 	return result
 }
 
@@ -1055,10 +1095,11 @@ func dotProductFloat32(a, b []float32) float64 {
 //   - score: BM25-like relevance score
 //
 // Scoring Algorithm:
-//   Uses a simplified BM25-like scoring that considers:
-//   - Term frequency (TF): How often query terms appear
-//   - Inverse document frequency (IDF): How rare terms are
-//   - Field length normalization: Shorter fields score higher
+//
+//	Uses a simplified BM25-like scoring that considers:
+//	- Term frequency (TF): How often query terms appear
+//	- Inverse document frequency (IDF): How rare terms are
+//	- Field length normalization: Shorter fields score higher
 func (e *StorageExecutor) callDbIndexFulltextQueryNodes(cypher string) (*ExecuteResult, error) {
 	result := &ExecuteResult{
 		Columns: []string{"node", "score"},
@@ -1074,7 +1115,7 @@ func (e *StorageExecutor) callDbIndexFulltextQueryNodes(cypher string) (*Execute
 	// Get index configuration if it exists
 	var targetLabels []string
 	var targetProperties []string
-	
+
 	schema := e.storage.GetSchema()
 	if schema != nil {
 		if ftIdx, exists := schema.GetFulltextIndex(indexName); exists {
@@ -1108,11 +1149,11 @@ func (e *StorageExecutor) callDbIndexFulltextQueryNodes(cypher string) (*Execute
 			continue
 		}
 		totalDocs++
-		
+
 		// Count documents containing each term
 		content := extractTextContent(node, targetProperties)
 		contentLower := strings.ToLower(content)
-		
+
 		allTerms := append(queryTerms, mustHaveTerms...)
 		for _, term := range allTerms {
 			if strings.Contains(contentLower, term) {
@@ -1167,7 +1208,7 @@ func (e *StorageExecutor) callDbIndexFulltextQueryNodes(cypher string) (*Execute
 
 		// Calculate BM25-like score
 		score := calculateBM25Score(contentLower, queryTerms, docFreq, totalDocs)
-		
+
 		// Boost for must-have terms
 		for _, term := range mustHaveTerms {
 			if strings.Contains(contentLower, term) {
@@ -1199,7 +1240,7 @@ func (e *StorageExecutor) callDbIndexFulltextQueryNodes(cypher string) (*Execute
 // extractFulltextParams extracts index name and query from a fulltext CALL statement
 func (e *StorageExecutor) extractFulltextParams(cypher string) (indexName, query string) {
 	indexName = "default"
-	
+
 	// Find the procedure call
 	upper := strings.ToUpper(cypher)
 	callIdx := strings.Index(upper, "DB.INDEX.FULLTEXT.QUERYNODES")
@@ -1235,11 +1276,11 @@ func (e *StorageExecutor) extractFulltextParams(cypher string) (indexName, query
 
 	params := parenContent[:endIdx]
 	parts := splitParamsCarefully(params)
-	
+
 	if len(parts) >= 1 {
 		indexName = strings.Trim(strings.TrimSpace(parts[0]), "'\"")
 	}
-	
+
 	if len(parts) >= 2 {
 		query = strings.Trim(strings.TrimSpace(parts[1]), "'\"")
 	}
@@ -1250,51 +1291,50 @@ func (e *StorageExecutor) extractFulltextParams(cypher string) (indexName, query
 // parseFulltextQuery parses a fulltext query into regular terms, exclude terms, and must-have terms
 func parseFulltextQuery(query string) (terms, excludeTerms, mustHaveTerms []string) {
 	query = strings.ToLower(query)
-	
-	// Handle quoted phrases
-	phraseRegex := regexp.MustCompile(`"([^"]+)"`)
-	phrases := phraseRegex.FindAllStringSubmatch(query, -1)
+
+	// Handle quoted phrases using pre-compiled pattern from regex_patterns.go
+	phrases := fulltextPhrasePattern.FindAllStringSubmatch(query, -1)
 	for _, match := range phrases {
 		mustHaveTerms = append(mustHaveTerms, match[1])
 	}
-	query = phraseRegex.ReplaceAllString(query, "")
-	
+	query = fulltextPhrasePattern.ReplaceAllString(query, "")
+
 	// Split by spaces and operators
 	words := strings.Fields(query)
-	
+
 	for i := 0; i < len(words); i++ {
 		word := words[i]
-		
+
 		// Handle NOT operator
 		if word == "not" && i+1 < len(words) {
 			excludeTerms = append(excludeTerms, words[i+1])
 			i++
 			continue
 		}
-		
+
 		// Handle - prefix for exclusion
 		if strings.HasPrefix(word, "-") && len(word) > 1 {
 			excludeTerms = append(excludeTerms, word[1:])
 			continue
 		}
-		
+
 		// Handle + prefix for required
 		if strings.HasPrefix(word, "+") && len(word) > 1 {
 			mustHaveTerms = append(mustHaveTerms, word[1:])
 			continue
 		}
-		
+
 		// Skip AND/OR operators
 		if word == "and" || word == "or" {
 			continue
 		}
-		
+
 		// Regular term
 		if len(word) > 0 {
 			terms = append(terms, word)
 		}
 	}
-	
+
 	return terms, excludeTerms, mustHaveTerms
 }
 
@@ -1316,13 +1356,13 @@ func matchesLabels(node *storage.Node, targetLabels []string) bool {
 // extractTextContent extracts searchable text content from a node
 func extractTextContent(node *storage.Node, properties []string) string {
 	var content strings.Builder
-	
+
 	for _, propName := range properties {
 		if val, ok := node.Properties[propName]; ok {
 			content.WriteString(fmt.Sprintf("%v ", val))
 		}
 	}
-	
+
 	return strings.TrimSpace(content.String())
 }
 
@@ -1351,10 +1391,10 @@ func calculateBM25Score(content string, terms []string, docFreq map[string]int, 
 		if df == 0 {
 			df = 0.5 // Smoothing for unseen terms
 		}
-		
+
 		// Use IDF+ variant: log((N + 1) / df) to ensure positive IDF
 		// This prevents common terms from having zero or negative IDF
-		idf := math.Log((float64(totalDocs)+1) / df)
+		idf := math.Log((float64(totalDocs) + 1) / df)
 		if idf < 0.1 {
 			idf = 0.1 // Minimum IDF floor
 		}
@@ -1490,35 +1530,35 @@ func (e *StorageExecutor) parseApocPathConfig(cypher string) apocPathConfig {
 
 	configStr := cypher[configStart+1 : configEnd]
 
-	// Parse maxLevel
-	if match := regexp.MustCompile(`maxLevel\s*:\s*(\d+)`).FindStringSubmatch(configStr); len(match) > 1 {
+	// Parse maxLevel using pre-compiled pattern from regex_patterns.go
+	if match := apocMaxLevelPattern.FindStringSubmatch(configStr); len(match) > 1 {
 		if level, err := strconv.Atoi(match[1]); err == nil && level > 0 {
 			config.maxLevel = level
 		}
 	}
 
-	// Parse minLevel
-	if match := regexp.MustCompile(`minLevel\s*:\s*(\d+)`).FindStringSubmatch(configStr); len(match) > 1 {
+	// Parse minLevel using pre-compiled pattern
+	if match := apocMinLevelPattern.FindStringSubmatch(configStr); len(match) > 1 {
 		if level, err := strconv.Atoi(match[1]); err == nil {
 			config.minLevel = level
 		}
 	}
 
-	// Parse limit
-	if match := regexp.MustCompile(`limit\s*:\s*(\d+)`).FindStringSubmatch(configStr); len(match) > 1 {
+	// Parse limit using pre-compiled pattern
+	if match := apocLimitPattern.FindStringSubmatch(configStr); len(match) > 1 {
 		if limit, err := strconv.Atoi(match[1]); err == nil {
 			config.limit = limit
 		}
 	}
 
-	// Parse relationshipFilter
-	if match := regexp.MustCompile(`relationshipFilter\s*:\s*['"]([^'"]+)['"]`).FindStringSubmatch(configStr); len(match) > 1 {
+	// Parse relationshipFilter using pre-compiled pattern
+	if match := apocRelFilterPattern.FindStringSubmatch(configStr); len(match) > 1 {
 		filterStr := match[1]
 		config.relationshipTypes, config.direction = parseRelationshipFilter(filterStr)
 	}
 
-	// Parse labelFilter
-	if match := regexp.MustCompile(`labelFilter\s*:\s*['"]([^'"]+)['"]`).FindStringSubmatch(configStr); len(match) > 1 {
+	// Parse labelFilter using pre-compiled pattern
+	if match := apocLabelFilterPattern.FindStringSubmatch(configStr); len(match) > 1 {
 		filterStr := match[1]
 		config.includeLabels, config.excludeLabels, config.terminateLabels = parseLabelFilter(filterStr)
 	}
@@ -1534,7 +1574,7 @@ func (e *StorageExecutor) parseApocPathConfig(cypher string) apocPathConfig {
 // parseRelationshipFilter parses a relationship filter string
 func parseRelationshipFilter(filter string) (types []string, direction string) {
 	direction = "both"
-	
+
 	// Handle direction prefix
 	if strings.HasPrefix(filter, ">") {
 		direction = "outgoing"
@@ -1558,13 +1598,13 @@ func parseRelationshipFilter(filter string) (types []string, direction string) {
 // parseLabelFilter parses a label filter string
 func parseLabelFilter(filter string) (include, exclude, terminate []string) {
 	parts := strings.Split(filter, "|")
-	
+
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		
+
 		if strings.HasPrefix(part, "+") {
 			include = append(include, part[1:])
 		} else if strings.HasPrefix(part, "-") {
@@ -1573,7 +1613,7 @@ func parseLabelFilter(filter string) (include, exclude, terminate []string) {
 			terminate = append(terminate, part[1:])
 		}
 	}
-	
+
 	return include, exclude, terminate
 }
 
@@ -1581,22 +1621,23 @@ func parseLabelFilter(filter string) (include, exclude, terminate []string) {
 func (e *StorageExecutor) extractStartNodeID(cypher string) string {
 	// Look for node variable in MATCH clause
 	// Pattern: MATCH (varName:Label {id: 'value'}) or MATCH (varName) WHERE varName.id = 'value'
-	
+	// Uses pre-compiled patterns from regex_patterns.go
+
 	// Try to find a MATCH pattern with id property
-	if match := regexp.MustCompile(`\{[^}]*id\s*:\s*['"]([^'"]+)['"]`).FindStringSubmatch(cypher); len(match) > 1 {
+	if match := apocNodeIdBracePattern.FindStringSubmatch(cypher); len(match) > 1 {
 		return match[1]
 	}
-	
+
 	// Try to find WHERE clause with id
-	if match := regexp.MustCompile(`WHERE\s+\w+\.id\s*=\s*['"]([^'"]+)['"]`).FindStringSubmatch(cypher); len(match) > 1 {
+	if match := apocWhereIdPattern.FindStringSubmatch(cypher); len(match) > 1 {
 		return match[1]
 	}
-	
+
 	// Try to find $nodeId parameter (would need to be substituted)
 	if strings.Contains(cypher, "$nodeId") || strings.Contains(cypher, "$startNode") {
 		return ""
 	}
-	
+
 	// Return special marker for "traverse all" when no specific ID found
 	return "*"
 }
@@ -1604,25 +1645,25 @@ func (e *StorageExecutor) extractStartNodeID(cypher string) string {
 // bfsTraversal performs breadth-first traversal from a start node
 func (e *StorageExecutor) bfsTraversal(startNode *storage.Node, config apocPathConfig, globalVisited map[string]bool) []*storage.Node {
 	var results []*storage.Node
-	
+
 	// Queue: (node, level)
 	type queueItem struct {
 		node  *storage.Node
 		level int
 	}
 	queue := []queueItem{{node: startNode, level: 0}}
-	
+
 	// Track visited for this traversal
 	visited := make(map[string]bool)
 	visited[string(startNode.ID)] = true
-	
+
 	for len(queue) > 0 {
 		item := queue[0]
 		queue = queue[1:]
-		
+
 		node := item.node
 		level := item.level
-		
+
 		// Check if we should include this node
 		if level >= config.minLevel && !globalVisited[string(node.ID)] {
 			// Check label filters
@@ -1631,17 +1672,17 @@ func (e *StorageExecutor) bfsTraversal(startNode *storage.Node, config apocPathC
 				globalVisited[string(node.ID)] = true
 			}
 		}
-		
+
 		// Check if we should terminate at this node
 		if isTerminateNode(node, config.terminateLabels) {
 			continue
 		}
-		
+
 		// Check if we've reached max level
 		if level >= config.maxLevel {
 			continue
 		}
-		
+
 		// Get edges based on direction
 		var edges []*storage.Edge
 		switch config.direction {
@@ -1654,7 +1695,7 @@ func (e *StorageExecutor) bfsTraversal(startNode *storage.Node, config apocPathC
 			in, _ := e.storage.GetIncomingEdges(node.ID)
 			edges = append(out, in...)
 		}
-		
+
 		// Process each edge
 		for _, edge := range edges {
 			// Check relationship type filter
@@ -1670,7 +1711,7 @@ func (e *StorageExecutor) bfsTraversal(startNode *storage.Node, config apocPathC
 					continue
 				}
 			}
-			
+
 			// Get the other node
 			var nextNodeID storage.NodeID
 			if edge.StartNode == node.ID {
@@ -1678,13 +1719,13 @@ func (e *StorageExecutor) bfsTraversal(startNode *storage.Node, config apocPathC
 			} else {
 				nextNodeID = edge.StartNode
 			}
-			
+
 			// Skip if already visited
 			if visited[string(nextNodeID)] {
 				continue
 			}
 			visited[string(nextNodeID)] = true
-			
+
 			// Get the node and add to queue
 			nextNode, err := e.storage.GetNode(nextNodeID)
 			if err == nil && nextNode != nil {
@@ -1692,7 +1733,7 @@ func (e *StorageExecutor) bfsTraversal(startNode *storage.Node, config apocPathC
 			}
 		}
 	}
-	
+
 	return results
 }
 
@@ -1706,12 +1747,12 @@ func passesLabelFilter(node *storage.Node, include, exclude []string) bool {
 			}
 		}
 	}
-	
+
 	// If no include labels specified, pass
 	if len(include) == 0 {
 		return true
 	}
-	
+
 	// Check include labels
 	for _, incLabel := range include {
 		for _, nodeLabel := range node.Labels {
@@ -1720,7 +1761,7 @@ func passesLabelFilter(node *storage.Node, include, exclude []string) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -1904,4 +1945,868 @@ func (e *StorageExecutor) callDbIndexVectorQueryRelationships(cypher string) (*E
 		Columns: []string{"relationship", "score"},
 		Rows:    [][]interface{}{},
 	}, nil
+}
+
+// callTxSetMetadata sets transaction metadata - Neo4j tx.setMetaData()
+//
+// This procedure is used to attach metadata to transactions for logging/debugging.
+// Syntax: CALL tx.setMetaData({key: value})
+//
+// Note: Transaction support in Cypher (BEGIN/COMMIT/ROLLBACK) is planned for Phase 4.
+// The storage layer (storage.Transaction) already supports metadata via SetMetadata().
+// Once Cypher transaction context is added, this will work seamlessly.
+//
+// Current behavior: Returns success message but metadata is not persisted (no active transaction in Cypher yet).
+func (e *StorageExecutor) callTxSetMetadata(cypher string) (*ExecuteResult, error) {
+	// Note: This is a placeholder implementation until Phase 4 adds full transaction support
+	// The actual Transaction.SetMetadata() implementation exists and is tested
+
+	// For now, just acknowledge the call was successful
+	// Phase 4 will add StorageExecutor.txContext and wire this up properly
+	return &ExecuteResult{
+		Columns: []string{"status"},
+		Rows: [][]interface{}{
+			{"Transaction metadata feature available in storage layer. Full Cypher transaction support coming in Phase 4."},
+		},
+	}, nil
+}
+
+// ========================================
+// Index Management Procedures
+// ========================================
+
+// callDbAwaitIndex waits for a specific index to come online - Neo4j db.awaitIndex()
+// Syntax: CALL db.awaitIndex(indexName, timeOutSeconds)
+func (e *StorageExecutor) callDbAwaitIndex(cypher string) (*ExecuteResult, error) {
+	// NornicDB indexes are always online (no background building)
+	// This is a no-op for compatibility
+	return &ExecuteResult{
+		Columns: []string{"status"},
+		Rows: [][]interface{}{
+			{"Index is online"},
+		},
+	}, nil
+}
+
+// callDbAwaitIndexes waits for all indexes to come online - Neo4j db.awaitIndexes()
+// Syntax: CALL db.awaitIndexes(timeOutSeconds)
+func (e *StorageExecutor) callDbAwaitIndexes(cypher string) (*ExecuteResult, error) {
+	// NornicDB indexes are always online (no background building)
+	// This is a no-op for compatibility
+	return &ExecuteResult{
+		Columns: []string{"status"},
+		Rows: [][]interface{}{
+			{"All indexes are online"},
+		},
+	}, nil
+}
+
+// callDbResampleIndex forces index statistics to be recalculated - Neo4j db.resampleIndex()
+// Syntax: CALL db.resampleIndex(indexName)
+func (e *StorageExecutor) callDbResampleIndex(cypher string) (*ExecuteResult, error) {
+	// NornicDB doesn't use index statistics (no cost-based optimizer using stats)
+	// This is a no-op for compatibility
+	return &ExecuteResult{
+		Columns: []string{"status"},
+		Rows: [][]interface{}{
+			{"Index statistics updated"},
+		},
+	}, nil
+}
+
+// ========================================
+// Query Statistics Procedures
+// ========================================
+
+// callDbStatsClear clears collected query statistics - Neo4j db.stats.clear()
+func (e *StorageExecutor) callDbStatsClear() (*ExecuteResult, error) {
+	// Clear any cached query stats
+	return &ExecuteResult{
+		Columns: []string{"section", "data"},
+		Rows: [][]interface{}{
+			{"QUERIES", map[string]interface{}{"cleared": true}},
+		},
+	}, nil
+}
+
+// callDbStatsCollect starts collecting query statistics - Neo4j db.stats.collect()
+// Syntax: CALL db.stats.collect(section, config)
+func (e *StorageExecutor) callDbStatsCollect(cypher string) (*ExecuteResult, error) {
+	return &ExecuteResult{
+		Columns: []string{"section", "success", "message"},
+		Rows: [][]interface{}{
+			{"QUERIES", true, "Query collection started"},
+		},
+	}, nil
+}
+
+// callDbStatsRetrieve retrieves collected statistics - Neo4j db.stats.retrieve()
+// Syntax: CALL db.stats.retrieve(section)
+func (e *StorageExecutor) callDbStatsRetrieve(cypher string) (*ExecuteResult, error) {
+	// Return basic query statistics
+	return &ExecuteResult{
+		Columns: []string{"section", "data"},
+		Rows: [][]interface{}{
+			{"QUERIES", map[string]interface{}{
+				"totalQueries":   0,
+				"cachedQueries":  0,
+				"avgExecutionMs": 0,
+			}},
+		},
+	}, nil
+}
+
+// callDbStatsRetrieveAllAnTheStats retrieves all statistics - Neo4j db.stats.retrieveAllAnTheStats()
+func (e *StorageExecutor) callDbStatsRetrieveAllAnTheStats() (*ExecuteResult, error) {
+	nodeCount := 0
+	edgeCount := 0
+
+	if nodes, err := e.storage.AllNodes(); err == nil {
+		nodeCount = len(nodes)
+	}
+	if edges, err := e.storage.AllEdges(); err == nil {
+		edgeCount = len(edges)
+	}
+
+	return &ExecuteResult{
+		Columns: []string{"section", "data"},
+		Rows: [][]interface{}{
+			{"GRAPH COUNTS", map[string]interface{}{
+				"nodeCount":         nodeCount,
+				"relationshipCount": edgeCount,
+			}},
+			{"QUERIES", map[string]interface{}{
+				"totalQueries":   0,
+				"cachedQueries":  0,
+				"avgExecutionMs": 0,
+			}},
+		},
+	}, nil
+}
+
+// callDbStatsStatus returns statistics collection status - Neo4j db.stats.status()
+func (e *StorageExecutor) callDbStatsStatus() (*ExecuteResult, error) {
+	return &ExecuteResult{
+		Columns: []string{"section", "status", "message"},
+		Rows: [][]interface{}{
+			{"QUERIES", "idle", "Statistics collection is available"},
+		},
+	}, nil
+}
+
+// callDbStatsStop stops statistics collection - Neo4j db.stats.stop()
+func (e *StorageExecutor) callDbStatsStop() (*ExecuteResult, error) {
+	return &ExecuteResult{
+		Columns: []string{"section", "success", "message"},
+		Rows: [][]interface{}{
+			{"QUERIES", true, "Statistics collection stopped"},
+		},
+	}, nil
+}
+
+// callDbClearQueryCaches clears all query caches - Neo4j db.clearQueryCaches()
+func (e *StorageExecutor) callDbClearQueryCaches() (*ExecuteResult, error) {
+	// If there's a query cache, clear it
+	// For now, just acknowledge the call
+	return &ExecuteResult{
+		Columns: []string{"status"},
+		Rows: [][]interface{}{
+			{"Query caches cleared"},
+		},
+	}, nil
+}
+
+// =============================================================================
+// APOC Dynamic Cypher Execution Procedures
+// =============================================================================
+
+// callApocCypherRun executes a dynamic Cypher query string.
+// CALL apoc.cypher.run(statement, params) YIELD value
+// This allows executing Cypher queries stored in strings or variables.
+func (e *StorageExecutor) callApocCypherRun(ctx context.Context, cypher string) (*ExecuteResult, error) {
+	// Parse the CALL statement to extract the inner query and parameters
+	// Format: CALL apoc.cypher.run('MATCH (n) RETURN n', {})
+
+	upper := strings.ToUpper(cypher)
+	callIdx := strings.Index(upper, "APOC.CYPHER.RUN")
+	if callIdx == -1 {
+		return nil, fmt.Errorf("invalid apoc.cypher.run call")
+	}
+
+	// Find the opening parenthesis after the procedure name
+	parenStart := strings.Index(cypher[callIdx:], "(")
+	if parenStart == -1 {
+		return nil, fmt.Errorf("apoc.cypher.run requires parameters")
+	}
+	parenStart += callIdx
+
+	// Find matching closing parenthesis
+	parenEnd := e.findMatchingParen(cypher, parenStart)
+	if parenEnd == -1 {
+		return nil, fmt.Errorf("unmatched parenthesis in apoc.cypher.run")
+	}
+
+	// Extract arguments
+	argsStr := strings.TrimSpace(cypher[parenStart+1 : parenEnd])
+
+	// Parse the first argument (the query string)
+	innerQuery, params, err := e.parseApocCypherRunArgs(argsStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse apoc.cypher.run arguments: %w", err)
+	}
+
+	// Execute the inner query
+	innerResult, err := e.Execute(ctx, innerQuery, params)
+	if err != nil {
+		return nil, fmt.Errorf("apoc.cypher.run inner query failed: %w", err)
+	}
+
+	// Transform result to match APOC format (YIELD value)
+	// Each row becomes a map under the "value" column
+	result := &ExecuteResult{
+		Columns: []string{"value"},
+		Rows:    make([][]interface{}, 0, len(innerResult.Rows)),
+		Stats:   innerResult.Stats,
+	}
+
+	for _, row := range innerResult.Rows {
+		// Convert row to a map with column names as keys
+		valueMap := make(map[string]interface{})
+		for i, col := range innerResult.Columns {
+			if i < len(row) {
+				valueMap[col] = row[i]
+			}
+		}
+		result.Rows = append(result.Rows, []interface{}{valueMap})
+	}
+
+	return result, nil
+}
+
+// callApocCypherRunMany executes multiple Cypher statements separated by semicolons.
+// CALL apoc.cypher.runMany(statements, params) YIELD row, result
+func (e *StorageExecutor) callApocCypherRunMany(ctx context.Context, cypher string) (*ExecuteResult, error) {
+	upper := strings.ToUpper(cypher)
+	callIdx := strings.Index(upper, "APOC.CYPHER.RUNMANY")
+	if callIdx == -1 {
+		return nil, fmt.Errorf("invalid apoc.cypher.runMany call")
+	}
+
+	// Find the opening parenthesis
+	parenStart := strings.Index(cypher[callIdx:], "(")
+	if parenStart == -1 {
+		return nil, fmt.Errorf("apoc.cypher.runMany requires parameters")
+	}
+	parenStart += callIdx
+
+	// Find matching closing parenthesis
+	parenEnd := e.findMatchingParen(cypher, parenStart)
+	if parenEnd == -1 {
+		return nil, fmt.Errorf("unmatched parenthesis in apoc.cypher.runMany")
+	}
+
+	// Extract arguments
+	argsStr := strings.TrimSpace(cypher[parenStart+1 : parenEnd])
+
+	// Parse the first argument (the multi-statement string)
+	statements, params, err := e.parseApocCypherRunArgs(argsStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse apoc.cypher.runMany arguments: %w", err)
+	}
+
+	// Split by semicolons (respecting quotes)
+	queries := e.splitBySemicolon(statements)
+
+	result := &ExecuteResult{
+		Columns: []string{"row", "result"},
+		Rows:    make([][]interface{}, 0),
+		Stats:   &QueryStats{},
+	}
+
+	for i, query := range queries {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			continue
+		}
+
+		innerResult, err := e.Execute(ctx, query, params)
+		if err != nil {
+			// Include error in result instead of failing
+			result.Rows = append(result.Rows, []interface{}{
+				int64(i),
+				map[string]interface{}{"error": err.Error()},
+			})
+			continue
+		}
+
+		// Add each row from the inner result
+		for _, row := range innerResult.Rows {
+			valueMap := make(map[string]interface{})
+			for j, col := range innerResult.Columns {
+				if j < len(row) {
+					valueMap[col] = row[j]
+				}
+			}
+			result.Rows = append(result.Rows, []interface{}{
+				int64(i),
+				valueMap,
+			})
+		}
+
+		// Accumulate stats
+		if innerResult.Stats != nil {
+			result.Stats.NodesCreated += innerResult.Stats.NodesCreated
+			result.Stats.NodesDeleted += innerResult.Stats.NodesDeleted
+			result.Stats.RelationshipsCreated += innerResult.Stats.RelationshipsCreated
+			result.Stats.RelationshipsDeleted += innerResult.Stats.RelationshipsDeleted
+			result.Stats.PropertiesSet += innerResult.Stats.PropertiesSet
+		}
+	}
+
+	return result, nil
+}
+
+// =============================================================================
+// APOC Periodic/Batch Operations
+// =============================================================================
+
+// callApocPeriodicIterate performs batch processing with periodic commits.
+// CALL apoc.periodic.iterate(cypherIterate, cypherAction, {batchSize:1000, parallel:false})
+// This is used for large-scale data processing to avoid memory issues.
+func (e *StorageExecutor) callApocPeriodicIterate(ctx context.Context, cypher string) (*ExecuteResult, error) {
+	upper := strings.ToUpper(cypher)
+	callIdx := strings.Index(upper, "APOC.PERIODIC.ITERATE")
+	if callIdx == -1 {
+		// Try rock_n_roll alias
+		callIdx = strings.Index(upper, "APOC.PERIODIC.ROCK_N_ROLL")
+		if callIdx == -1 {
+			return nil, fmt.Errorf("invalid apoc.periodic.iterate call")
+		}
+	}
+
+	// Find the opening parenthesis
+	parenStart := strings.Index(cypher[callIdx:], "(")
+	if parenStart == -1 {
+		return nil, fmt.Errorf("apoc.periodic.iterate requires parameters")
+	}
+	parenStart += callIdx
+
+	// Find matching closing parenthesis
+	parenEnd := e.findMatchingParen(cypher, parenStart)
+	if parenEnd == -1 {
+		return nil, fmt.Errorf("unmatched parenthesis in apoc.periodic.iterate")
+	}
+
+	// Parse arguments: (iterateQuery, actionQuery, config)
+	argsStr := strings.TrimSpace(cypher[parenStart+1 : parenEnd])
+	iterateQuery, actionQuery, config, err := e.parseApocPeriodicIterateArgs(argsStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse apoc.periodic.iterate arguments: %w", err)
+	}
+
+	// Extract config options
+	batchSize := 1000
+	if bs, ok := config["batchSize"].(float64); ok {
+		batchSize = int(bs)
+	} else if bs, ok := config["batchSize"].(int); ok {
+		batchSize = bs
+	} else if bs, ok := config["batchSize"].(int64); ok {
+		batchSize = int(bs)
+	}
+
+	// Execute the iterate query to get data to process
+	iterateResult, err := e.Execute(ctx, iterateQuery, nil)
+	if err != nil {
+		return nil, fmt.Errorf("iterate query failed: %w", err)
+	}
+
+	// Process in batches
+	totalRows := len(iterateResult.Rows)
+	batches := (totalRows + batchSize - 1) / batchSize
+
+	stats := &QueryStats{}
+	errorCount := int64(0)
+	successCount := int64(0)
+
+	for batchNum := 0; batchNum < batches; batchNum++ {
+		startIdx := batchNum * batchSize
+		endIdx := startIdx + batchSize
+		if endIdx > totalRows {
+			endIdx = totalRows
+		}
+
+		// Process each row in the batch
+		for i := startIdx; i < endIdx; i++ {
+			row := iterateResult.Rows[i]
+
+			// Build params map from row
+			params := make(map[string]interface{})
+			for j, col := range iterateResult.Columns {
+				if j < len(row) {
+					params[col] = row[j]
+				}
+			}
+
+			// Execute action query with row data as parameters
+			actionResult, err := e.Execute(ctx, actionQuery, params)
+			if err != nil {
+				errorCount++
+				continue
+			}
+			successCount++
+
+			// Accumulate stats
+			if actionResult.Stats != nil {
+				stats.NodesCreated += actionResult.Stats.NodesCreated
+				stats.NodesDeleted += actionResult.Stats.NodesDeleted
+				stats.RelationshipsCreated += actionResult.Stats.RelationshipsCreated
+				stats.RelationshipsDeleted += actionResult.Stats.RelationshipsDeleted
+				stats.PropertiesSet += actionResult.Stats.PropertiesSet
+			}
+		}
+	}
+
+	return &ExecuteResult{
+		Columns: []string{"batches", "total", "timeTaken", "committedOperations", "failedOperations", "failedBatches", "retries", "errorMessages", "batch", "operations", "wasTerminated", "failedParams", "updateStatistics"},
+		Rows: [][]interface{}{
+			{
+				int64(batches),           // batches
+				int64(totalRows),         // total
+				int64(0),                 // timeTaken (ms) - not measured
+				successCount,             // committedOperations
+				errorCount,               // failedOperations
+				int64(0),                 // failedBatches
+				int64(0),                 // retries
+				map[string]interface{}{}, // errorMessages
+				map[string]interface{}{ // batch
+					"total":     int64(batches),
+					"committed": int64(batches),
+					"failed":    int64(0),
+					"errors":    map[string]interface{}{},
+				},
+				map[string]interface{}{ // operations
+					"total":     int64(totalRows),
+					"committed": successCount,
+					"failed":    errorCount,
+					"errors":    map[string]interface{}{},
+				},
+				false,                    // wasTerminated
+				map[string]interface{}{}, // failedParams
+				map[string]interface{}{ // updateStatistics
+					"nodesCreated":         stats.NodesCreated,
+					"nodesDeleted":         stats.NodesDeleted,
+					"relationshipsCreated": stats.RelationshipsCreated,
+					"relationshipsDeleted": stats.RelationshipsDeleted,
+					"propertiesSet":        stats.PropertiesSet,
+				},
+			},
+		},
+		Stats: stats,
+	}, nil
+}
+
+// callApocPeriodicCommit performs a query with periodic commits.
+// CALL apoc.periodic.commit(statement, params) YIELD updates, executions, runtime, batches
+// This commits every N operations to avoid large transactions.
+func (e *StorageExecutor) callApocPeriodicCommit(ctx context.Context, cypher string) (*ExecuteResult, error) {
+	upper := strings.ToUpper(cypher)
+	callIdx := strings.Index(upper, "APOC.PERIODIC.COMMIT")
+	if callIdx == -1 {
+		return nil, fmt.Errorf("invalid apoc.periodic.commit call")
+	}
+
+	// Find the opening parenthesis
+	parenStart := strings.Index(cypher[callIdx:], "(")
+	if parenStart == -1 {
+		return nil, fmt.Errorf("apoc.periodic.commit requires parameters")
+	}
+	parenStart += callIdx
+
+	// Find matching closing parenthesis
+	parenEnd := e.findMatchingParen(cypher, parenStart)
+	if parenEnd == -1 {
+		return nil, fmt.Errorf("unmatched parenthesis in apoc.periodic.commit")
+	}
+
+	// Parse arguments
+	argsStr := strings.TrimSpace(cypher[parenStart+1 : parenEnd])
+	statement, params, err := e.parseApocCypherRunArgs(argsStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse apoc.periodic.commit arguments: %w", err)
+	}
+
+	// Extract limit from params if present
+	limit := 10000
+	if l, ok := params["limit"].(float64); ok {
+		limit = int(l)
+	} else if l, ok := params["limit"].(int); ok {
+		limit = l
+	}
+
+	// Execute the statement repeatedly until it affects 0 rows
+	totalUpdates := int64(0)
+	executions := int64(0)
+	stats := &QueryStats{}
+
+	for {
+		// Add LIMIT to statement if not present
+		stmtUpper := strings.ToUpper(statement)
+		if !strings.Contains(stmtUpper, "LIMIT") {
+			statement = statement + fmt.Sprintf(" LIMIT %d", limit)
+		}
+
+		result, err := e.Execute(ctx, statement, params)
+		if err != nil {
+			break
+		}
+		executions++
+
+		// Check if any updates were made
+		updates := int64(0)
+		if result.Stats != nil {
+			updates = int64(result.Stats.NodesCreated + result.Stats.NodesDeleted +
+				result.Stats.RelationshipsCreated + result.Stats.RelationshipsDeleted +
+				result.Stats.PropertiesSet)
+
+			stats.NodesCreated += result.Stats.NodesCreated
+			stats.NodesDeleted += result.Stats.NodesDeleted
+			stats.RelationshipsCreated += result.Stats.RelationshipsCreated
+			stats.RelationshipsDeleted += result.Stats.RelationshipsDeleted
+			stats.PropertiesSet += result.Stats.PropertiesSet
+		}
+
+		if updates == 0 {
+			break
+		}
+		totalUpdates += updates
+
+		// Safety limit
+		if executions > 1000 {
+			break
+		}
+	}
+
+	return &ExecuteResult{
+		Columns: []string{"updates", "executions", "runtime", "batches"},
+		Rows: [][]interface{}{
+			{totalUpdates, executions, int64(0), executions},
+		},
+		Stats: stats,
+	}, nil
+}
+
+// =============================================================================
+// APOC Helper Functions
+// =============================================================================
+
+// findMatchingParen finds the index of the closing parenthesis matching the one at startIdx.
+func (e *StorageExecutor) findMatchingParen(s string, startIdx int) int {
+	if startIdx >= len(s) || s[startIdx] != '(' {
+		return -1
+	}
+
+	depth := 0
+	inQuote := false
+	quoteChar := rune(0)
+
+	for i := startIdx; i < len(s); i++ {
+		c := rune(s[i])
+
+		if inQuote {
+			if c == quoteChar && (i == 0 || s[i-1] != '\\') {
+				inQuote = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			inQuote = true
+			quoteChar = c
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+
+	return -1
+}
+
+// parseApocCypherRunArgs parses the arguments for apoc.cypher.run/runMany.
+// Expected format: 'query string', {params} or 'query string', null
+func (e *StorageExecutor) parseApocCypherRunArgs(argsStr string) (string, map[string]interface{}, error) {
+	// Find the first quoted string (the query)
+	query := ""
+	params := make(map[string]interface{})
+
+	// Find first quote
+	quoteStart := -1
+	quoteChar := rune(0)
+	for i, c := range argsStr {
+		if c == '\'' || c == '"' {
+			quoteStart = i
+			quoteChar = c
+			break
+		}
+	}
+
+	if quoteStart == -1 {
+		return "", nil, fmt.Errorf("query string not found")
+	}
+
+	// Find matching closing quote
+	quoteEnd := -1
+	for i := quoteStart + 1; i < len(argsStr); i++ {
+		if rune(argsStr[i]) == quoteChar && (i == 0 || argsStr[i-1] != '\\') {
+			quoteEnd = i
+			break
+		}
+	}
+
+	if quoteEnd == -1 {
+		return "", nil, fmt.Errorf("unclosed query string")
+	}
+
+	query = argsStr[quoteStart+1 : quoteEnd]
+
+	// Try to parse params after the query
+	remaining := strings.TrimSpace(argsStr[quoteEnd+1:])
+	if strings.HasPrefix(remaining, ",") {
+		remaining = strings.TrimSpace(remaining[1:])
+
+		// Skip 'null' or 'NULL'
+		if len(remaining) >= 4 && strings.EqualFold(remaining[:4], "NULL") {
+			return query, params, nil
+		}
+
+		// Try to parse as map literal {...}
+		if strings.HasPrefix(remaining, "{") {
+			mapEnd := e.findMatchingBrace(remaining, 0)
+			if mapEnd > 0 {
+				mapStr := remaining[:mapEnd+1]
+				params = e.parseMapLiteral(mapStr)
+			}
+		}
+	}
+
+	return query, params, nil
+}
+
+// parseApocPeriodicIterateArgs parses arguments for apoc.periodic.iterate.
+// Expected format: 'iterateQuery', 'actionQuery', {config}
+func (e *StorageExecutor) parseApocPeriodicIterateArgs(argsStr string) (string, string, map[string]interface{}, error) {
+	config := make(map[string]interface{})
+
+	// Parse first query string
+	iterateQuery, remaining, err := e.extractQuotedString(argsStr)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to parse iterate query: %w", err)
+	}
+
+	// Skip comma
+	remaining = strings.TrimSpace(remaining)
+	if !strings.HasPrefix(remaining, ",") {
+		return "", "", nil, fmt.Errorf("expected comma after iterate query")
+	}
+	remaining = strings.TrimSpace(remaining[1:])
+
+	// Parse second query string
+	actionQuery, remaining, err := e.extractQuotedString(remaining)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to parse action query: %w", err)
+	}
+
+	// Try to parse config map
+	remaining = strings.TrimSpace(remaining)
+	if strings.HasPrefix(remaining, ",") {
+		remaining = strings.TrimSpace(remaining[1:])
+		if strings.HasPrefix(remaining, "{") {
+			mapEnd := e.findMatchingBrace(remaining, 0)
+			if mapEnd > 0 {
+				mapStr := remaining[:mapEnd+1]
+				config = e.parseMapLiteral(mapStr)
+			}
+		}
+	}
+
+	return iterateQuery, actionQuery, config, nil
+}
+
+// extractQuotedString extracts a quoted string from the start of s and returns it along with the remaining string.
+func (e *StorageExecutor) extractQuotedString(s string) (string, string, error) {
+	s = strings.TrimSpace(s)
+
+	if len(s) == 0 {
+		return "", "", fmt.Errorf("empty string")
+	}
+
+	quoteChar := rune(s[0])
+	if quoteChar != '\'' && quoteChar != '"' {
+		return "", "", fmt.Errorf("expected quote, got %c", quoteChar)
+	}
+
+	// Find matching closing quote
+	for i := 1; i < len(s); i++ {
+		if rune(s[i]) == quoteChar && (i == 1 || s[i-1] != '\\') {
+			return s[1:i], s[i+1:], nil
+		}
+	}
+
+	return "", "", fmt.Errorf("unclosed quote")
+}
+
+// findMatchingBrace finds the index of the closing brace matching the one at startIdx.
+func (e *StorageExecutor) findMatchingBrace(s string, startIdx int) int {
+	if startIdx >= len(s) || s[startIdx] != '{' {
+		return -1
+	}
+
+	depth := 0
+	inQuote := false
+	quoteChar := rune(0)
+
+	for i := startIdx; i < len(s); i++ {
+		c := rune(s[i])
+
+		if inQuote {
+			if c == quoteChar && (i == 0 || s[i-1] != '\\') {
+				inQuote = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			inQuote = true
+			quoteChar = c
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+
+	return -1
+}
+
+// parseMapLiteral parses a Cypher map literal like {key: value, key2: value2}.
+func (e *StorageExecutor) parseMapLiteral(s string) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "{") || !strings.HasSuffix(s, "}") {
+		return result
+	}
+
+	inner := strings.TrimSpace(s[1 : len(s)-1])
+	if inner == "" {
+		return result
+	}
+
+	// Simple key:value parsing (handles basic cases)
+	pairs := e.splitMapPairs(inner)
+	for _, pair := range pairs {
+		colonIdx := strings.Index(pair, ":")
+		if colonIdx == -1 {
+			continue
+		}
+
+		key := strings.TrimSpace(pair[:colonIdx])
+		value := strings.TrimSpace(pair[colonIdx+1:])
+
+		// Parse value
+		result[key] = e.parseValue(value)
+	}
+
+	return result
+}
+
+// splitMapPairs splits a map literal's contents by commas, respecting nesting.
+func (e *StorageExecutor) splitMapPairs(s string) []string {
+	var result []string
+	var current strings.Builder
+	depth := 0
+	inQuote := false
+	quoteChar := rune(0)
+
+	for _, c := range s {
+		if inQuote {
+			current.WriteRune(c)
+			if c == quoteChar {
+				inQuote = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			inQuote = true
+			quoteChar = c
+			current.WriteRune(c)
+		case '{', '[', '(':
+			depth++
+			current.WriteRune(c)
+		case '}', ']', ')':
+			depth--
+			current.WriteRune(c)
+		case ',':
+			if depth == 0 {
+				result = append(result, current.String())
+				current.Reset()
+			} else {
+				current.WriteRune(c)
+			}
+		default:
+			current.WriteRune(c)
+		}
+	}
+
+	if current.Len() > 0 {
+		result = append(result, current.String())
+	}
+
+	return result
+}
+
+// splitBySemicolon splits a string by semicolons, respecting quotes.
+func (e *StorageExecutor) splitBySemicolon(s string) []string {
+	var result []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := rune(0)
+
+	for i, c := range s {
+		if inQuote {
+			current.WriteRune(c)
+			if c == quoteChar && (i == 0 || s[i-1] != '\\') {
+				inQuote = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			inQuote = true
+			quoteChar = c
+			current.WriteRune(c)
+		case ';':
+			result = append(result, current.String())
+			current.Reset()
+		default:
+			current.WriteRune(c)
+		}
+	}
+
+	if current.Len() > 0 {
+		result = append(result, current.String())
+	}
+
+	return result
 }

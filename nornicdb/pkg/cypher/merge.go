@@ -359,8 +359,13 @@ func (e *StorageExecutor) executeMatchForContext(ctx context.Context, matchClaus
 			matches := true
 			for varName, node := range nodeMap {
 				if !e.evaluateWhere(node, varName, wherePart) {
-					// Check if WHERE references this variable
-					if strings.Contains(wherePart, varName+".") || strings.Contains(wherePart, varName+" ") {
+					// Check if WHERE references this variable (property access, function call, or direct reference)
+					lowerWhere := strings.ToLower(wherePart)
+					refsVar := strings.Contains(wherePart, varName+".") ||
+						strings.Contains(wherePart, varName+" ") ||
+						strings.Contains(lowerWhere, "id("+varName+")") ||
+						strings.Contains(lowerWhere, "elementid("+varName+")")
+					if refsVar {
 						matches = false
 						break
 					}

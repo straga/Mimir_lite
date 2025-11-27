@@ -231,6 +231,108 @@ type OllamaEmbedder struct {
 //	embedder = embed.NewOllama(config)
 //
 // Returns an embedder ready to generate embeddings.
+//
+// Example 1 - Default Configuration (mxbai-embed-large):
+//
+//	// Uses localhost:11434 by default
+//	embedder := embed.NewOllama(nil)
+//	
+//	vec, err := embedder.Embed(ctx, "Hello world")
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	fmt.Printf("Generated %d-dimensional embedding\n", len(vec))
+//	// Output: Generated 1024-dimensional embedding
+//
+// Example 2 - Custom Model (nomic-embed-text):
+//
+//	config := embed.DefaultOllamaConfig()
+//	config.Model = "nomic-embed-text"
+//	config.Dimensions = 768
+//	
+//	embedder := embed.NewOllama(config)
+//	
+//	// Good for English text
+//	vec, _ := embedder.Embed(ctx, "The quick brown fox")
+//	fmt.Printf("Nomic embedding: %d dims\n", len(vec)) // 768
+//
+// Example 3 - Remote Ollama Server:
+//
+//	config := embed.DefaultOllamaConfig()
+//	config.APIURL = "http://ollama-server.internal:11434"
+//	config.Timeout = 60 * time.Second
+//	
+//	embedder := embed.NewOllama(config)
+//	
+//	// Connect to remote Ollama instance
+//	vec, err := embedder.Embed(ctx, "distributed embeddings")
+//	if err != nil {
+//		log.Printf("Remote Ollama error: %v", err)
+//	}
+//
+// Example 4 - Batch Processing for Efficiency:
+//
+//	embedder := embed.NewOllama(nil)
+//	
+//	documents := []string{
+//		"Document 1 about AI",
+//		"Document 2 about ML",
+//		"Document 3 about NLP",
+//	}
+//	
+//	// Process in batch
+//	embeddings, err := embedder.EmbedBatch(ctx, documents)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	// Store embeddings in database
+//	for i, emb := range embeddings {
+//		storeEmbedding(documents[i], emb)
+//	}
+//
+// ELI12:
+//
+// NewOllama is like hiring a translator who works at a local translation office:
+//
+//   - Ollama is the office (running on your computer or server)
+//   - You give them text: "Hello world"
+//   - They give back a list of 1024 numbers (the "meaning" as numbers)
+//   - These numbers help computers understand if texts are similar
+//
+// Why use Ollama?
+//   - FREE (no API costs like OpenAI)
+//   - PRIVATE (data stays on your server)
+//   - FAST (no internet latency)
+//   - OFFLINE (works without internet)
+//
+// How it works:
+//   1. Install Ollama: `ollama run mxbai-embed-large`
+//   2. Ollama runs on localhost:11434
+//   3. Send text, get back 1024 numbers
+//   4. Use numbers to find similar text
+//
+// Models Available:
+//   - mxbai-embed-large: 1024 dims, best quality (default)
+//   - nomic-embed-text: 768 dims, good balance
+//   - all-minilm: 384 dims, fast & small
+//
+// Use Cases:
+//   - Document similarity search
+//   - Semantic search engines
+//   - Recommendation systems
+//   - Duplicate detection
+//   - Content clustering
+//
+// Performance:
+//   - ~50-200ms per embedding (depends on model)
+//   - Batch processing is more efficient
+//   - GPU acceleration if available
+//   - Memory: ~500MB-2GB for model
+//
+// Thread Safety:
+//   Safe to call from multiple goroutines.
 func NewOllama(config *Config) *OllamaEmbedder {
 	if config == nil {
 		config = DefaultOllamaConfig()
@@ -396,6 +498,138 @@ type OpenAIEmbedder struct {
 //	embedder = embed.NewOpenAI(config)
 //
 // Returns an embedder ready to generate embeddings.
+//
+// Example 1 - Basic Setup with API Key:
+//
+//	apiKey := os.Getenv("OPENAI_API_KEY") // sk-...
+//	embedder := embed.NewOpenAI(embed.DefaultOpenAIConfig(apiKey))
+//	
+//	vec, err := embedder.Embed(ctx, "artificial intelligence")
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	fmt.Printf("Generated %d-dimensional embedding\n", len(vec))
+//	// Output: Generated 1536-dimensional embedding
+//
+// Example 2 - High-Dimensional Model (text-embedding-3-large):
+//
+//	config := embed.DefaultOpenAIConfig(apiKey)
+//	config.Model = "text-embedding-3-large"
+//	config.Dimensions = 3072 // Maximum quality
+//	
+//	embedder := embed.NewOpenAI(config)
+//	
+//	// Higher quality embeddings for critical applications
+//	vec, _ := embedder.Embed(ctx, "complex semantic meaning")
+//	fmt.Printf("High-quality: %d dims\n", len(vec)) // 3072
+//
+// Example 3 - Cost-Optimized (text-embedding-3-small):
+//
+//	config := embed.DefaultOpenAIConfig(apiKey)
+//	config.Model = "text-embedding-3-small"
+//	config.Dimensions = 1536
+//	
+//	embedder := embed.NewOpenAI(config)
+//	
+//	// 5x cheaper than text-embedding-3-large
+//	// $0.02 per 1M tokens vs $0.13 per 1M tokens
+//	vec, _ := embedder.Embed(ctx, "cost effective")
+//
+// Example 4 - Production with Error Handling:
+//
+//	config := embed.DefaultOpenAIConfig(apiKey)
+//	config.Timeout = 30 * time.Second
+//	
+//	embedder := embed.NewOpenAI(config)
+//	
+//	texts := []string{"doc1", "doc2", "doc3"}
+//	embeddings, err := embedder.EmbedBatch(ctx, texts)
+//	if err != nil {
+//		// Handle rate limits, quota errors, etc.
+//		if strings.Contains(err.Error(), "rate_limit") {
+//			time.Sleep(1 * time.Second)
+//			embeddings, err = embedder.EmbedBatch(ctx, texts) // Retry
+//		}
+//	}
+//
+// Example 5 - Multilingual with Azure OpenAI:
+//
+//	config := &embed.Config{
+//		Provider:   "openai",
+//		APIURL:     "https://your-resource.openai.azure.com",
+//		APIPath:    "/openai/deployments/embedding/embeddings?api-version=2023-05-15",
+//		APIKey:     azureAPIKey,
+//		Model:      "text-embedding-ada-002",
+//		Dimensions: 1536,
+//	}
+//	
+//	embedder := embed.NewOpenAI(config)
+//	
+//	// Works with multiple languages
+//	embeddings, _ := embedder.EmbedBatch(ctx, []string{
+//		"Hello world",           // English
+//		"Bonjour le monde",     // French
+//		"Hola mundo",           // Spanish
+//		"こんにちは世界",          // Japanese
+//	})
+//
+// ELI12:
+//
+// NewOpenAI is like hiring a professional translator from a famous company:
+//
+//   - OpenAI is like Google Translate (but specifically for AI)
+//   - You send text to their servers
+//   - They send back numbers that represent the "meaning"
+//   - You pay a tiny amount per text ($0.02 per 1 million words!)
+//
+// Why use OpenAI instead of Ollama?
+//   - QUALITY: Often more accurate
+//   - CONVENIENCE: No setup required
+//   - LANGUAGES: Supports 100+ languages well
+//   - UPDATES: Always latest models
+//
+// BUT:
+//   - COST: You pay for each request (though it's cheap)
+//   - PRIVACY: Your text goes to OpenAI servers
+//   - INTERNET: Needs internet connection
+//   - RATE LIMITS: Max requests per minute
+//
+// Models & Pricing (2024):
+//
+//   text-embedding-3-small:
+//   - 1536 dimensions
+//   - $0.02 per 1M tokens (~750k words)
+//   - Best for: Cost-sensitive applications
+//
+//   text-embedding-3-large:
+//   - 3072 dimensions (can truncate to 256-3072)
+//   - $0.13 per 1M tokens
+//   - Best for: Maximum quality
+//
+//   text-embedding-ada-002 (legacy):
+//   - 1536 dimensions
+//   - $0.10 per 1M tokens
+//   - Still works but use v3 instead
+//
+// Rate Limits:
+//   - Free tier: 3 RPM (requests per minute)
+//   - Paid tier 1: 3,000 RPM
+//   - Paid tier 2+: 5,000+ RPM
+//
+// Use Cases:
+//   - Same as Ollama: similarity search, recommendations, etc.
+//   - Multilingual applications
+//   - When you need the absolute best quality
+//   - When you don't want to run your own infrastructure
+//
+// Performance:
+//   - ~100-300ms per request (network latency)
+//   - Batch up to 2048 texts per request
+//   - Use batch processing to reduce costs
+//
+// Thread Safety:
+//   Safe to call from multiple goroutines.
 func NewOpenAI(config *Config) *OpenAIEmbedder {
 	if config == nil {
 		config = DefaultOpenAIConfig("")

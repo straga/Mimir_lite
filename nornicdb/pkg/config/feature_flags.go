@@ -6,7 +6,7 @@
 // DEFAULTS:
 //   - Tier 1 features (Cooldown, Edge Provenance, Evidence Buffering, Per-Node Config, WAL)
 //     are ENABLED BY DEFAULT for production safety
-//   - Kalman and Topology features are DISABLED by default (experimental)
+//   - Kalman, Topology, and GPU Clustering features are DISABLED by default (experimental)
 //
 // Usage:
 //
@@ -24,6 +24,8 @@
 //
 //	NORNICDB_KALMAN_ENABLED=true
 //	NORNICDB_TOPOLOGY_LINK_PREDICTION_ENABLED=true
+//	NORNICDB_GPU_CLUSTERING_ENABLED=true
+//	NORNICDB_GPU_CLUSTERING_AUTO_INTEGRATION_ENABLED=true
 //
 // Environment variables (to DISABLE default-on features if problems occur):
 //
@@ -77,6 +79,12 @@ const (
 
 	// EnvWALEnabled is the environment variable to enable write-ahead logging
 	EnvWALEnabled = "NORNICDB_WAL_ENABLED"
+
+	// EnvGPUClusteringEnabled is the environment variable to enable GPU k-means clustering
+	EnvGPUClusteringEnabled = "NORNICDB_GPU_CLUSTERING_ENABLED"
+
+	// EnvGPUClusteringAutoIntegrationEnabled is the environment variable to enable automatic GPU clustering in inference
+	EnvGPUClusteringAutoIntegrationEnabled = "NORNICDB_GPU_CLUSTERING_AUTO_INTEGRATION_ENABLED"
 
 	// FeatureKalmanDecay enables Kalman filtering for memory decay prediction
 	FeatureKalmanDecay = "kalman_decay"
@@ -137,6 +145,15 @@ const (
 	// FeatureWAL enables write-ahead logging for durability
 	// Provides crash recovery via WAL + snapshots
 	FeatureWAL = "wal"
+
+	// FeatureGPUClustering enables GPU-accelerated k-means clustering for similarity search
+	// Provides 10-50x speedup on indices with 10K+ embeddings
+	FeatureGPUClustering = "gpu_clustering"
+
+	// FeatureGPUClusteringAutoIntegration enables AUTOMATIC GPU clustering in inference engine
+	// NOTE: ClusterIntegration is ALWAYS available for direct use
+	// This only controls automatic use in inference.Engine.Search()
+	FeatureGPUClusteringAutoIntegration = "gpu_clustering_auto_integration"
 )
 
 var (
@@ -149,10 +166,12 @@ var (
 	perNodeConfigAutoIntegrationEnabled  atomic.Bool
 	edgeProvenanceEnabled                atomic.Bool
 	cooldownEnabled                      atomic.Bool
-	evidenceBufferingEnabled             atomic.Bool
-	perNodeConfigEnabled                 atomic.Bool
-	walEnabled                           atomic.Bool
-	featureFlags                         = make(map[string]bool)
+	evidenceBufferingEnabled                atomic.Bool
+	perNodeConfigEnabled                    atomic.Bool
+	walEnabled                              atomic.Bool
+	gpuClusteringEnabled                    atomic.Bool
+	gpuClusteringAutoIntegrationEnabled     atomic.Bool
+	featureFlags                            = make(map[string]bool)
 	featureFlagsMu                       sync.RWMutex
 	initOnce                             sync.Once
 )
@@ -227,6 +246,18 @@ func init() {
 		walEnabled.Store(true)
 		if env := os.Getenv(EnvWALEnabled); env == "false" || env == "0" {
 			walEnabled.Store(false)
+		}
+
+		// GPU Clustering: DISABLED by default (experimental, requires GPU)
+		// Enable with "true" or "1"
+		if env := os.Getenv(EnvGPUClusteringEnabled); env == "true" || env == "1" {
+			gpuClusteringEnabled.Store(true)
+		}
+
+		// GPU Clustering Auto-Integration: DISABLED by default (experimental)
+		// Enable with "true" or "1"
+		if env := os.Getenv(EnvGPUClusteringAutoIntegrationEnabled); env == "true" || env == "1" {
+			gpuClusteringAutoIntegrationEnabled.Store(true)
 		}
 	})
 }
@@ -602,6 +633,8 @@ func ResetFeatureFlags() {
 	evidenceBufferingEnabled.Store(false)
 	perNodeConfigEnabled.Store(false)
 	walEnabled.Store(false)
+	gpuClusteringEnabled.Store(false)
+	gpuClusteringAutoIntegrationEnabled.Store(false)
 	featureFlagsMu.Lock()
 	defer featureFlagsMu.Unlock()
 	featureFlags = make(map[string]bool)
@@ -643,6 +676,7 @@ type FeatureStatus struct {
 	EvidenceBufferingEnabled bool
 	PerNodeConfigEnabled     bool
 	WALEnabled               bool
+	GPUClusteringEnabled     bool
 	Features                 map[string]bool
 }
 
@@ -660,6 +694,7 @@ func GetFeatureStatus() FeatureStatus {
 		EvidenceBufferingEnabled: evidenceBufferingEnabled.Load(),
 		PerNodeConfigEnabled:     perNodeConfigEnabled.Load(),
 		WALEnabled:               walEnabled.Load(),
+		GPUClusteringEnabled:     gpuClusteringEnabled.Load(),
 		Features:                 make(map[string]bool),
 	}
 
@@ -890,6 +925,112 @@ func WithWALDisabled() func() {
 		walEnabled.Store(prev)
 		if prev {
 			EnableFeature(FeatureWAL)
+		}
+	}
+}
+
+// EnableGPUClustering enables GPU k-means clustering for similarity search.
+func EnableGPUClustering() {
+	gpuClusteringEnabled.Store(true)
+	EnableFeature(FeatureGPUClustering)
+}
+
+// DisableGPUClustering disables GPU k-means clustering.
+func DisableGPUClustering() {
+	gpuClusteringEnabled.Store(false)
+	DisableFeature(FeatureGPUClustering)
+}
+
+// IsGPUClusteringEnabled returns true if GPU clustering is enabled.
+func IsGPUClusteringEnabled() bool {
+	return gpuClusteringEnabled.Load() || IsFeatureEnabled(FeatureGPUClustering)
+}
+
+// WithGPUClusteringEnabled temporarily enables GPU clustering and returns cleanup function.
+func WithGPUClusteringEnabled() func() {
+	prev := gpuClusteringEnabled.Load()
+	gpuClusteringEnabled.Store(true)
+	EnableFeature(FeatureGPUClustering)
+	return func() {
+		gpuClusteringEnabled.Store(prev)
+		if !prev {
+			DisableFeature(FeatureGPUClustering)
+		}
+	}
+}
+
+// WithGPUClusteringDisabled temporarily disables GPU clustering and returns cleanup function.
+func WithGPUClusteringDisabled() func() {
+	prev := gpuClusteringEnabled.Load()
+	gpuClusteringEnabled.Store(false)
+	DisableFeature(FeatureGPUClustering)
+	return func() {
+		gpuClusteringEnabled.Store(prev)
+		if prev {
+			EnableFeature(FeatureGPUClustering)
+		}
+	}
+}
+
+// EnableGPUClusteringAutoIntegration enables automatic GPU clustering in inference engine.
+func EnableGPUClusteringAutoIntegration() {
+	gpuClusteringAutoIntegrationEnabled.Store(true)
+	EnableFeature(FeatureGPUClusteringAutoIntegration)
+}
+
+// DisableGPUClusteringAutoIntegration disables automatic GPU clustering in inference engine.
+func DisableGPUClusteringAutoIntegration() {
+	gpuClusteringAutoIntegrationEnabled.Store(false)
+	DisableFeature(FeatureGPUClusteringAutoIntegration)
+}
+
+// IsGPUClusteringAutoIntegrationEnabled returns true if automatic GPU clustering is enabled.
+//
+// When enabled, the inference engine will automatically use ClusterIntegration
+// for similarity searches when available and configured.
+//
+// Example (auto-integration enabled):
+//
+//	os.Setenv("NORNICDB_GPU_CLUSTERING_AUTO_INTEGRATION_ENABLED", "true")
+//
+//	// Engine automatically uses cluster-accelerated search
+//	results, _ := engine.SimilaritySearch(ctx, embedding, 10)
+//
+// Example (auto-integration disabled - manual control):
+//
+//	// Manually use cluster integration
+//	ci := engine.GetClusterIntegration()
+//	if ci != nil && ci.IsEnabled() {
+//	    results, _ := ci.Search(ctx, embedding, 10)
+//	}
+//
+// Note: This does NOT affect ClusterIntegration direct use - it's always available.
+func IsGPUClusteringAutoIntegrationEnabled() bool {
+	return gpuClusteringAutoIntegrationEnabled.Load() || IsFeatureEnabled(FeatureGPUClusteringAutoIntegration)
+}
+
+// WithGPUClusteringAutoIntegrationEnabled temporarily enables GPU clustering auto-integration.
+func WithGPUClusteringAutoIntegrationEnabled() func() {
+	prev := gpuClusteringAutoIntegrationEnabled.Load()
+	gpuClusteringAutoIntegrationEnabled.Store(true)
+	EnableFeature(FeatureGPUClusteringAutoIntegration)
+	return func() {
+		gpuClusteringAutoIntegrationEnabled.Store(prev)
+		if !prev {
+			DisableFeature(FeatureGPUClusteringAutoIntegration)
+		}
+	}
+}
+
+// WithGPUClusteringAutoIntegrationDisabled temporarily disables GPU clustering auto-integration.
+func WithGPUClusteringAutoIntegrationDisabled() func() {
+	prev := gpuClusteringAutoIntegrationEnabled.Load()
+	gpuClusteringAutoIntegrationEnabled.Store(false)
+	DisableFeature(FeatureGPUClusteringAutoIntegration)
+	return func() {
+		gpuClusteringAutoIntegrationEnabled.Store(prev)
+		if prev {
+			EnableFeature(FeatureGPUClusteringAutoIntegration)
 		}
 	}
 }

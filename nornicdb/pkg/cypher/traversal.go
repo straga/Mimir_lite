@@ -6,7 +6,6 @@ package cypher
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -72,8 +71,7 @@ func (e *StorageExecutor) parseRelationshipPattern(pattern string) *Relationship
 		
 		// Check for variable length: [*], [*2], [*1..3]
 		if strings.Contains(inner, "*") {
-			varLengthRe := regexp.MustCompile(`\*(\d*)(?:\.\.(\d+))?`)
-			if matches := varLengthRe.FindStringSubmatch(inner); matches != nil {
+			if matches := varLengthRelPattern.FindStringSubmatch(inner); matches != nil {
 				if matches[1] != "" {
 					result.MinHops, _ = strconv.Atoi(matches[1])
 				} else {
@@ -88,7 +86,7 @@ func (e *StorageExecutor) parseRelationshipPattern(pattern string) *Relationship
 				}
 			}
 			// Remove variable length part
-			inner = varLengthRe.ReplaceAllString(inner, "")
+			inner = varLengthRelPattern.ReplaceAllString(inner, "")
 		}
 
 		// Parse variable and types: r:TYPE|OTHER
@@ -167,9 +165,9 @@ type TraversalMatch struct {
 // parseTraversalPattern parses (a:Label)-[r:TYPE]->(b:Label) style patterns
 func (e *StorageExecutor) parseTraversalPattern(pattern string) *TraversalMatch {
 	// Pattern regex: (startNode)-[rel]->(endNode) or (startNode)<-[rel]-(endNode)
-	patternRe := regexp.MustCompile(`\(([^)]*)\)\s*(<?\-\[[^\]]*\]\-?>?)\s*\(([^)]*)\)`)
+	// Uses pre-compiled pathPatternRe from regex_patterns.go
 	
-	matches := patternRe.FindStringSubmatch(pattern)
+	matches := pathPatternRe.FindStringSubmatch(pattern)
 	if matches == nil {
 		return nil
 	}

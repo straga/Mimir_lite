@@ -383,6 +383,154 @@ type Manager struct {
 //	})
 //
 // Returns a new Manager ready for policy configuration.
+//
+// Example 1 - GDPR Compliance Setup:
+//
+//	manager := retention.NewManager()
+//	
+//	// Add GDPR-compliant policies
+//	for _, policy := range retention.DefaultPolicies() {
+//		manager.AddPolicy(policy)
+//	}
+//	
+//	// Set callbacks for data operations
+//	manager.SetDeleteCallback(func(record *retention.DataRecord) error {
+//		log.Printf("Deleting record: %s (age: %v)", record.ID, time.Since(record.CreatedAt))
+//		return database.Delete(record.ID)
+//	})
+//	
+//	manager.SetArchiveCallback(func(record *retention.DataRecord, path string) error {
+//		log.Printf("Archiving to: %s", path)
+//		return archiveSystem.Store(record, path)
+//	})
+//
+// Example 2 - HIPAA Healthcare Application:
+//
+//	manager := retention.NewManager()
+//	
+//	// PHI retention: 6 years minimum
+//	phiPolicy := &retention.Policy{
+//		ID:       "phi-6y",
+//		Name:     "PHI Retention",
+//		Category: retention.CategoryPHI,
+//		RetentionPeriod: retention.RetentionPeriod{
+//			Duration: 6 * 365 * 24 * time.Hour,
+//		},
+//		ArchiveBeforeDelete:  true,
+//		ArchivePath:          "/secure-archive/phi",
+//		ComplianceFrameworks: []string{"HIPAA"},
+//		Active:               true,
+//	}
+//	manager.AddPolicy(phiPolicy)
+//	
+//	// Audit logs: 7 years
+//	auditPolicy := &retention.Policy{
+//		ID:       "audit-7y",
+//		Category: retention.CategoryAudit,
+//		RetentionPeriod: retention.RetentionPeriod{
+//			Duration: 7 * 365 * 24 * time.Hour,
+//		},
+//		ArchiveBeforeDelete: true,
+//	}
+//	manager.AddPolicy(auditPolicy)
+//
+// Example 3 - With Legal Holds:
+//
+//	manager := retention.NewManager()
+//	manager.AddPolicy(retention.DefaultPolicies()[0])
+//	
+//	// Create legal hold for litigation
+//	hold, err := manager.CreateLegalHold(
+//		"litigation-2024-001",
+//		"Smith v. Company - Employment Case",
+//		[]string{"legal", "hr"},
+//	)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	// Records matching these tags won't be deleted
+//	record := &retention.DataRecord{
+//		ID:       "email-123",
+//		Category: retention.CategoryUser,
+//		Tags:     []string{"hr", "employment"},
+//		CreatedAt: time.Now().Add(-5 * 365 * 24 * time.Hour),
+//	}
+//	
+//	// Won't delete - protected by legal hold
+//	err = manager.ProcessRecord(ctx, record)
+//
+// Example 4 - GDPR Right to Erasure:
+//
+//	manager := retention.NewManager()
+//	
+//	// User requests data deletion
+//	erasureReq, err := manager.CreateErasureRequest(
+//		"user-456",
+//		"user@example.com",
+//	)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	// Find all user's data across systems
+//	records := []*retention.DataRecord{
+//		{ID: "profile-456", SubjectID: "user-456"},
+//		{ID: "orders-456", SubjectID: "user-456"},
+//		{ID: "analytics-456", SubjectID: "user-456"},
+//	}
+//	
+//	// Process erasure (30-day GDPR deadline)
+//	err = manager.ProcessErasure(ctx, erasureReq.ID, records)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	fmt.Printf("Erased: %d, Retained: %d (legal hold)\n",
+//		erasureReq.ItemsErased, erasureReq.ItemsRetained)
+//
+// ELI12:
+//
+// NewManager is like hiring a librarian for your school:
+//
+//   - The librarian keeps track of rules: "Throw away old magazines after 3 months"
+//   - They archive important stuff before throwing it away
+//   - They handle requests: "I want my book reports deleted" (GDPR erasure)
+//   - They respect "DO NOT THROW AWAY" signs (legal holds)
+//
+// Why do we need this?
+//   - GDPR: European law says "delete old data you don't need"
+//   - HIPAA: US health law says "keep medical records for 6 years"
+//   - SOX: Financial law says "keep money records for 7 years"
+//   - Storage costs: Old data costs money to store
+//
+// How it works:
+//   1. Set up policies: "Keep PHI for 6 years, analytics for 90 days"
+//   2. Manager checks records: "Is this record too old?"
+//   3. If yes: Archive first (if policy says so), then delete
+//   4. If legal hold: "Can't delete this, it's in a lawsuit!"
+//
+// Real-world Use:
+//   - Healthcare: Manage patient records (HIPAA compliance)
+//   - SaaS: Handle user data deletion requests (GDPR)
+//   - Finance: Retain transaction records (SOX compliance)
+//   - E-commerce: Clean up old analytics data
+//
+// Compliance Benefits:
+//   - GDPR Art.5(1)(e): Storage limitation ✓
+//   - GDPR Art.17: Right to erasure ✓
+//   - HIPAA §164.530(j): 6-year retention ✓
+//   - SOX: 7-year financial records ✓
+//   - Automatic audit trail of deletions ✓
+//
+// Performance:
+//   - Policy lookup: O(1) hash map
+//   - Record processing: O(1) per record
+//   - Legal hold check: O(n) where n = number of holds (usually <10)
+//   - Erasure request: O(m) where m = records to erase
+//
+// Thread Safety:
+//   All methods are thread-safe for concurrent access.
 func NewManager() *Manager {
 	return &Manager{
 		policies: make(map[string]*Policy),
@@ -941,6 +1089,144 @@ func (m *Manager) LoadPolicies(path string) error {
 //   - Geographic requirements
 //   - Business needs
 //   - Legal counsel recommendations
+//
+// Example 1 - Use All Default Policies:
+//
+//	manager := retention.NewManager()
+//	
+//	// Add all pre-configured compliance policies
+//	for _, policy := range retention.DefaultPolicies() {
+//		if err := manager.AddPolicy(policy); err != nil {
+//			log.Printf("Failed to add policy %s: %v", policy.ID, err)
+//		}
+//	}
+//	
+//	// Now manager has HIPAA, GDPR, SOX policies configured
+//
+// Example 2 - Selective Policy Usage:
+//
+//	policies := retention.DefaultPolicies()
+//	manager := retention.NewManager()
+//	
+//	// Only add policies relevant to your industry
+//	for _, policy := range policies {
+//		// Healthcare app - need HIPAA policies
+//		if contains(policy.ComplianceFrameworks, "HIPAA") {
+//			manager.AddPolicy(policy)
+//		}
+//		
+//		// European app - need GDPR policies
+//		if contains(policy.ComplianceFrameworks, "GDPR") {
+//			manager.AddPolicy(policy)
+//		}
+//	}
+//
+// Example 3 - Customize Default Policies:
+//
+//	policies := retention.DefaultPolicies()
+//	manager := retention.NewManager()
+//	
+//	// Find and customize specific policy
+//	for _, policy := range policies {
+//		if policy.Category == retention.CategoryPII {
+//			// Shorter retention for GDPR minimization
+//			policy.RetentionPeriod.Duration = 1 * 365 * 24 * time.Hour
+//			policy.Description = "Aggressive GDPR data minimization - 1 year"
+//		}
+//		manager.AddPolicy(policy)
+//	}
+//
+// Example 4 - Override with Custom Policies:
+//
+//	manager := retention.NewManager()
+//	
+//	// Start with defaults
+//	for _, policy := range retention.DefaultPolicies() {
+//		manager.AddPolicy(policy)
+//	}
+//	
+//	// Add industry-specific policy
+//	customPolicy := &retention.Policy{
+//		ID:       "telemetry-30d",
+//		Name:     "Device Telemetry",
+//		Category: retention.CategoryAnalytics,
+//		RetentionPeriod: retention.RetentionPeriod{
+//			Duration: 30 * 24 * time.Hour,
+//		},
+//		Active:      true,
+//		Description: "IoT device telemetry - 30 days",
+//	}
+//	manager.AddPolicy(customPolicy)
+//
+// ELI12:
+//
+// DefaultPolicies is like getting a starter rulebook for your library:
+//
+// "Here are the most common rules schools use:"
+//   - Keep report cards for 7 years (important!)
+//   - Keep homework for 1 year (useful)
+//   - Throw away scratch paper after 3 months (not important)
+//   - Keep textbooks forever (system data)
+//
+// Instead of making up all the rules yourself, you get a proven set
+// that follows the law!
+//
+// Included Policies:
+//
+// 1. **Audit Logs (7 years)** - audit-7y
+//    - HIPAA §164.530(j), SOX §802, FISMA
+//    - Archives before deletion
+//    - Critical for compliance audits
+//
+// 2. **PHI/Health Data (6 years)** - phi-6y
+//    - HIPAA §164.530(j) requirement
+//    - Archives before deletion
+//    - Protected health information
+//
+// 3. **PII/Personal Data (3 years)** - pii-gdpr
+//    - GDPR Art.5(1)(e) minimization
+//    - No archival (privacy-focused)
+//    - Personally identifiable information
+//
+// 4. **Financial Records (7 years)** - financial-7y
+//    - SOX §802, IRS requirements
+//    - Archives before deletion
+//    - Tax and audit compliance
+//
+// 5. **User Data (1 year)** - user-1y
+//    - General user content
+//    - No archival by default
+//    - Configurable based on needs
+//
+// 6. **Analytics (90 days)** - analytics-90d
+//    - Short-term metrics
+//    - No archival
+//    - Quick cleanup
+//
+// 7. **System Data (indefinite)** - system-indefinite
+//    - Core configuration
+//    - Never deleted
+//    - Essential operations
+//
+// When to Modify:
+//   - Your industry has stricter requirements
+//   - Operating in specific jurisdictions (EU, US, etc.)
+//   - Business needs longer/shorter retention
+//   - Legal counsel recommends changes
+//
+// Compliance Coverage:
+//   - GDPR (EU): ✓ Data minimization, erasure rights
+//   - HIPAA (US Healthcare): ✓ 6-year PHI retention
+//   - SOX (US Finance): ✓ 7-year financial records
+//   - FISMA (US Federal): ✓ Audit log retention
+//
+// Performance:
+//   - Returns static slice: O(1)
+//   - 7 pre-configured policies
+//   - No I/O or computation
+//
+// Thread Safety:
+//   Returns new policy instances - safe to modify.
 func DefaultPolicies() []*Policy {
 	now := time.Now().UTC()
 	return []*Policy{

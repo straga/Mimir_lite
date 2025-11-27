@@ -353,4 +353,123 @@ func TestFeatureFlags(t *testing.T) {
 			t.Error("WAL should be disabled after reset")
 		}
 	})
+
+	// GPU Clustering Tests - DISABLED by default (experimental)
+	t.Run("gpu_clustering_default_disabled", func(t *testing.T) {
+		ResetFeatureFlags()
+
+		if IsGPUClusteringEnabled() {
+			t.Error("GPU clustering should be disabled by default")
+		}
+
+		if IsGPUClusteringAutoIntegrationEnabled() {
+			t.Error("GPU clustering auto-integration should be disabled by default")
+		}
+	})
+
+	t.Run("gpu_clustering_enable_disable", func(t *testing.T) {
+		ResetFeatureFlags()
+
+		EnableGPUClustering()
+		if !IsGPUClusteringEnabled() {
+			t.Error("GPU clustering should be enabled")
+		}
+
+		DisableGPUClustering()
+		if IsGPUClusteringEnabled() {
+			t.Error("GPU clustering should be disabled")
+		}
+	})
+
+	t.Run("gpu_clustering_auto_integration_enable_disable", func(t *testing.T) {
+		ResetFeatureFlags()
+
+		EnableGPUClusteringAutoIntegration()
+		if !IsGPUClusteringAutoIntegrationEnabled() {
+			t.Error("GPU clustering auto-integration should be enabled")
+		}
+
+		DisableGPUClusteringAutoIntegration()
+		if IsGPUClusteringAutoIntegrationEnabled() {
+			t.Error("GPU clustering auto-integration should be disabled")
+		}
+	})
+
+	t.Run("with_gpu_clustering_enabled_disabled", func(t *testing.T) {
+		ResetFeatureFlags()
+
+		// Test enable scope
+		cleanup := WithGPUClusteringEnabled()
+		if !IsGPUClusteringEnabled() {
+			t.Error("GPU clustering should be enabled in scope")
+		}
+		cleanup()
+
+		if IsGPUClusteringEnabled() {
+			t.Error("GPU clustering should be disabled after cleanup")
+		}
+
+		// Test disable scope
+		EnableGPUClustering()
+		cleanup = WithGPUClusteringDisabled()
+		if IsGPUClusteringEnabled() {
+			t.Error("GPU clustering should be disabled in scope")
+		}
+		cleanup()
+
+		if !IsGPUClusteringEnabled() {
+			t.Error("GPU clustering should be re-enabled after cleanup")
+		}
+	})
+
+	t.Run("with_gpu_clustering_auto_integration_enabled_disabled", func(t *testing.T) {
+		ResetFeatureFlags()
+
+		// Test enable scope
+		cleanup := WithGPUClusteringAutoIntegrationEnabled()
+		if !IsGPUClusteringAutoIntegrationEnabled() {
+			t.Error("GPU clustering auto-integration should be enabled in scope")
+		}
+		cleanup()
+
+		if IsGPUClusteringAutoIntegrationEnabled() {
+			t.Error("GPU clustering auto-integration should be disabled after cleanup")
+		}
+
+		// Test disable scope
+		EnableGPUClusteringAutoIntegration()
+		cleanup = WithGPUClusteringAutoIntegrationDisabled()
+		if IsGPUClusteringAutoIntegrationEnabled() {
+			t.Error("GPU clustering auto-integration should be disabled in scope")
+		}
+		cleanup()
+
+		if !IsGPUClusteringAutoIntegrationEnabled() {
+			t.Error("GPU clustering auto-integration should be re-enabled after cleanup")
+		}
+	})
+
+	t.Run("feature_status_includes_gpu_clustering", func(t *testing.T) {
+		ResetFeatureFlags()
+		EnableGPUClustering()
+
+		status := GetFeatureStatus()
+		if !status.GPUClusteringEnabled {
+			t.Error("Status should show GPU clustering enabled")
+		}
+	})
+
+	t.Run("reset_clears_gpu_clustering", func(t *testing.T) {
+		EnableGPUClustering()
+		EnableGPUClusteringAutoIntegration()
+
+		ResetFeatureFlags()
+
+		if IsGPUClusteringEnabled() {
+			t.Error("GPU clustering should be disabled after reset")
+		}
+		if IsGPUClusteringAutoIntegrationEnabled() {
+			t.Error("GPU clustering auto-integration should be disabled after reset")
+		}
+	})
 }

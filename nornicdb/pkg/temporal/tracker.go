@@ -232,7 +232,116 @@ type Tracker struct {
 	lastCleanup time.Time
 }
 
-// NewTracker creates a new temporal tracker.
+// NewTracker creates a new temporal tracker with the given configuration.
+//
+// The tracker monitors node access patterns over time and uses Kalman filtering
+// to smooth noisy data and predict future accesses. It automatically detects
+// session boundaries and cyclic patterns.
+//
+// Parameters:
+//   - cfg: Configuration for tracking behavior (use DefaultConfig() for defaults)
+//
+// Returns:
+//   - *Tracker ready to record accesses and make predictions
+//
+// Example 1 - Basic Access Tracking:
+//
+//	tracker := temporal.NewTracker(temporal.DefaultConfig())
+//	
+//	// Simulate user accessing documents over time
+//	for i := 0; i < 10; i++ {
+//		tracker.RecordAccess("doc-123")
+//		time.Sleep(5 * time.Second)
+//	}
+//	
+//	// Get statistics
+//	stats := tracker.GetNodeStats("doc-123")
+//	fmt.Printf("Accessed %d times, avg %.1f seconds between accesses\n",
+//		stats.AccessCount, stats.AverageIntervalSeconds)
+//
+// Example 2 - Predicting Next Access:
+//
+//	tracker := temporal.NewTracker(temporal.DefaultConfig())
+//	
+//	// User accesses a file regularly
+//	for i := 0; i < 5; i++ {
+//		tracker.RecordAccess("project-file")
+//		time.Sleep(1 * time.Hour) // Every hour
+//	}
+//	
+//	// Predict when they'll access it next
+//	prediction := tracker.PredictNextAccess("project-file")
+//	if prediction != nil {
+//		fmt.Printf("Likely to access in %.0f minutes\n", prediction.SecondsUntil/60)
+//		// Output: "Likely to access in 60 minutes"
+//	}
+//
+// Example 3 - Session Boundary Detection:
+//
+//	tracker := temporal.NewTracker(temporal.DefaultConfig())
+//	
+//	// User is actively working
+//	tracker.RecordAccess("doc-1")
+//	time.Sleep(30 * time.Second)
+//	tracker.RecordAccess("doc-1")
+//	time.Sleep(30 * time.Second)
+//	
+//	// Long gap - user left for lunch
+//	time.Sleep(2 * time.Hour)
+//	
+//	// Check if session changed
+//	if tracker.IsSessionBoundary("doc-1") {
+//		fmt.Println("New session detected - user returned!")
+//		// Clear short-term context, log session end, etc.
+//	}
+//
+// Example 4 - Integration with Decay System:
+//
+//	tracker := temporal.NewTracker(temporal.DefaultConfig())
+//	decayManager := decay.New(nil)
+//	
+//	// Track accesses and update decay
+//	onAccess := func(nodeID string) {
+//		tracker.RecordAccess(nodeID)
+//		
+//		// Predict if node will be accessed soon
+//		pred := tracker.PredictNextAccess(nodeID)
+//		if pred != nil && pred.SecondsUntil < 3600 { // Within 1 hour
+//			// Slow decay for nodes that will be accessed soon
+//			memory.ImportanceWeight = 0.9
+//		}
+//	}
+//
+// ELI12:
+//
+// Think of NewTracker like starting a stopwatch collection for tracking when
+// your friends visit:
+//
+//   - Every time Sarah visits, you click her stopwatch: RECORD ACCESS
+//   - After a few visits, you notice "Sarah comes every day around 3pm"
+//   - The tracker can predict: "Sarah will probably visit tomorrow at 3pm"
+//   - If she doesn't visit for a week, it notices: "Session ended, she forgot about us"
+//
+// The Kalman filter is the "smart brain" that:
+//   1. Notices patterns (daily visits, weekly visits, etc.)
+//   2. Handles noise (if she comes at 3:05pm once, don't panic)
+//   3. Detects trends (is she visiting MORE often or LESS often?)
+//   4. Makes predictions (when will she visit next?)
+//
+// Real-world Uses:
+//   - Cache management: "This file will be accessed in 5 minutes, keep it warm!"
+//   - Memory decay: "This hasn't been accessed in 2 weeks, archive it"
+//   - Context switching: "User moved from coding to meetings (30 min gap)"
+//   - Predictive loading: "User opens Report.docx every Monday at 9am"
+//
+// Performance:
+//   - RecordAccess: O(1) - very fast
+//   - PredictNextAccess: O(1) - simple calculation
+//   - Memory: ~500 bytes per tracked node
+//   - MaxTrackedNodes uses LRU eviction (least recently used gets removed)
+//
+// Thread Safety:
+//   All methods are thread-safe for concurrent access from multiple goroutines.
 func NewTracker(cfg Config) *Tracker {
 	return &Tracker{
 		config:      cfg,
@@ -243,7 +352,70 @@ func NewTracker(cfg Config) *Tracker {
 	}
 }
 
-// RecordAccess records an access to a node.
+// RecordAccess records an access to a node at the current time.
+//
+// This is the primary method for feeding access events into the temporal tracker.
+// Each call updates the node's access statistics, smooths the data with Kalman
+// filtering, and checks for session boundaries.
+//
+// Parameters:
+//   - nodeID: Unique identifier for the node being accessed
+//
+// Example 1 - Simple Access Tracking:
+//
+//	tracker := temporal.NewTracker(temporal.DefaultConfig())
+//	
+//	// Record every time user opens a document
+//	tracker.RecordAccess("doc-readme")
+//	tracker.RecordAccess("doc-api")
+//	tracker.RecordAccess("doc-readme") // Accessed again
+//	
+//	// Tracker now knows doc-readme is accessed more frequently
+//
+// Example 2 - Integration with Storage Engine:
+//
+//	tracker := temporal.NewTracker(temporal.DefaultConfig())
+//	engine := storage.NewBadgerEngine("./data")
+//	
+//	// Hook into node retrieval
+//	originalGet := engine.GetNode
+//	engine.GetNode = func(id storage.NodeID) (*storage.Node, error) {
+//		tracker.RecordAccess(string(id)) // Track access
+//		return originalGet(id)
+//	}
+//
+// Example 3 - Real-time Recommendation System:
+//
+//	tracker := temporal.NewTracker(temporal.DefaultConfig())
+//	
+//	func handleUserAction(userID, itemID string) {
+//		tracker.RecordAccess(itemID)
+//		
+//		// Get all recently accessed items
+//		recentItems := tracker.GetRecentlyAccessed(10)
+//		
+//		// Recommend similar items
+//		recommendations := findSimilarItems(recentItems)
+//		showRecommendations(userID, recommendations)
+//	}
+//
+// ELI12:
+//
+// Think of RecordAccess like clicking a button on your stopwatch app:
+//   - Click! = "I just used this thing"
+//   - The app remembers: "Oh, you use this every hour"
+//   - Next time, it can guess: "You'll probably use it again in 1 hour"
+//
+// It's like your phone learning you check Instagram every morning at 7am,
+// so it preloads it for you!
+//
+// Performance:
+//   - O(1) constant time operation
+//   - Thread-safe with mutex protection
+//   - Automatic LRU eviction when MaxTrackedNodes exceeded
+//
+// Thread Safety:
+//   Safe to call concurrently from multiple goroutines.
 func (t *Tracker) RecordAccess(nodeID string) {
 	t.RecordAccessAt(nodeID, time.Now())
 }

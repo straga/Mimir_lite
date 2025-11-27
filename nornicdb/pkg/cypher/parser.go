@@ -215,7 +215,7 @@ func (p *Parser) Parse(cypher string) (*Query, error) {
 			query.Type = QueryMatch
 			
 		case "OPTIONAL":
-			if pos+1 < len(tokens) && strings.ToUpper(tokens[pos+1]) == "MATCH" {
+			if pos+1 < len(tokens) && strings.EqualFold(tokens[pos+1], "MATCH") {
 				clause, newPos, err := p.parseMatch(tokens, pos+1)
 				if err != nil {
 					return nil, err
@@ -325,7 +325,7 @@ func (p *Parser) parseSet(tokens []string, pos int) (*SetClause, int, error) {
 func (p *Parser) parseDelete(tokens []string, pos int) (*DeleteClause, int, error) {
 	clause := &DeleteClause{}
 	
-	if strings.ToUpper(tokens[pos]) == "DETACH" {
+	if strings.EqualFold(tokens[pos], "DETACH") {
 		clause.Detach = true
 		pos++
 	}

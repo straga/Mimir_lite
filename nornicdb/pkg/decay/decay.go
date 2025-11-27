@@ -303,6 +303,105 @@ type Manager struct {
 //		ImportanceWeight:    0.2,
 //	}
 //	manager = decay.New(config)
+//
+// Example 1 - Basic Usage with Default Config:
+//
+//	manager := decay.New(nil) // Uses DefaultConfig()
+//	
+//	// Create a semantic memory
+//	info := &decay.MemoryInfo{
+//		ID:           "fact-123",
+//		Tier:         decay.TierSemantic,
+//		CreatedAt:    time.Now(),
+//		LastAccessed: time.Now(),
+//		AccessCount:  1,
+//	}
+//	
+//	// Calculate initial score
+//	score := manager.CalculateScore(info)
+//	fmt.Printf("Initial score: %.2f\n", score) // ~0.60 (semantic tier default)
+//
+// Example 2 - Custom Decay Rates:
+//
+//	config := &decay.Config{
+//		RecalculateInterval: 30 * time.Minute, // Faster updates
+//		ArchiveThreshold:    0.1,               // Archive at 10% instead of 5%
+//		RecencyWeight:       0.5,               // Emphasize recency
+//		FrequencyWeight:     0.3,
+//		ImportanceWeight:    0.2,
+//	}
+//	
+//	manager := decay.New(config)
+//	
+//	// Old, rarely-accessed memories decay faster
+//	oldInfo := &decay.MemoryInfo{
+//		ID:           "old-note",
+//		Tier:         decay.TierEpisodic,
+//		CreatedAt:    time.Now().Add(-14 * 24 * time.Hour), // 2 weeks old
+//		LastAccessed: time.Now().Add(-14 * 24 * time.Hour),
+//		AccessCount:  1,
+//	}
+//	score := manager.CalculateScore(oldInfo)
+//	// score will be very low (~0.05) due to age and single access
+//
+// Example 3 - Memory Lifecycle Management:
+//
+//	manager := decay.New(nil)
+//	memories := make(map[string]*decay.MemoryInfo)
+//	
+//	// Simulate memory access over time
+//	for day := 0; day < 30; day++ {
+//		// Create new memory
+//		info := &decay.MemoryInfo{
+//			ID:           fmt.Sprintf("mem-%d", day),
+//			Tier:         decay.TierSemantic,
+//			CreatedAt:    time.Now(),
+//			LastAccessed: time.Now(),
+//			AccessCount:  1,
+//		}
+//		memories[info.ID] = info
+//		
+//		// Update existing memories
+//		for id, mem := range memories {
+//			score := manager.CalculateScore(mem)
+//			
+//			// Archive low-scoring memories
+//			if manager.ShouldArchive(score) {
+//				delete(memories, id)
+//				archiveMemory(mem)
+//			}
+//			
+//			// Randomly reinforce some memories
+//			if rand.Float64() < 0.3 { // 30% chance
+//				memories[id] = manager.Reinforce(mem)
+//			}
+//		}
+//		
+//		time.Sleep(24 * time.Hour) // Simulate day passing
+//	}
+//
+// ELI12:
+//
+// Imagine your brain has a "memory manager" that decides what to remember:
+//
+//   1. New memories start strong (score = 0.6-0.9)
+//   2. Every day, memories get weaker like ice cream melting
+//   3. When you USE a memory, it gets stronger again!
+//   4. Really old, unused memories drop to almost zero and get "archived"
+//      (like moving old toys to the attic)
+//
+// The three tiers are like different types of memories:
+//   - Episodic = What you ate for breakfast (forget in days)
+//   - Semantic = State capitals (forget in months if not used)
+//   - Procedural = How to ride a bike (almost never forget)
+//
+// Performance:
+//   - CalculateScore: O(1) - pure math, very fast
+//   - Memory: Minimal overhead, just tracking last access time
+//   - Background recalculation: Configurable interval (default 1 hour)
+//
+// Thread Safety:
+//   Manager is thread-safe for concurrent score calculations.
 func New(config *Config) *Manager {
 	if config == nil {
 		config = DefaultConfig()

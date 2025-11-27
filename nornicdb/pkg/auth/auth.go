@@ -417,6 +417,147 @@ type AuditEvent struct {
 //	auth = auth.NewAuthenticator(devConfig)
 //
 // Returns error if SecurityEnabled=true but JWTSecret is empty.
+//
+// Example 1 - Production HIPAA-Compliant Setup:
+//
+//	config := auth.DefaultAuthConfig()
+//	config.SecurityEnabled = true
+//	config.JWTSecret = []byte(os.Getenv("JWT_SECRET")) // Min 32 bytes
+//	config.MinPasswordLength = 12
+//	config.BcryptCost = 12 // High cost for security
+//	config.MaxFailedAttempts = 5
+//	config.LockoutDuration = 30 * time.Minute
+//	config.TokenExpiry = 4 * time.Hour
+//	
+//	authenticator, err := auth.NewAuthenticator(config)
+//	if err != nil {
+//		log.Fatal("Failed to initialize auth:", err)
+//	}
+//	
+//	// Set up HIPAA-required audit logging
+//	authenticator.SetAuditLogger(func(event auth.AuditEvent) {
+//		auditLogger.Log(audit.Event{
+//			Type:      audit.EventLogin,
+//			UserID:    event.UserID,
+//			Username:  event.Username,
+//			IPAddress: event.IPAddress,
+//			Success:   event.Success,
+//			Metadata:  map[string]string{"reason": event.Message},
+//		})
+//	})
+//	
+//	// Create admin user with strong password
+//	admin, err := authenticator.CreateUser("admin",
+//		"Str0ng!P@ssw0rd#2024", []auth.Role{auth.RoleAdmin})
+//
+// Example 2 - Multi-Tenant SaaS with Short-Lived Tokens:
+//
+//	config := auth.DefaultAuthConfig()
+//	config.SecurityEnabled = true
+//	config.JWTSecret = loadSecretFromVault()
+//	config.TokenExpiry = 15 * time.Minute // Short-lived tokens
+//	config.MaxFailedAttempts = 3          // Strict lockout
+//	
+//	authenticator, err := auth.NewAuthenticator(config)
+//	if err != nil {
+//		return nil, fmt.Errorf("auth init failed: %w", err)
+//	}
+//	
+//	// Create per-tenant users
+//	for _, tenant := range tenants {
+//		user, err := authenticator.CreateUser(
+//			fmt.Sprintf("%s-%s", tenant.ID, username),
+//			generateStrongPassword(),
+//			[]auth.Role{auth.RoleEditor},
+//		)
+//		if err != nil {
+//			log.Printf("Failed to create user for tenant %s: %v", tenant.ID, err)
+//		}
+//	}
+//
+// Example 3 - Development Mode (No Security):
+//
+//	config := auth.DefaultAuthConfig()
+//	config.SecurityEnabled = false // Bypass all auth checks
+//	
+//	authenticator, err := auth.NewAuthenticator(config)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	
+//	// In dev mode, any token is accepted
+//	// WARNING: Never use in production!
+//	claims, _ := authenticator.ValidateToken("any-token") // Always succeeds
+//
+// Example 4 - API Integration with Rate Limiting:
+//
+//	config := auth.DefaultAuthConfig()
+//	config.JWTSecret = []byte("secure-secret-32-chars-minimum!!")
+//	config.MaxFailedAttempts = 5
+//	
+//	authenticator, err := auth.NewAuthenticator(config)
+//	if err != nil {
+//		return nil, err
+//	}
+//	
+//	// Track failed attempts for rate limiting
+//	authenticator.SetAuditLogger(func(event auth.AuditEvent) {
+//		if event.EventType == "login_failed" {
+//			rateLimiter.RecordFailure(event.IPAddress)
+//			if rateLimiter.IsBlocked(event.IPAddress) {
+//				firewall.BlockIP(event.IPAddress, 1*time.Hour)
+//			}
+//		}
+//	})
+//
+// ELI12:
+//
+// Think of NewAuthenticator like hiring a bouncer for a club:
+//
+//   - The bouncer checks IDs (validates JWT tokens)
+//   - They remember troublemakers (account lockout after failed attempts)
+//   - They keep a guest list (user database)
+//   - They write down who comes in (audit logging)
+//   - They have different wristbands for VIP, regular, and just-looking (roles)
+//
+// SecurityEnabled = true means "bouncer is on duty"
+// SecurityEnabled = false means "anyone can walk in" (development only!)
+//
+// Real-world Analogy:
+//   JWT tokens are like temporary wristbands:
+//   - When you log in, you get a wristband (token)
+//   - Show the wristband to access stuff (no need to login again)
+//   - Wristband expires after a few hours (token expiry)
+//   - If you lose it, get a new one by logging in again
+//
+// Why JWT Instead of Sessions?
+//   Sessions: "I'll remember you" (server stores state)
+//   JWT: "Here's a signed badge, prove yourself each time" (stateless)
+//   
+//   JWT Benefits:
+//   - Works across multiple servers (no shared session storage)
+//   - Scales better (no memory for sessions)
+//   - Mobile-friendly (just store the token)
+//
+// Security Features:
+//   - Passwords hashed with bcrypt (can't be reversed)
+//   - Account lockout (prevents password guessing)
+//   - Token expiry (stolen tokens eventually die)
+//   - Audit logging (track who did what)
+//
+// Compliance:
+//   - GDPR Art.32: Security measures ✓
+//   - HIPAA §164.312(a): Access control ✓
+//   - FISMA AC-2: Account management ✓
+//   - SOC 2 CC6.1: Logical access controls ✓
+//
+// Performance:
+//   - bcrypt hashing: ~50-200ms (intentionally slow for security)
+//   - Token validation: ~1ms (just signature check)
+//   - Thread-safe for concurrent authentication
+//
+// Thread Safety:
+//   All methods are thread-safe for concurrent use.
 func NewAuthenticator(config AuthConfig) (*Authenticator, error) {
 	if config.SecurityEnabled && len(config.JWTSecret) == 0 {
 		return nil, ErrMissingSecret

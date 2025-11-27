@@ -33,6 +33,8 @@ package storage
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -106,9 +108,113 @@ type Transaction struct {
 	pendingEdges map[EdgeID]*Edge
 	deletedNodes map[NodeID]struct{}
 	deletedEdges map[EdgeID]struct{}
+
+	// Transaction metadata (for logging/debugging)
+	// Set via CALL tx.setMetaData() in Cypher
+	Metadata map[string]interface{}
 }
 
 // NewTransaction creates a new transaction bound to a storage engine.
+//
+// Transactions provide ACID semantics for graph operations. All modifications
+// within a transaction are buffered and only visible to the transaction until
+// commit. This enables atomic multi-step operations and rollback capability.
+//
+// Parameters:
+//   - engine: The MemoryEngine to execute operations against
+//
+// Returns:
+//   - *Transaction with unique ID, ready for operations
+//
+// Example 1 - Basic Transaction:
+//
+//	tx := storage.NewTransaction(engine)
+//	
+//	// Create multiple nodes atomically
+//	tx.CreateNode(&storage.Node{
+//		ID: "user-1", Labels: []string{"User"},
+//		Properties: map[string]any{"name": "Alice"},
+//	})
+//	tx.CreateNode(&storage.Node{
+//		ID: "user-2", Labels: []string{"User"},
+//		Properties: map[string]any{"name": "Bob"},
+//	})
+//	
+//	// All-or-nothing: either both succeed or both fail
+//	if err := tx.Commit(); err != nil {
+//		log.Fatal("Transaction failed:", err)
+//	}
+//
+// Example 2 - Rollback on Error:
+//
+//	tx := storage.NewTransaction(engine)
+//	
+//	tx.CreateNode(&storage.Node{ID: "n1", Labels: []string{"Test"}})
+//	tx.CreateNode(&storage.Node{ID: "n2", Labels: []string{"Test"}})
+//	
+//	// Oh no, something went wrong!
+//	if someErrorCondition {
+//		tx.Rollback() // Discard all changes
+//		return
+//	}
+//	
+//	tx.Commit() // Only commits if no error
+//
+// Example 3 - Complex Multi-Step Operation:
+//
+//	tx := storage.NewTransaction(engine)
+//	
+//	// Step 1: Create user
+//	user := &storage.Node{
+//		ID: "user-123", Labels: []string{"User"},
+//		Properties: map[string]any{"email": "alice@example.com"},
+//	}
+//	tx.CreateNode(user)
+//	
+//	// Step 2: Create profile
+//	profile := &storage.Node{
+//		ID: "profile-123", Labels: []string{"Profile"},
+//		Properties: map[string]any{"bio": "Software engineer"},
+//	}
+//	tx.CreateNode(profile)
+//	
+//	// Step 3: Link them
+//	edge := &storage.Edge{
+//		ID: "has-profile-123",
+//		StartNode: "user-123", EndNode: "profile-123",
+//		Type: "HAS_PROFILE",
+//	}
+//	tx.CreateEdge(edge)
+//	
+//	// All three operations commit together
+//	tx.Commit()
+//
+// ELI12:
+//
+// Think of a transaction like writing a rough draft before submitting homework:
+//
+//   - BEGIN (NewTransaction): Start your rough draft paper
+//   - WRITE: Make changes on the draft (not the final copy yet)
+//   - COMMIT: "This looks good!" → Copy draft to final paper
+//   - ROLLBACK: "This is wrong!" → Throw away draft, start over
+//
+// The key is: Changes on your draft don't affect the final paper until you
+// decide to copy them over (commit). If you mess up, just crumple the draft
+// and start fresh!
+//
+// Real-world Use Cases:
+//   - Bank transfers (debit + credit must both succeed)
+//   - User registration (create user + profile + permissions atomically)
+//   - Graph migrations (modify multiple nodes/edges consistently)
+//   - Batch imports (rollback if any item fails validation)
+//
+// Performance:
+//   - Minimal overhead (operations buffered in memory)
+//   - Commit time: O(operations) - applies all buffered changes
+//   - Read-your-writes: Can read your own uncommitted changes
+//
+// Thread Safety:
+//   Each transaction is isolated and thread-safe internally.
 func NewTransaction(engine *MemoryEngine) *Transaction {
 	return &Transaction{
 		ID:           generateTxID(),
@@ -120,6 +226,7 @@ func NewTransaction(engine *MemoryEngine) *Transaction {
 		pendingEdges: make(map[EdgeID]*Edge),
 		deletedNodes: make(map[NodeID]struct{}),
 		deletedEdges: make(map[EdgeID]struct{}),
+		Metadata:     make(map[string]interface{}),
 	}
 }
 
@@ -419,6 +526,11 @@ func (tx *Transaction) Commit() error {
 		}
 	}
 
+	// Log metadata before commit (for debugging/auditing)
+	if len(tx.Metadata) > 0 {
+		log.Printf("[Transaction %s] Committing with metadata: %v", tx.ID, tx.Metadata)
+	}
+
 	// Apply all operations
 	for _, op := range tx.operations {
 		switch op.Type {
@@ -464,6 +576,59 @@ func (tx *Transaction) OperationCount() int {
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 	return len(tx.operations)
+}
+
+// SetMetadata sets transaction metadata for logging and debugging.
+// Metadata is logged on commit and can be used to track which application,
+// user, or request performed the transaction.
+//
+// Neo4j compatible: CALL tx.setMetaData({key: value})
+//
+// The metadata is merged with any existing metadata. To match Neo4j behavior,
+// the total character count is limited to 2048 characters.
+func (tx *Transaction) SetMetadata(metadata map[string]interface{}) error {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+
+	if tx.Status != TxStatusActive {
+		return ErrTransactionClosed
+	}
+
+	// Validate metadata size (Neo4j limit: 2048 chars total)
+	totalSize := 0
+	for k, v := range metadata {
+		totalSize += len(k)
+		if v != nil {
+			totalSize += len(fmt.Sprint(v))
+		}
+	}
+
+	if totalSize > 2048 {
+		return fmt.Errorf("transaction metadata too large: %d chars (max 2048)", totalSize)
+	}
+
+	// Merge with existing metadata
+	if tx.Metadata == nil {
+		tx.Metadata = make(map[string]interface{})
+	}
+	for k, v := range metadata {
+		tx.Metadata[k] = v
+	}
+
+	return nil
+}
+
+// GetMetadata returns a copy of the transaction metadata.
+func (tx *Transaction) GetMetadata() map[string]interface{} {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+
+	// Return copy to prevent external modification
+	result := make(map[string]interface{})
+	for k, v := range tx.Metadata {
+		result[k] = v
+	}
+	return result
 }
 
 // copyNode creates a deep copy of a node.
