@@ -50,6 +50,12 @@ let neo4jSession: Session;
 // ============================================================================
 
 async function loadNorthwindDataset(session: Session): Promise<void> {
+  try {
+    await session.run('MATCH (n) DETACH DELETE n');
+    console.log('  → Cleared existing data');
+  } catch (clearErr) {
+    console.log('  → Database already empty or clear not supported', clearErr);
+  }
   // Clear existing data
   await session.run('MATCH (n) DETACH DELETE n');
   
@@ -80,12 +86,9 @@ async function loadNorthwindDataset(session: Session): Promise<void> {
   // Create Products with SUPPLIES relationships (separate queries for Neo4j compatibility)
   // Neo4j requires WITH between CREATE and MATCH, so we use separate session.run() calls
   
-  await session.run(`
-    MATCH (s:Supplier {supplierID: 1}), (c:Category {categoryID: 1})
-    CREATE (p:Product {productID: 1, productName: 'Chai', unitPrice: 18.0, unitsInStock: 39})
-    CREATE (p)-[:PART_OF]->(c)
-    CREATE (s)-[:SUPPLIES]->(p)
-  `);
+  await session.run(`CREATE (p:Product {productID: 1, productName: 'Chai', unitPrice: 18.0, unitsInStock: 39})`);
+  await session.run(`MATCH (p:Product {productID: 1}), (c:Category {categoryID: 1}) CREATE (p)-[:PART_OF]->(c)`);
+  await session.run(`MATCH (p:Product {productID: 1}), (s:Supplier {supplierID: 1}) CREATE (s)-[:SUPPLIES]->(p)`);
   
   await session.run(`
     MATCH (s:Supplier {supplierID: 1}), (c:Category {categoryID: 1})
@@ -356,8 +359,19 @@ beforeAll(async () => {
     await loadNorthwindDataset(nornicdbSession);
     const result1 = await nornicdbSession.run('MATCH (n) RETURN count(n) as count');
     console.log(`  → ${result1.records[0].get('count')} nodes created in NornicDB`);
+    
+    // Test that aggregation bug is fixed: COUNT(r) should work properly
     const relResult1 = await nornicdbSession.run('MATCH ()-[r]->() RETURN count(r) as count');
     console.log(`  → ${relResult1.records[0].get('count')} relationships created in NornicDB`);
+    
+    // Detailed relationship breakdown using GROUP BY
+    const relTypes = await nornicdbSession.run('MATCH ()-[r]->() RETURN type(r) as type, count(*) as count ORDER BY count DESC');
+    if (relTypes.records.length > 0) {
+      console.log('  → Relationship types:');
+      for (const rec of relTypes.records) {
+        console.log(`     • ${rec.get('type')}: ${rec.get('count')}`);
+      }
+    }
   } catch (error) {
     console.error(`✗ Failed to connect to NornicDB: ${error}`);
   }
@@ -374,8 +388,18 @@ beforeAll(async () => {
     await loadNorthwindDataset(neo4jSession);
     const result2 = await neo4jSession.run('MATCH (n) RETURN count(n) as count');
     console.log(`  → ${result2.records[0].get('count')} nodes created in Neo4j`);
+    
     const relResult2 = await neo4jSession.run('MATCH ()-[r]->() RETURN count(r) as count');
     console.log(`  → ${relResult2.records[0].get('count')} relationships created in Neo4j`);
+    
+    // Detailed relationship breakdown using GROUP BY
+    const relTypes2 = await neo4jSession.run('MATCH ()-[r]->() RETURN type(r) as type, count(*) as count ORDER BY count DESC');
+    if (relTypes2.records.length > 0) {
+      console.log('  → Relationship types:');
+      for (const rec of relTypes2.records) {
+        console.log(`     • ${rec.get('type')}: ${rec.get('count')}`);
+      }
+    }
   } catch (error) {
     console.error(`✗ Failed to connect to Neo4j: ${error}`);
   }
