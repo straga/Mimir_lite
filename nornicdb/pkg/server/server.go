@@ -218,6 +218,9 @@ type Config struct {
 	EmbeddingModel string
 	// EmbeddingDimensions is expected vector size (e.g., 1024)
 	EmbeddingDimensions int
+	// EmbeddingCacheSize is max embeddings to cache (0 = disabled, default: 10000)
+	// Each cached embedding uses ~4KB (1024 dims × 4 bytes)
+	EmbeddingCacheSize int
 }
 
 // DefaultConfig returns Neo4j-compatible default server configuration.
@@ -278,6 +281,7 @@ func DefaultConfig() *Config {
 		EmbeddingAPIURL:     "http://localhost:11434",
 		EmbeddingModel:      "mxbai-embed-large",
 		EmbeddingDimensions: 1024,
+		EmbeddingCacheSize:  10000, // ~40MB cache for 1024-dim vectors
 	}
 }
 
@@ -434,6 +438,13 @@ func New(db *nornicdb.DB, authenticator *auth.Authenticator, config *Config) (*S
 				}
 				log.Println("   → Falling back to full-text search only")
 			} else {
+				// Wrap with caching if enabled (default: 10K cache)
+				if config.EmbeddingCacheSize > 0 {
+					embedder = embed.NewCachedEmbedder(embedder, config.EmbeddingCacheSize)
+					log.Printf("✓ Embedding cache enabled: %d entries (~%dMB)",
+						config.EmbeddingCacheSize, config.EmbeddingCacheSize*config.EmbeddingDimensions*4/1024/1024)
+				}
+
 				if config.EmbeddingProvider == "local" {
 					log.Printf("✓ Embeddings enabled: local GGUF (%s, %d dims)",
 						config.EmbeddingModel, config.EmbeddingDimensions)

@@ -105,6 +105,7 @@ Features:
 	serveCmd.Flags().String("embedding-key", getEnvStr("NORNICDB_EMBEDDING_API_KEY", ""), "Embeddings API Key (openai)")
 	serveCmd.Flags().String("embedding-model", getEnvStr("NORNICDB_EMBEDDING_MODEL", "mxbai-embed-large"), "Embedding model name")
 	serveCmd.Flags().Int("embedding-dim", getEnvInt("NORNICDB_EMBEDDING_DIMENSIONS", 1024), "Embedding dimensions")
+	serveCmd.Flags().Int("embedding-cache", getEnvInt("NORNICDB_EMBEDDING_CACHE_SIZE", 10000), "Embedding cache size (0=disabled, default 10000)")
 	serveCmd.Flags().Int("embedding-gpu-layers", getEnvInt("NORNICDB_EMBEDDING_GPU_LAYERS", -1), "GPU layers for local provider: -1=auto, 0=CPU only")
 	serveCmd.Flags().Bool("no-auth", false, "Disable authentication")
 	serveCmd.Flags().String("admin-password", "admin", "Admin password (default: admin)")
@@ -186,6 +187,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	embeddingKey, _ := cmd.Flags().GetString("embedding-key")
 	embeddingModel, _ := cmd.Flags().GetString("embedding-model")
 	embeddingDim, _ := cmd.Flags().GetInt("embedding-dim")
+	embeddingCache, _ := cmd.Flags().GetInt("embedding-cache")
 	embeddingGPULayers, _ := cmd.Flags().GetInt("embedding-gpu-layers")
 	noAuth, _ := cmd.Flags().GetBool("no-auth")
 
@@ -391,6 +393,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	serverConfig.EmbeddingAPIURL = embeddingURL
 	serverConfig.EmbeddingModel = embeddingModel
 	serverConfig.EmbeddingDimensions = embeddingDim
+	serverConfig.EmbeddingCacheSize = embeddingCache
 
 	// Enable embedded UI from the ui package
 	server.SetUIAssets(ui.Assets)
