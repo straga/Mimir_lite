@@ -236,7 +236,6 @@ func (e *StorageExecutor) cacheNodeLookup(label string, props map[string]interfa
 }
 
 // invalidateNodeLookupCache clears the node lookup cache.
-// Called on write operations that might invalidate cached lookups.
 func (e *StorageExecutor) invalidateNodeLookupCache() {
 	e.nodeLookupCacheMu.Lock()
 	e.nodeLookupCache = make(map[string]*storage.Node, 1000)
@@ -394,13 +393,23 @@ func (e *StorageExecutor) Execute(ctx context.Context, cypher string, params map
 		e.cache.Put(cypher, params, result, ttl)
 	}
 
-	// Smart invalidation: only invalidate caches for affected labels
-	if !isReadOnly && e.cache != nil {
-		affectedLabels := extractLabelsFromQuery(cypher)
-		if len(affectedLabels) > 0 {
-			e.cache.InvalidateLabels(affectedLabels)
-		} else {
-			e.cache.Invalidate()
+	// Invalidate caches on write operations
+	if !isReadOnly {
+		// Only invalidate node lookup cache on DELETE operations
+		// DELETE can remove nodes that are cached, causing stale lookups
+		// CREATE operations don't invalidate existing cache entries
+		if strings.Contains(upperQuery, "DELETE") {
+			e.invalidateNodeLookupCache()
+		}
+
+		// Invalidate query result cache
+		if e.cache != nil {
+			affectedLabels := extractLabelsFromQuery(cypher)
+			if len(affectedLabels) > 0 {
+				e.cache.InvalidateLabels(affectedLabels)
+			} else {
+				e.cache.Invalidate()
+			}
 		}
 	}
 
