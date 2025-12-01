@@ -1,21 +1,23 @@
 services:
   nornicdb:
+    build:
+      context: ./nornicdb
+      dockerfile: docker/Dockerfile.arm64-metal
+      args:
+        EMBED_MODEL: "true"  # Include bge-m3.gguf in image
+      tags:
+        - timothyswt/nornicdb-arm64-metal-bge:latest
     image: timothyswt/nornicdb-arm64-metal-bge:latest
     container_name: nornicdb
     ports:
       - "7474:7474" # HTTP API & Browser UI
       - "7687:7687" # Bolt protocol (Neo4j compatible)
-    volumes:
-      - ./data/nornicdb:/data
     environment:
       - NORNICDB_DATA_DIR=/data
       - NORNICDB_HTTP_PORT=7474
       - NORNICDB_BOLT_PORT=7687
       # Embedding configuration - llama.cpp OpenAI-compatible API
       - NORNICDB_EMBEDDING_PROVIDER=local
-      - NORNICDB_EMBEDDING_MODEL=bge-m3
-      - NORNICDB_MODELS_DIR=/data/models
-      - NORNICDB_EMBEDDING_DIMENSIONS=1024
       - NORNICDB_NO_AUTH=${NORNICDB_NO_AUTH:-true}
       - NORNICDB_ADMIN_PASSWORD=${NEO4J_PASSWORD:-password}
       - GOGC=50
@@ -27,9 +29,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    # depends_on:
-    #   llama-server:
-    #     condition: service_healthy
     networks:
       - mcp_network
     deploy:
