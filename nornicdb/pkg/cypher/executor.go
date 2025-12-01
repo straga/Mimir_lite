@@ -260,6 +260,20 @@ func (e *StorageExecutor) invalidateNodeLookupCache() {
 	e.nodeLookupCacheMu.Unlock()
 }
 
+// queryDeletesNodes returns true if the query deletes nodes.
+// Returns false for relationship-only deletes (CREATE rel...DELETE rel pattern).
+func queryDeletesNodes(query string) bool {
+	// DETACH DELETE always deletes nodes
+	if strings.Contains(strings.ToUpper(query), "DETACH DELETE") {
+		return true
+	}
+	// Relationship pattern (has -[...]-> or <-[...]-) with CREATE+DELETE = relationship delete only
+	if strings.Contains(query, "]->(") || strings.Contains(query, ")<-[") {
+		return false
+	}
+	return true
+}
+
 // Execute parses and executes a Cypher query with optional parameters.
 //
 // This is the main entry point for Cypher query execution. The method handles
@@ -414,10 +428,9 @@ func (e *StorageExecutor) Execute(ctx context.Context, cypher string, params map
 
 	// Invalidate caches on write operations
 	if !isReadOnly {
-		// Only invalidate node lookup cache on DELETE operations
-		// DELETE can remove nodes that are cached, causing stale lookups
-		// CREATE operations don't invalidate existing cache entries
-		if strings.Contains(upperQuery, "DELETE") {
+		// Only invalidate node lookup cache when NODES are deleted
+		// Relationship-only deletes (like benchmark CREATE rel DELETE rel) don't affect node cache
+		if strings.Contains(upperQuery, "DELETE") && queryDeletesNodes(cypher) {
 			e.invalidateNodeLookupCache()
 		}
 
@@ -495,26 +508,55 @@ func (e *StorageExecutor) executeImplicit(ctx context.Context, cypher string, up
 // Pattern: MATCH (a:Label), (b:Label) WITH a, b LIMIT 1 CREATE (a)-[r:Type]->(b) DELETE r
 // This is a very common pattern in benchmarks and relationship tests.
 func (e *StorageExecutor) tryFastPathCompoundQuery(ctx context.Context, cypher string) (*ExecuteResult, bool) {
-	matches := matchCreateDeleteRelPattern.FindStringSubmatch(cypher)
-	if matches == nil {
+	// Try Pattern 1: MATCH (a:Label), (b:Label) WITH a, b LIMIT 1 CREATE ... DELETE
+	if matches := matchCreateDeleteRelPattern.FindStringSubmatch(cypher); matches != nil {
+		label1 := matches[2]
+		label2 := matches[4]
+		relType := matches[9]
+		return e.executeFastPathCreateDeleteRel(label1, label2, "", nil, "", nil, relType)
+	}
+
+	// Try Pattern 2: MATCH (p1:Label {prop: val}), (p2:Label {prop: val}) CREATE ... DELETE
+	// LDBC-style pattern with property matching
+	if matches := matchPropCreateDeleteRelPattern.FindStringSubmatch(cypher); matches != nil {
+		// Groups: 1=var1, 2=label1, 3=prop1, 4=val1, 5=var2, 6=label2, 7=prop2, 8=val2, 9=relVar, 10=relType, 11=delVar
+		label1 := matches[2]
+		prop1 := matches[3]
+		val1 := matches[4]
+		label2 := matches[6]
+		prop2 := matches[7]
+		val2 := matches[8]
+		relType := matches[10]
+		return e.executeFastPathCreateDeleteRel(label1, label2, prop1, val1, prop2, val2, relType)
+	}
+
+	return nil, false
+}
+
+// executeFastPathCreateDeleteRel executes the fast-path for MATCH...CREATE...DELETE patterns.
+// If prop1/prop2 are empty, uses GetFirstNodeByLabel. Otherwise uses property lookup.
+func (e *StorageExecutor) executeFastPathCreateDeleteRel(label1, label2, prop1 string, val1 any, prop2 string, val2 any, relType string) (*ExecuteResult, bool) {
+	var node1, node2 *storage.Node
+	var err error
+
+	// Get node1
+	if prop1 == "" {
+		node1, err = e.storage.GetFirstNodeByLabel(label1)
+	} else {
+		node1 = e.findNodeByLabelAndProperty(label1, prop1, val1)
+	}
+	if err != nil || node1 == nil {
 		return nil, false
 	}
 
-	// Extract matched groups:
-	// 1=var1, 2=label1, 3=var2, 4=label2, 5=limVar1, 6=limVar2, 7=limit, 8=relVar, 9=relType, 10=delVar
-	label1 := matches[2]
-	label2 := matches[4]
-	relType := matches[9]
-
-	// Get first node of each label (O(1) with label index)
-	node1, err := e.storage.GetFirstNodeByLabel(label1)
-	if err != nil || node1 == nil {
-		return nil, false // Fall through to normal path
+	// Get node2
+	if prop2 == "" {
+		node2, err = e.storage.GetFirstNodeByLabel(label2)
+	} else {
+		node2 = e.findNodeByLabelAndProperty(label2, prop2, val2)
 	}
-
-	node2, err := e.storage.GetFirstNodeByLabel(label2)
 	if err != nil || node2 == nil {
-		return nil, false // Fall through to normal path
+		return nil, false
 	}
 
 	// Create the relationship
@@ -544,6 +586,40 @@ func (e *StorageExecutor) tryFastPathCompoundQuery(ctx context.Context, cypher s
 			RelationshipsDeleted: 1,
 		},
 	}, true
+}
+
+// findNodeByLabelAndProperty finds a node by label and a single property value.
+// Uses the node lookup cache for O(1) repeated lookups.
+func (e *StorageExecutor) findNodeByLabelAndProperty(label, prop string, val any) *storage.Node {
+	// Try cache first (with proper locking)
+	cacheKey := fmt.Sprintf("%s:{%s:%v}", label, prop, val)
+	e.nodeLookupCacheMu.RLock()
+	if cached, ok := e.nodeLookupCache[cacheKey]; ok {
+		e.nodeLookupCacheMu.RUnlock()
+		return cached
+	}
+	e.nodeLookupCacheMu.RUnlock()
+
+	// Scan nodes with label
+	nodes, err := e.storage.GetNodesByLabel(label)
+	if err != nil {
+		return nil
+	}
+
+	// Find matching node
+	for _, node := range nodes {
+		if nodeVal, ok := node.Properties[prop]; ok {
+			if fmt.Sprintf("%v", nodeVal) == fmt.Sprintf("%v", val) {
+				// Cache for next time (with proper locking)
+				e.nodeLookupCacheMu.Lock()
+				e.nodeLookupCache[cacheKey] = node
+				e.nodeLookupCacheMu.Unlock()
+				return node
+			}
+		}
+	}
+
+	return nil
 }
 
 // executeWithoutTransaction executes query without transaction wrapping (original path).

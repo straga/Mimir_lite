@@ -82,6 +82,15 @@ var (
 			`\s+LIMIT\s+(\d+)` +
 			`\s+CREATE\s*\(\w+\)-\[(\w+):(\w+)\]->\(\w+\)` +
 			`\s+DELETE\s+(\w+)\s*$`)
+
+	// MATCH (p1:Person {id: 1}), (p2:Person {id: 2}) CREATE (p1)-[r:KNOWS]->(p2) DELETE r
+	// LDBC-style pattern: property match without WITH/LIMIT
+	// Groups: 1=var1, 2=label1, 3=prop1, 4=val1, 5=var2, 6=label2, 7=prop2, 8=val2, 9=relVar, 10=relType, 11=delVar
+	matchPropCreateDeleteRelPattern = regexp.MustCompile(
+		`(?i)^\s*MATCH\s*\((\w+):(\w+)\s*\{\s*(\w+)\s*:\s*(\d+)\s*\}\s*\)` +
+			`\s*,\s*\((\w+):(\w+)\s*\{\s*(\w+)\s*:\s*(\d+)\s*\}\s*\)` +
+			`\s+CREATE\s*\(\w+\)-\[(\w+):(\w+)\]->\(\w+\)` +
+			`\s+DELETE\s+(\w+)\s*$`)
 )
 
 // =============================================================================
