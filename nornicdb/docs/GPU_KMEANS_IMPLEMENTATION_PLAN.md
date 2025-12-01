@@ -7,8 +7,8 @@
 **✅ FIXED:** Production-ready Metal kernels with atomic float workaround are available:
 
 - **Implementation:** `nornicdb/pkg/gpu/metal/kmeans_kernels_darwin.metal`
-- **Full Documentation:** `docs/GPU_KMEANS_METAL_ATOMIC_FIX.md`
-- **Quick Reference:** `docs/GPU_KMEANS_METAL_ATOMIC_SUMMARY.md`
+- **Full Documentation:** `nornicdb/docs/GPU_KMEANS_METAL_ATOMIC_FIX.md`
+- **Quick Reference:** `nornicdb/docs/GPU_KMEANS_METAL_ATOMIC_SUMMARY.md`
 
 The fix uses atomic compare-exchange on `atomic_uint` to emulate atomic float operations. Performance impact: 3-5x slower atomic accumulation, but **still 94x faster than CPU overall**.
 

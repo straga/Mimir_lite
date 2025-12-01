@@ -1946,7 +1946,12 @@ func (e *StorageExecutor) executeSet(ctx context.Context, cypher string) (*Execu
 	// e.g., "n.embedding = [0.1, 0.2], n.dim = 4" -> ["n.embedding = [0.1, 0.2]", "n.dim = 4"]
 	assignments := e.splitSetAssignmentsRespectingBrackets(setPart)
 
+	if len(assignments) == 0 || (len(assignments) == 1 && strings.TrimSpace(assignments[0]) == "") {
+		return nil, fmt.Errorf("SET clause requires at least one assignment")
+	}
+
 	var variable string
+	validAssignments := 0
 	for _, assignment := range assignments {
 		assignment = strings.TrimSpace(assignment)
 		if assignment == "" {
@@ -1956,7 +1961,7 @@ func (e *StorageExecutor) executeSet(ctx context.Context, cypher string) (*Execu
 		// Parse assignment: n.property = value
 		eqIdx := strings.Index(assignment, "=")
 		if eqIdx == -1 {
-			continue // Skip malformed assignments
+			return nil, fmt.Errorf("invalid SET assignment: %q (expected n.property = value)", assignment)
 		}
 
 		left := strings.TrimSpace(assignment[:eqIdx])
@@ -1965,8 +1970,9 @@ func (e *StorageExecutor) executeSet(ctx context.Context, cypher string) (*Execu
 		// Extract variable and property
 		parts := strings.SplitN(left, ".", 2)
 		if len(parts) != 2 {
-			continue // Skip malformed assignments
+			return nil, fmt.Errorf("invalid SET assignment: %q (expected variable.property)", left)
 		}
+		validAssignments++
 		variable = parts[0]
 		propName := parts[1]
 		propValue := e.parseValue(right)

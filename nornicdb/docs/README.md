@@ -28,6 +28,8 @@ Welcome to **NornicDB** - A production-ready graph database with GPU acceleratio
 - **[Cypher Audit](CYPHER_AUDIT.md)** - Cypher compatibility
 - **[Feature Flags](FEATURE_FLAGS.md)** - Runtime configuration
 - **[Transaction Implementation](TRANSACTION_IMPLEMENTATION.md)** - ACID guarantees
+- **[Eval Harness](guides/EVAL_HARNESS.md)** - Search quality testing & validation
+- **[Cross-Encoder Reranking](guides/CROSS_ENCODER_RERANKING.md)** - Two-stage retrieval for accuracy
 
 ### GPU & Performance
 
@@ -63,8 +65,11 @@ Welcome to **NornicDB** - A production-ready graph database with GPU acceleratio
 ### 🔍 Advanced Search
 - Vector similarity search with cosine similarity
 - Full-text search with BM25 scoring
-- Hybrid search combining both methods
+- Hybrid search (RRF) combining both methods
+- Cross-encoder reranking (Stage 2 retrieval)
+- MMR diversification for result variety
 - HNSW indexing for O(log N) performance
+- Eval harness for search quality validation
 
 ### 🔗 Neo4j Compatible
 - Bolt protocol support

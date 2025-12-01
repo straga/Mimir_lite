@@ -307,6 +307,8 @@ Features NornicDB has that Neo4j doesn't:
 - Prometheus /metrics endpoint
 - Slow query logging (configurable threshold)
 - MMR diversification for search results
+- Eval harness for search quality validation
+- Cross-encoder reranking for Stage 2 retrieval
 
 ### 🎯 Next Priority
 
@@ -315,9 +317,9 @@ Features NornicDB has that Neo4j doesn't:
 | Prometheus metrics | 2 days | ✅ Done |
 | Slow query logging | 1 day | ✅ Done |
 | MMR diversification | 1 day | ✅ Done |
-| Cross-encoder rerank | 3 days | 🔴 TODO |
+| Cross-encoder rerank | 3 days | ✅ Done |
 | Plugin system for APOC | 3 days | 🔴 TODO |
-| Eval harness | 2 days | 🔴 TODO |
+| Eval harness | 2 days | ✅ Done |
 
 ---
 

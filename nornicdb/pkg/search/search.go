@@ -165,19 +165,29 @@ type SearchOptions struct {
 	// When enabled, results are re-ranked to balance relevance with diversity
 	MMREnabled bool    // Enable MMR diversification (default: false)
 	MMRLambda  float64 // Balance: 1.0 = pure relevance, 0.0 = pure diversity (default: 0.7)
+
+	// Cross-encoder reranking (Stage 2)
+	// When enabled, top candidates are re-scored using a cross-encoder model
+	// for higher accuracy at the cost of latency
+	RerankEnabled  bool    // Enable cross-encoder reranking (default: false)
+	RerankTopK     int     // How many candidates to rerank (default: 100)
+	RerankMinScore float64 // Minimum cross-encoder score to include (default: 0)
 }
 
 // DefaultSearchOptions returns sensible defaults.
 func DefaultSearchOptions() *SearchOptions {
 	return &SearchOptions{
-		Limit:         50,
-		MinSimilarity: 0.5,
-		RRFK:          60,
-		VectorWeight:  1.0,
-		BM25Weight:    1.0,
-		MinRRFScore:   0.01,
-		MMREnabled:    false,
-		MMRLambda:     0.7, // Balanced: 70% relevance, 30% diversity
+		Limit:          50,
+		MinSimilarity:  0.5,
+		RRFK:           60,
+		VectorWeight:   1.0,
+		BM25Weight:     1.0,
+		MinRRFScore:    0.01,
+		MMREnabled:     false,
+		MMRLambda:      0.7, // Balanced: 70% relevance, 30% diversity
+		RerankEnabled:  false,
+		RerankTopK:     100,
+		RerankMinScore: 0.0,
 	}
 }
 
@@ -209,6 +219,7 @@ type Service struct {
 	engine        storage.Engine
 	vectorIndex   *VectorIndex
 	fulltextIndex *FulltextIndex
+	crossEncoder  *CrossEncoder
 	mu            sync.RWMutex
 }
 
@@ -496,7 +507,19 @@ func (s *Service) rrfHybridSearch(ctx context.Context, query string, embedding [
 		message = fmt.Sprintf("RRF + MMR diversification (λ=%.2f)", opts.MMRLambda)
 	}
 
-	// Step 6: Convert to SearchResult and enrich with node data
+	// Step 6: Cross-encoder reranking (optional Stage 2)
+	if opts.RerankEnabled && s.crossEncoder != nil && s.crossEncoder.Config().Enabled {
+		fusedResults = s.applyCrossEncoderRerank(ctx, query, fusedResults, opts)
+		if searchMethod == "rrf_hybrid" {
+			searchMethod = "rrf_hybrid+rerank"
+			message = "RRF + Cross-Encoder Reranking"
+		} else {
+			searchMethod += "+rerank"
+			message += " + Cross-Encoder Reranking"
+		}
+	}
+
+	// Step 7: Convert to SearchResult and enrich with node data
 	results := s.enrichResults(fusedResults, opts.Limit)
 
 	return &SearchResponse{
@@ -744,6 +767,106 @@ func (s *Service) applyMMR(results []rrfResult, queryEmbedding []float32, limit 
 	}
 
 	return selected
+}
+
+// applyCrossEncoderRerank applies cross-encoder reranking to RRF results.
+//
+// This is Stage 2 of a two-stage retrieval system:
+//   - Stage 1 (fast): Bi-encoder retrieval (vector + BM25 with RRF)
+//   - Stage 2 (accurate): Cross-encoder reranking of top-K candidates
+//
+// Cross-encoders see query and document together, capturing fine-grained
+// semantic relationships that bi-encoders miss. However, they're slower
+// since they can't be pre-computed.
+//
+// ELI12:
+//
+// Stage 1 is like using a library catalog to find 100 potentially relevant books.
+// Stage 2 is like reading each book's summary to pick the best 10.
+func (s *Service) applyCrossEncoderRerank(ctx context.Context, query string, results []rrfResult, opts *SearchOptions) []rrfResult {
+	if len(results) == 0 {
+		return results
+	}
+
+	// Build candidates with content from storage
+	candidates := make([]RerankCandidate, 0, len(results))
+	for _, r := range results {
+		node, err := s.engine.GetNode(storage.NodeID(r.ID))
+		if err != nil || node == nil {
+			continue
+		}
+
+		// Extract searchable content
+		content := s.extractSearchableText(node)
+		if content == "" {
+			continue
+		}
+
+		candidates = append(candidates, RerankCandidate{
+			ID:      r.ID,
+			Content: content,
+			Score:   r.RRFScore,
+		})
+	}
+
+	if len(candidates) == 0 {
+		return results
+	}
+
+	// Apply cross-encoder reranking
+	reranked, err := s.crossEncoder.Rerank(ctx, query, candidates)
+	if err != nil {
+		// Fallback to original results on error
+		return results
+	}
+
+	// Convert back to rrfResult format
+	rerankedResults := make([]rrfResult, 0, len(reranked))
+	for _, r := range reranked {
+		// Find original result to preserve VectorRank/BM25Rank
+		var original *rrfResult
+		for i := range results {
+			if results[i].ID == r.ID {
+				original = &results[i]
+				break
+			}
+		}
+
+		if original != nil {
+			rerankedResults = append(rerankedResults, rrfResult{
+				ID:            r.ID,
+				RRFScore:      r.FinalScore, // Use cross-encoder score
+				VectorRank:    original.VectorRank,
+				BM25Rank:      original.BM25Rank,
+				OriginalScore: r.BiScore,
+			})
+		}
+	}
+
+	return rerankedResults
+}
+
+// SetCrossEncoder configures the cross-encoder reranker.
+//
+// Example:
+//
+//	svc := search.NewService(engine)
+//	svc.SetCrossEncoder(search.NewCrossEncoder(&search.CrossEncoderConfig{
+//		Enabled: true,
+//		APIURL:  "http://localhost:8081/rerank",
+//		Model:   "cross-encoder/ms-marco-MiniLM-L-6-v2",
+//	}))
+func (s *Service) SetCrossEncoder(ce *CrossEncoder) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.crossEncoder = ce
+}
+
+// CrossEncoderAvailable returns true if cross-encoder reranking is configured and available.
+func (s *Service) CrossEncoderAvailable(ctx context.Context) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.crossEncoder != nil && s.crossEncoder.IsAvailable(ctx)
 }
 
 // vectorSearchOnly performs vector-only search.
