@@ -1,146 +1,162 @@
-# NornicDB
+<p align="center">
+  <img src="docs/assets/nornicdb-logo.svg" alt="NornicDB Logo" width="200"/>
+</p>
 
-**High-Performance Graph Database for LLM Agent Memory**
+<h1 align="center">NornicDB</h1>
 
-NornicDB is a purpose-built graph database written in Go, designed specifically for AI agent memory and knowledge management. It provides Neo4j Bolt protocol and Cypher query compatibility for drop-in replacement while adding LLM-native features.
+<p align="center">
+  <strong>The Graph Database That Learns</strong><br/>
+  Neo4j-compatible • GPU-accelerated • Memory that evolves
+</p>
 
-## Key Features
+<p align="center">
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="#docker-images">Docker</a> •
+  <a href="#documentation">Docs</a>
+</p>
 
-### 🔌 Neo4j Compatible
+---
 
-- **Bolt Protocol**: Use existing Neo4j drivers (Python, JavaScript, Go, etc.)
-- **Cypher Queries**: Full Cypher query language support
-- **Drop-in Replacement**: Switch from Neo4j with zero code changes
-- **Schema Management**: CREATE CONSTRAINT, INDEX, VECTOR INDEX, FULLTEXT INDEX
+## What is NornicDB?
 
-### 🧠 LLM-Native Memory
+NornicDB is a high-performance graph database designed for AI agents and knowledge systems. It speaks Neo4j's language (Bolt protocol + Cypher) so you can switch with zero code changes, while adding intelligent features that traditional databases lack.
 
-- **Natural Memory Decay**: Three-tier memory system (Episodic, Semantic, Procedural)
-- **Auto-Relationships**: Automatic edge creation via embedding similarity
-- **Vector Search**: Built-in cosine/euclidean/dot similarity (GPU-accelerated)
-- **Full-Text Search**: BM25-like scoring with multi-property support
-
-### ⚡ High Performance
-
-- **Single Binary**: No JVM, no external dependencies
-- **Embedded Mode**: Use as library or standalone server
-- **Sub-millisecond Reads**: Optimized for agent workloads
-- **100-500MB Memory**: vs 1-4GB for Neo4j
-- **GPU Acceleration**: Metal (macOS), CUDA (NVIDIA), OpenCL (AMD), Vulkan
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        NornicDB Server                          │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │ Bolt Server │  │ HTTP/REST   │  │ gRPC (future)           │  │
-│  │ :7687       │  │ :7474       │  │ :7688                   │  │
-│  └──────┬──────┘  └──────┬──────┘  └────────────┬────────────┘  │
-│         │                │                      │               │
-│         └────────────────┼──────────────────────┘               │
-│                          ▼                                      │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    Query Engine                          │   │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐  │   │
-│  │  │ Cypher Parser│  │ Query Planner│  │ Query Executor │  │   │
-│  │  └──────────────┘  └──────────────┘  └────────────────┘  │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                          │                                      │
-│  ┌───────────────────────┼──────────────────────────────────┐   │
-│  │                  Core Services                           │   │
-│  │  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌───────────┐   │   │
-│  │  │  Decay  │  │  Auto   │  │  Vector  │  │ Full-Text │   │   │
-│  │  │ Manager │  │  Links  │  │  Index   │  │   Index   │   │   │
-│  │  └─────────┘  └─────────┘  └──────────┘  └───────────┘   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                          │                                      │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                 Storage Engine (Badger)                  │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐               │   │
-│  │  │  Nodes   │  │  Edges   │  │  Indexes │               │   │
-│  │  └──────────┘  └──────────┘  └──────────┘               │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-```
+NornicDB automatically discovers and manages relationships in your data, weaving connections that let meaning emerge from your knowledge graph.
 
 ## Quick Start
 
-### As Standalone Server
+### Docker (Recommended)
 
 ```bash
-# Build
+# Ready to go - includes embedding model
+docker run -d --name nornicdb \
+  -p 7474:7474 -p 7687:7687 \
+  -v nornicdb-data:/data \
+  timothyswt/nornicdb-arm64-metal-bge:latest  # Apple Silicon
+  # timothyswt/nornicdb-amd64-cuda-bge:latest  # NVIDIA GPU
+```
+
+### From Source
+
+```bash
+git clone https://github.com/orneryd/mimir.git
+cd mimir/nornicdb
 go build -o nornicdb ./cmd/nornicdb
-
-# Run
-./nornicdb serve --port 7687 --http-port 7474
-
-# Connect with any Neo4j driver
-# bolt://localhost:7687
+./nornicdb serve
 ```
 
-### As Embedded Library
+### Connect
 
-```go
-import "github.com/orneryd/nornicdb/pkg/nornicdb"
+Use any Neo4j driver — Python, JavaScript, Go, Java, .NET:
 
-// Create embedded instance
-db, err := nornicdb.Open("./data", nornicdb.DefaultConfig())
-defer db.Close()
+```python
+from neo4j import GraphDatabase
 
-// Store memory with auto-linking
-mem, err := db.Store(ctx, &nornicdb.Memory{
-    Content: "PostgreSQL is our primary database",
-    Tier:    nornicdb.TierSemantic,
-    Tags:    []string{"database", "architecture"},
-})
-
-// Semantic search
-results, err := db.Remember(ctx, "what database do we use?", 10)
-
-// Cypher query (same as Neo4j!)
-results, err := db.Cypher(ctx, `
-    MATCH (m:Memory)-[:RELATES_TO]->(related)
-    WHERE m.content CONTAINS 'database'
-    RETURN m, related
-    LIMIT 10
-`)
+driver = GraphDatabase.driver("bolt://localhost:7687")
+with driver.session() as session:
+    session.run("CREATE (n:Memory {content: 'Hello NornicDB'})")
 ```
 
-## Memory Decay System
+## Features
 
-NornicDB implements a cognitive-inspired memory decay system:
+### 🔌 Neo4j Compatible
 
-| Tier           | Half-Life | Use Case                      |
-| -------------- | --------- | ----------------------------- |
-| **Episodic**   | 7 days    | Chat context, temporary notes |
-| **Semantic**   | 69 days   | Facts, decisions, knowledge   |
-| **Procedural** | 693 days  | Patterns, procedures, skills  |
+Drop-in replacement for Neo4j. Your existing code works unchanged.
+
+- **Bolt Protocol** — Use official Neo4j drivers
+- **Cypher Queries** — Full query language support  
+- **Schema Management** — Constraints, indexes, vector indexes
+
+### 🧠 Intelligent Memory
+
+Memory that behaves like human cognition.
+
+| Memory Tier | Half-Life | Use Case |
+|-------------|-----------|----------|
+| **Episodic** | 7 days | Chat context, sessions |
+| **Semantic** | 69 days | Facts, decisions |
+| **Procedural** | 693 days | Skills, patterns |
 
 ```cypher
-// Memories automatically decay over time
-// Access reinforces memory (like neural potentiation)
-MATCH (m:Memory)
-WHERE m.decayScore > 0.5  // Still strong memories
-RETURN m.title, m.decayScore
-ORDER BY m.decayScore DESC
+// Find memories that are still strong
+MATCH (m:Memory) WHERE m.decayScore > 0.5
+RETURN m.title ORDER BY m.decayScore DESC
 ```
 
-## Auto-Relationship Engine
+### 🔗 Auto-Relationships
 
-Edges are created automatically based on:
+NornicDB weaves connections automatically:
 
-1. **Embedding Similarity** (>0.82 cosine similarity)
-2. **Co-access Patterns** (nodes queried together)
-3. **Temporal Proximity** (created in same session)
-4. **Transitive Inference** (A→B, B→C suggests A→C)
+- **Embedding Similarity** — Related concepts link together
+- **Co-access Patterns** — Frequently queried pairs connect
+- **Temporal Proximity** — Same-session nodes associate
+- **Transitive Inference** — A→B + B→C suggests A→C
+
+### ⚡ Performance
+
+**LDBC Social Network Benchmark** (M3 Max, 64GB):
+
+| Query Type | NornicDB | Neo4j | Speedup |
+|------------|----------|-------|---------|
+| **Message content lookup** | 6,389 ops/sec | 518 ops/sec | **12x** |
+| **Recent messages (friends)** | 2,769 ops/sec | 108 ops/sec | **25x** |
+| **Avg friends per city** | 4,713 ops/sec | 91 ops/sec | **52x** |
+| **Tag co-occurrence** | 2,076 ops/sec | 65 ops/sec | **32x** |
+
+**Northwind Benchmark** (M3 Max vs Neo4j, same hardware):
+
+| Operation | NornicDB | Neo4j | Speedup |
+|-----------|----------|-------|---------|
+| **Index lookup** | 7,623 ops/sec | 2,143 ops/sec | **3.6x** |
+| **Count nodes** | 5,253 ops/sec | 798 ops/sec | **6.6x** |
+| **Write: node** | 5,578 ops/sec | 1,690 ops/sec | **3.3x** |
+| **Write: edge** | 6,626 ops/sec | 1,611 ops/sec | **4.1x** |
+
+**Cross-Platform (CUDA on Windows i9-9900KF + RTX 2080 Ti):**
+
+| Operation | Throughput |
+|-----------|------------|
+| **Orders by customer** | 4,252 ops/sec |
+| **Products out of stock** | 4,174 ops/sec |
+| **Find category** | 4,071 ops/sec |
+
+**Additional advantages:**
+- **Memory footprint**: 100-500 MB vs 1-4 GB for Neo4j
+- **Cold start**: <1s vs 10-30s for Neo4j
+
+> See [full benchmark results](docs/BENCHMARK_RESULTS_VS_NEO4J.md) for detailed comparisons.
+
+### 🎯 Vector Search
+
+Native semantic search with GPU acceleration.
 
 ```cypher
-// View auto-generated relationships
-MATCH (a:Memory)-[r:RELATES_TO]->(b:Memory)
-WHERE r.autoGenerated = true
-RETURN a.title, r.confidence, b.title
+// Find similar memories
+CALL db.index.vector.queryNodes(
+  'memory_embeddings', 
+  10, 
+  $queryVector
+) YIELD node, score
+RETURN node.content, score
+```
+
+## Docker Images
+
+| Image | Platform | Size | Model |
+|-------|----------|------|-------|
+| `nornicdb-arm64-metal` | Apple Silicon | ~50MB | BYOM |
+| `nornicdb-arm64-metal-bge` | Apple Silicon | ~1.6GB | Included |
+| `nornicdb-amd64-cuda` | NVIDIA GPU | ~3GB | BYOM |
+| `nornicdb-amd64-cuda-bge` | NVIDIA GPU | ~4.5GB | Included |
+
+**BYOM** = Bring Your Own Model (mount at `/app/models`)
+
+```bash
+# With your own model
+docker run -d -p 7474:7474 -p 7687:7687 \
+  -v /path/to/models:/app/models \
+  timothyswt/nornicdb-arm64-metal:latest
 ```
 
 ## Configuration
@@ -153,142 +169,82 @@ server:
   data_dir: ./data
 
 embeddings:
-  provider: ollama # or openai, local
-  api_url: http://localhost:11434
-  model: mxbai-embed-large
+  provider: local  # or ollama, openai
+  model: bge-m3
   dimensions: 1024
-  cache_size: 10000 # LRU cache for 450,000x speedup on repeated queries
 
 decay:
   enabled: true
   recalculate_interval: 1h
-  archive_threshold: 0.05
 
 auto_links:
   enabled: true
   similarity_threshold: 0.82
-  co_access_window: 30s
 ```
 
-## Comparison with Neo4j
+## Use Cases
 
-| Feature            | Neo4j          | NornicDB  |
-| ------------------ | -------------- | --------- |
-| Query Language     | Cypher         | Cypher    |
-| Protocol           | Bolt           | Bolt      |
-| Clustering         | Enterprise     | Roadmap   |
-| Memory Footprint   | 1-4GB          | 100-500MB |
-| Cold Start         | 10-30s         | <1s       |
-| Memory Decay       | Custom         | Built-in  |
-| Auto-Relationships | No             | Built-in  |
-| Vector Search      | Plugin         | Built-in  |
-| Embedded Mode      | No             | Yes       |
-| License            | GPL/Commercial | MIT       |
-
-## Storage Engines
-
-NornicDB provides two storage engine implementations:
-
-### BadgerEngine (Persistent)
-
-Production-ready persistent storage using BadgerDB:
-
-```go
-import "github.com/orneryd/nornicdb/pkg/storage"
-
-// Create persistent storage
-engine, err := storage.NewBadgerEngine("./data/nornicdb")
-defer engine.Close()
-
-// Or with options
-engine, err := storage.NewBadgerEngineWithOptions(storage.BadgerOptions{
-    DataDir:    "./data/nornicdb",
-    SyncWrites: true,  // Maximum durability
-})
-```
-
-**Features:**
-
-- ACID transactions
-- Automatic crash recovery
-- Secondary indexes for labels and edges
-- Efficient garbage collection
-- Data survives restarts
-
-### MemoryEngine (In-Memory)
-
-Fast in-memory storage for testing and development:
-
-```go
-engine := storage.NewMemoryEngine()
-defer engine.Close()
-```
-
-**Features:**
-
-- Zero latency (no disk I/O)
-- Ideal for unit tests
-- Same API as BadgerEngine
-
-## Project Structure
-
-```
-nornicdb/
-├── cmd/
-│   └── nornicdb/           # CLI entry point
-├── pkg/
-│   ├── bolt/               # Neo4j Bolt protocol server
-│   ├── cypher/             # Cypher parser and executor
-│   ├── storage/            # Storage engines (Badger, Memory)
-│   ├── index/              # HNSW vector + Bleve text indexes
-│   ├── decay/              # Memory decay system
-│   ├── inference/          # Auto-relationship engine
-│   ├── embed/              # Embedding providers
-│   └── nornicdb/           # Main API (embedded usage)
-├── internal/
-│   ├── config/             # Configuration management
-│   └── metrics/            # Prometheus metrics
-└── api/
-    └── http/               # REST API handlers
-```
+- **AI Agent Memory** — Persistent, queryable memory for LLM agents
+- **Knowledge Graphs** — Auto-organizing knowledge bases
+- **RAG Systems** — Vector + graph retrieval in one database
+- **Session Context** — Decaying conversation history
+- **Research Tools** — Connect papers, notes, and insights
 
 ## Documentation
 
-📚 **[Complete Functions Reference](docs/FUNCTIONS_INDEX.md)** - All 52 Cypher functions  
-🧠 **[Memory Decay System](docs/functions/07_DECAY_SYSTEM.md)** - How cognitive memory works  
-💡 **[Complete Examples](docs/COMPLETE_EXAMPLES.md)** - Real-world usage patterns  
-🎓 **[ELI12 Explanations](docs/FUNCTIONS_INDEX.md#eli12-math-concepts)** - Math concepts explained simply
+| Guide | Description |
+|-------|-------------|
+| [Functions Reference](docs/FUNCTIONS_INDEX.md) | All 52 Cypher functions |
+| [Memory Decay](docs/functions/07_DECAY_SYSTEM.md) | Cognitive memory system |
+| [Docker Guide](docker/README.md) | Build & deployment |
+| [Complete Examples](docs/COMPLETE_EXAMPLES.md) | Real-world patterns |
 
-### Quick Links
+## Comparison
 
-- **52 Cypher functions** with 150+ examples
-- **Memory decay** explained with formulas and real scenarios
-- **Vector similarity** (cosine, euclidean) for AI/ML
-- **Trigonometry** for spatial/geo calculations
-- **String manipulation** for data cleaning
-- **ELI12 explanations** for all complex math
+| Feature | Neo4j | NornicDB |
+|---------|-------|----------|
+| Protocol | Bolt ✓ | Bolt ✓ |
+| Query Language | Cypher ✓ | Cypher ✓ |
+| Memory Decay | Manual | Automatic |
+| Auto-Relationships | No | Built-in |
+| Vector Search | Plugin | Native |
+| GPU Acceleration | No | Metal/CUDA |
+| Embedded Mode | No | Yes |
+| License | GPL | MIT |
+
+## Building
+
+```bash
+# Native binary
+make build
+
+# Docker images
+make build-arm64-metal      # Base (BYOM)
+make build-arm64-metal-bge  # With model
+make build-amd64-cuda       # NVIDIA base
+make build-amd64-cuda-bge   # NVIDIA with model
+
+# Deploy to registry
+make deploy-all             # Both variants for your arch
+```
 
 ## Roadmap
 
-- [x] Core storage engine (Badger)
-- [x] Basic Cypher parser
-- [x] **52 Cypher functions** (100% documented)
-- [x] **Memory decay system** (with full ELI12 guide)
-- [x] **Vector similarity functions** (cosine, euclidean, dot product)
-- [x] **Bolt protocol server** ✅ (Phase 1 complete)
-- [x] **Schema management** ✅ (Phase 2 complete - constraints, indexes)
-- [x] **Core procedures** ✅ (Phase 3 complete - vector, fulltext, traversal)
-- [x] **GPU acceleration** ✅ (Metal, CUDA, OpenCL, Vulkan - 100% coverage)
-- [x] Full Cypher compatibility (95%+ complete)
-- [x] HTTP REST API
-- [ ] Transaction atomicity (Phase 4 - in progress)
+- [x] Neo4j Bolt protocol
+- [x] Cypher query engine (52 functions)
+- [x] Memory decay system
+- [x] GPU acceleration (Metal, CUDA)
+- [x] Vector & full-text search
 - [ ] Auto-relationship engine
 - [ ] HNSW vector index
-- [ ] Mimir adapter
 - [ ] Clustering support
 
 ## License
 
-MIT License - See [LICENSE](../LICENSE) in the parent Mimir repository.
+MIT License — Part of the [Mimir](https://github.com/orneryd/mimir) project.
 
-NornicDB is part of the Mimir project and shares its MIT license.
+---
+
+<p align="center">
+  <em>Weaving your data's destiny</em>
+</p>
