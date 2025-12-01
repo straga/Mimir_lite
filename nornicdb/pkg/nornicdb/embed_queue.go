@@ -198,6 +198,11 @@ func (ew *EmbedWorker) processNextBatch() {
 
 	fmt.Printf("🔄 Processing node %s for embedding...\n", node.ID)
 
+	// IMPORTANT: Deep copy properties to avoid race conditions
+	// The node from storage may be accessed by other goroutines (e.g., HTTP handlers)
+	// Modifying the Properties map directly causes "concurrent map iteration and map write"
+	node = copyNodeForEmbedding(node)
+
 	// Build text for embedding
 	text := buildEmbeddingText(node.Properties)
 	if text == "" {
@@ -447,6 +452,50 @@ func (s WorkerStats) MarshalJSON() ([]byte, error) {
 		"processed": s.Processed,
 		"failed":    s.Failed,
 	})
+}
+
+// copyNodeForEmbedding creates a deep copy of a node to avoid race conditions.
+// The original node from storage may be accessed by other goroutines (HTTP handlers,
+// search service, etc.) Modifying the Properties map directly while another goroutine
+// iterates over it causes "concurrent map iteration and map write" panic.
+//
+// This function copies:
+//   - All scalar fields (ID, Labels, Embedding, etc.)
+//   - Deep copy of Properties map
+func copyNodeForEmbedding(src *storage.Node) *storage.Node {
+	if src == nil {
+		return nil
+	}
+
+	// Create a new node with copied scalar fields
+	dst := &storage.Node{
+		ID:           src.ID,
+		Labels:       make([]string, len(src.Labels)),
+		CreatedAt:    src.CreatedAt,
+		UpdatedAt:    src.UpdatedAt,
+		LastAccessed: src.LastAccessed,
+		AccessCount:  src.AccessCount,
+		DecayScore:   src.DecayScore,
+	}
+
+	// Copy labels
+	copy(dst.Labels, src.Labels)
+
+	// Copy embedding if present
+	if len(src.Embedding) > 0 {
+		dst.Embedding = make([]float32, len(src.Embedding))
+		copy(dst.Embedding, src.Embedding)
+	}
+
+	// Deep copy Properties map - this is the critical part to avoid race condition
+	if src.Properties != nil {
+		dst.Properties = make(map[string]any, len(src.Properties))
+		for k, v := range src.Properties {
+			dst.Properties[k] = v // Shallow copy of values is OK for our use case
+		}
+	}
+
+	return dst
 }
 
 // Legacy aliases for compatibility with existing code
