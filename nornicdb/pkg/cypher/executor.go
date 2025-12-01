@@ -1958,10 +1958,51 @@ func (e *StorageExecutor) executeSet(ctx context.Context, cypher string) (*Execu
 			continue
 		}
 
-		// Parse assignment: n.property = value
+		// Check for label assignment: n:Label (no = sign, has : for label)
 		eqIdx := strings.Index(assignment, "=")
 		if eqIdx == -1 {
-			return nil, fmt.Errorf("invalid SET assignment: %q (expected n.property = value)", assignment)
+			// Could be a label assignment like "n:Label"
+			colonIdx := strings.Index(assignment, ":")
+			if colonIdx > 0 {
+				// This is a label assignment
+				labelVar := strings.TrimSpace(assignment[:colonIdx])
+				labelName := strings.TrimSpace(assignment[colonIdx+1:])
+				if labelVar != "" && labelName != "" {
+					validAssignments++
+					variable = labelVar
+					// Add label to matched nodes
+					for _, row := range matchResult.Rows {
+						for _, val := range row {
+							if node, ok := val.(map[string]interface{}); ok {
+								id, ok := node["_nodeId"].(string)
+								if !ok {
+									continue
+								}
+								storageNode, err := e.storage.GetNode(storage.NodeID(id))
+								if err != nil {
+									continue
+								}
+								// Add label if not already present
+								hasLabel := false
+								for _, l := range storageNode.Labels {
+									if l == labelName {
+										hasLabel = true
+										break
+									}
+								}
+								if !hasLabel {
+									storageNode.Labels = append(storageNode.Labels, labelName)
+									if err := e.storage.UpdateNode(storageNode); err == nil {
+										result.Stats.LabelsAdded++
+									}
+								}
+							}
+						}
+					}
+					continue
+				}
+			}
+			return nil, fmt.Errorf("invalid SET assignment: %q (expected n.property = value or n:Label)", assignment)
 		}
 
 		left := strings.TrimSpace(assignment[:eqIdx])
@@ -2671,7 +2712,7 @@ func (e *StorageExecutor) evaluateWhere(node *storage.Node, variable, whereClaus
 	// Handle multiple conditions with AND/OR
 	upperClause := strings.ToUpper(whereClause)
 
-	// Handle NOT EXISTS { } subquery (check before EXISTS)
+	// Handle NOT EXISTS { } subquery FIRST (before other NOT handling)
 	if strings.Contains(upperClause, "NOT EXISTS") {
 		return e.evaluateNotExistsSubquery(node, variable, whereClause)
 	}
@@ -2687,7 +2728,8 @@ func (e *StorageExecutor) evaluateWhere(node *storage.Node, variable, whereClaus
 		return e.evaluateCountSubqueryComparison(node, variable, whereClause)
 	}
 
-	// Handle AND conditions (but not inside EXISTS subqueries)
+	// Handle AND conditions BEFORE NOT (AND/OR have lower precedence than NOT)
+	// (but not inside EXISTS subqueries)
 	if strings.Contains(upperClause, " AND ") && !strings.Contains(whereClause, "{") {
 		andIdx := strings.Index(upperClause, " AND ")
 		left := strings.TrimSpace(whereClause[:andIdx])
@@ -2695,12 +2737,38 @@ func (e *StorageExecutor) evaluateWhere(node *storage.Node, variable, whereClaus
 		return e.evaluateWhere(node, variable, left) && e.evaluateWhere(node, variable, right)
 	}
 
-	// Handle OR conditions
+	// Handle OR conditions (also lower precedence than NOT)
 	if strings.Contains(upperClause, " OR ") && !strings.Contains(whereClause, "{") {
 		orIdx := strings.Index(upperClause, " OR ")
 		left := strings.TrimSpace(whereClause[:orIdx])
 		right := strings.TrimSpace(whereClause[orIdx+4:])
 		return e.evaluateWhere(node, variable, left) || e.evaluateWhere(node, variable, right)
+	}
+
+	// Handle NOT prefix (higher precedence than AND/OR, applies to single term)
+	if strings.HasPrefix(upperClause, "NOT ") {
+		inner := strings.TrimSpace(whereClause[4:])
+		return !e.evaluateWhere(node, variable, inner)
+	}
+
+	// Handle label check: n:Label or variable:Label
+	if colonIdx := strings.Index(whereClause, ":"); colonIdx > 0 {
+		labelVar := strings.TrimSpace(whereClause[:colonIdx])
+		labelName := strings.TrimSpace(whereClause[colonIdx+1:])
+		// Check if this looks like a simple variable:Label pattern
+		if len(labelVar) > 0 && len(labelName) > 0 &&
+			!strings.ContainsAny(labelVar, " .(") &&
+			!strings.ContainsAny(labelName, " .(=<>") {
+			// If the variable matches our node variable, check the label
+			if labelVar == variable {
+				for _, l := range node.Labels {
+					if l == labelName {
+						return true
+					}
+				}
+				return false
+			}
+		}
 	}
 
 	// Handle string operators (case-insensitive check)

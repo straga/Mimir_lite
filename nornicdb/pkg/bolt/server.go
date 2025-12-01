@@ -1391,10 +1391,33 @@ func encodePackStreamValue(v any) []byte {
 			return []byte{0xC3}
 		}
 		return []byte{0xC2}
+	// All integer types - encode as INT64 for Neo4j driver compatibility
 	case int:
+		return encodePackStreamInt(int64(val))
+	case int8:
+		return encodePackStreamInt(int64(val))
+	case int16:
+		return encodePackStreamInt(int64(val))
+	case int32:
 		return encodePackStreamInt(int64(val))
 	case int64:
 		return encodePackStreamInt(val)
+	case uint:
+		return encodePackStreamInt(int64(val))
+	case uint8:
+		return encodePackStreamInt(int64(val))
+	case uint16:
+		return encodePackStreamInt(int64(val))
+	case uint32:
+		return encodePackStreamInt(int64(val))
+	case uint64:
+		return encodePackStreamInt(int64(val))
+	// Float types
+	case float32:
+		buf := make([]byte, 9)
+		buf[0] = 0xC1
+		binary.BigEndian.PutUint64(buf[1:], math.Float64bits(float64(val)))
+		return buf
 	case float64:
 		buf := make([]byte, 9)
 		buf[0] = 0xC1
@@ -1402,6 +1425,7 @@ func encodePackStreamValue(v any) []byte {
 		return buf
 	case string:
 		return encodePackStreamString(val)
+	// List types
 	case []string:
 		items := make([]any, len(val))
 		for i, s := range val {
@@ -1410,18 +1434,92 @@ func encodePackStreamValue(v any) []byte {
 		return encodePackStreamList(items)
 	case []any:
 		return encodePackStreamList(val)
+	case []int:
+		items := make([]any, len(val))
+		for i, n := range val {
+			items[i] = int64(n)
+		}
+		return encodePackStreamList(items)
+	case []int64:
+		items := make([]any, len(val))
+		for i, n := range val {
+			items[i] = n
+		}
+		return encodePackStreamList(items)
+	case []float64:
+		items := make([]any, len(val))
+		for i, n := range val {
+			items[i] = n
+		}
+		return encodePackStreamList(items)
+	case []float32:
+		items := make([]any, len(val))
+		for i, n := range val {
+			items[i] = float64(n)
+		}
+		return encodePackStreamList(items)
 	case []map[string]any:
 		items := make([]any, len(val))
 		for i, m := range val {
 			items[i] = m
 		}
 		return encodePackStreamList(items)
+	// Map types
 	case map[string]any:
+		// Check if this is a node (has _nodeId and labels)
+		if nodeId, hasNodeId := val["_nodeId"]; hasNodeId {
+			if labels, hasLabels := val["labels"]; hasLabels {
+				return encodeNode(nodeId, labels, val)
+			}
+		}
 		return encodePackStreamMap(val)
 	default:
-		// Try to encode as a node structure
+		// Unknown type - encode as null
 		return []byte{0xC0}
 	}
+}
+
+// encodeNode encodes a node as a proper Bolt Node structure (signature 0x4E).
+// This makes nodes compatible with Neo4j drivers that expect Node instances with .properties.
+// Format: STRUCT(3 fields, signature 0x4E) + id + labels + properties
+func encodeNode(nodeId any, labels any, nodeMap map[string]any) []byte {
+	// Bolt Node structure: B3 4E (tiny struct, 3 fields, signature 'N')
+	buf := []byte{0xB3, 0x4E}
+
+	// Field 1: Node ID (as int64 for Neo4j compatibility)
+	// Use element_id or _nodeId string, hash it to int64 for now
+	idStr, _ := nodeId.(string)
+	// Use a simple hash - Neo4j drivers use int64 IDs
+	var id int64 = 0
+	for _, c := range idStr {
+		id = id*31 + int64(c)
+	}
+	buf = append(buf, encodePackStreamInt(id)...)
+
+	// Field 2: Labels (list of strings)
+	labelList := make([]any, 0)
+	switch l := labels.(type) {
+	case []string:
+		for _, s := range l {
+			labelList = append(labelList, s)
+		}
+	case []any:
+		labelList = l
+	}
+	buf = append(buf, encodePackStreamList(labelList)...)
+
+	// Field 3: Properties (map) - exclude internal fields
+	props := make(map[string]any)
+	for k, v := range nodeMap {
+		// Skip internal fields
+		if k == "_nodeId" || k == "labels" {
+			continue
+		}
+		props[k] = v
+	}
+	buf = append(buf, encodePackStreamMap(props)...)
+
+	return buf
 }
 
 func encodePackStreamInt(val int64) []byte {

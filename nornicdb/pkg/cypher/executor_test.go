@@ -4679,3 +4679,260 @@ func TestRelationshipCountAggregation(t *testing.T) {
 		assert.Equal(t, int64(0), count, "COUNT should return 0 for no matches")
 	})
 }
+
+// ========================================
+// SET Label Tests - SET n:Label syntax
+// ========================================
+
+func TestSetLabelSyntax(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create a node without the target label
+	node := &storage.Node{
+		ID:         "label-test-1",
+		Labels:     []string{"File"},
+		Properties: map[string]interface{}{"path": "/test/file.txt"},
+	}
+	require.NoError(t, store.CreateNode(node))
+
+	t.Run("SET single label", func(t *testing.T) {
+		// Add Node label using SET n:Label syntax
+		result, err := exec.Execute(ctx, `
+			MATCH (f:File {path: '/test/file.txt'})
+			SET f:Node
+			RETURN f
+		`, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result.Stats.LabelsAdded)
+
+		// Verify the node now has both labels
+		updatedNode, err := store.GetNode("label-test-1")
+		require.NoError(t, err)
+		assert.Contains(t, updatedNode.Labels, "File")
+		assert.Contains(t, updatedNode.Labels, "Node")
+	})
+
+	t.Run("SET label idempotent", func(t *testing.T) {
+		// Adding same label again should not increase count
+		result, err := exec.Execute(ctx, `
+			MATCH (f:File {path: '/test/file.txt'})
+			SET f:Node
+			RETURN f
+		`, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 0, result.Stats.LabelsAdded, "Should not add duplicate label")
+	})
+}
+
+func TestSetLabelWithPropertyAssignment(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create a node
+	node := &storage.Node{
+		ID:         "combo-test-1",
+		Labels:     []string{"Document"},
+		Properties: map[string]interface{}{"name": "readme"},
+	}
+	require.NoError(t, store.CreateNode(node))
+
+	t.Run("SET label and property together", func(t *testing.T) {
+		// SET f:Node, f.type = 'file' - combining label and property
+		result, err := exec.Execute(ctx, `
+			MATCH (d:Document {name: 'readme'})
+			SET d:Indexed, d.type = 'file'
+			RETURN d
+		`, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result.Stats.LabelsAdded)
+		assert.Equal(t, 1, result.Stats.PropertiesSet)
+
+		// Verify both label and property were set
+		updatedNode, err := store.GetNode("combo-test-1")
+		require.NoError(t, err)
+		assert.Contains(t, updatedNode.Labels, "Document")
+		assert.Contains(t, updatedNode.Labels, "Indexed")
+		assert.Equal(t, "file", updatedNode.Properties["type"])
+	})
+}
+
+func TestSetMultipleLabels(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create a node
+	node := &storage.Node{
+		ID:         "multi-label-1",
+		Labels:     []string{"Base"},
+		Properties: map[string]interface{}{},
+	}
+	require.NoError(t, store.CreateNode(node))
+
+	t.Run("SET multiple labels in sequence", func(t *testing.T) {
+		// First add one label
+		_, err := exec.Execute(ctx, `MATCH (n:Base) SET n:First RETURN n`, nil)
+		require.NoError(t, err)
+
+		// Then add another
+		result, err := exec.Execute(ctx, `MATCH (n:Base) SET n:Second RETURN n`, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result.Stats.LabelsAdded)
+
+		// Verify all labels present
+		updatedNode, err := store.GetNode("multi-label-1")
+		require.NoError(t, err)
+		assert.Contains(t, updatedNode.Labels, "Base")
+		assert.Contains(t, updatedNode.Labels, "First")
+		assert.Contains(t, updatedNode.Labels, "Second")
+	})
+}
+
+// ========================================
+// WHERE Label Check Tests - WHERE n:Label and WHERE NOT n:Label
+// ========================================
+
+func TestWhereLabelCheck(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create test nodes with different labels
+	nodes := []*storage.Node{
+		{ID: "person-1", Labels: []string{"Person", "Employee"}, Properties: map[string]interface{}{"name": "Alice"}},
+		{ID: "person-2", Labels: []string{"Person"}, Properties: map[string]interface{}{"name": "Bob"}},
+		{ID: "company-1", Labels: []string{"Company"}, Properties: map[string]interface{}{"name": "Acme"}},
+	}
+	for _, n := range nodes {
+		require.NoError(t, store.CreateNode(n))
+	}
+
+	t.Run("WHERE n:Label filters correctly", func(t *testing.T) {
+		// Match only Person nodes that are also Employees
+		result, err := exec.Execute(ctx, `
+			MATCH (p:Person)
+			WHERE p:Employee
+			RETURN p.name
+		`, nil)
+		require.NoError(t, err)
+		assert.Len(t, result.Rows, 1)
+		assert.Equal(t, "Alice", result.Rows[0][0])
+	})
+
+	t.Run("WHERE NOT n:Label excludes correctly", func(t *testing.T) {
+		// Match Person nodes that are NOT Employees
+		result, err := exec.Execute(ctx, `
+			MATCH (p:Person)
+			WHERE NOT p:Employee
+			RETURN p.name
+		`, nil)
+		require.NoError(t, err)
+		assert.Len(t, result.Rows, 1)
+		assert.Equal(t, "Bob", result.Rows[0][0])
+	})
+}
+
+func TestWhereNotLabelMigrationPattern(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// This tests the exact pattern from the Mimir schema initialization:
+	// MATCH (f:File) WHERE NOT f:Node SET f:Node, f.type = 'file'
+
+	// Create File nodes - some with Node label, some without
+	nodes := []*storage.Node{
+		{ID: "file-1", Labels: []string{"File"}, Properties: map[string]interface{}{"path": "/a.txt"}},
+		{ID: "file-2", Labels: []string{"File", "Node"}, Properties: map[string]interface{}{"path": "/b.txt"}},
+		{ID: "file-3", Labels: []string{"File"}, Properties: map[string]interface{}{"path": "/c.txt"}},
+	}
+	for _, n := range nodes {
+		require.NoError(t, store.CreateNode(n))
+	}
+
+	t.Run("migration adds label only to nodes missing it", func(t *testing.T) {
+		// Run the migration pattern
+		result, err := exec.Execute(ctx, `
+			MATCH (f:File)
+			WHERE NOT f:Node
+			SET f:Node, f.type = 'file'
+		`, nil)
+		require.NoError(t, err)
+		// Should add Node label to file-1 and file-3, not file-2
+		assert.Equal(t, 2, result.Stats.LabelsAdded)
+		assert.Equal(t, 2, result.Stats.PropertiesSet)
+
+		// Verify file-1 now has Node label
+		file1, err := store.GetNode("file-1")
+		require.NoError(t, err)
+		assert.Contains(t, file1.Labels, "Node")
+		assert.Equal(t, "file", file1.Properties["type"])
+
+		// Verify file-2 unchanged (already had Node label)
+		file2, err := store.GetNode("file-2")
+		require.NoError(t, err)
+		assert.Contains(t, file2.Labels, "Node")
+		assert.Nil(t, file2.Properties["type"]) // type not set because it wasn't matched
+
+		// Verify file-3 now has Node label
+		file3, err := store.GetNode("file-3")
+		require.NoError(t, err)
+		assert.Contains(t, file3.Labels, "Node")
+		assert.Equal(t, "file", file3.Properties["type"])
+	})
+
+	t.Run("running migration again has no effect", func(t *testing.T) {
+		// Second run should do nothing since all File nodes now have Node label
+		result, err := exec.Execute(ctx, `
+			MATCH (f:File)
+			WHERE NOT f:Node
+			SET f:Node, f.type = 'file'
+		`, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 0, result.Stats.LabelsAdded)
+		assert.Equal(t, 0, result.Stats.PropertiesSet)
+	})
+}
+
+func TestWhereLabelWithAndCondition(t *testing.T) {
+	store := storage.NewMemoryEngine()
+	exec := NewStorageExecutor(store)
+	ctx := context.Background()
+
+	// Create test nodes
+	nodes := []*storage.Node{
+		{ID: "emp-1", Labels: []string{"Person", "Employee"}, Properties: map[string]interface{}{"name": "Alice", "age": int64(30)}},
+		{ID: "emp-2", Labels: []string{"Person", "Employee"}, Properties: map[string]interface{}{"name": "Bob", "age": int64(25)}},
+		{ID: "cust-1", Labels: []string{"Person", "Customer"}, Properties: map[string]interface{}{"name": "Charlie", "age": int64(35)}},
+	}
+	for _, n := range nodes {
+		require.NoError(t, store.CreateNode(n))
+	}
+
+	t.Run("WHERE label AND property condition", func(t *testing.T) {
+		// Match Employees over 28
+		result, err := exec.Execute(ctx, `
+			MATCH (p:Person)
+			WHERE p:Employee AND p.age > 28
+			RETURN p.name
+		`, nil)
+		require.NoError(t, err)
+		assert.Len(t, result.Rows, 1)
+		assert.Equal(t, "Alice", result.Rows[0][0])
+	})
+
+	t.Run("WHERE NOT label AND property condition", func(t *testing.T) {
+		// Match non-Employees over 30
+		result, err := exec.Execute(ctx, `
+			MATCH (p:Person)
+			WHERE NOT p:Employee AND p.age > 30
+			RETURN p.name
+		`, nil)
+		require.NoError(t, err)
+		assert.Len(t, result.Rows, 1)
+		assert.Equal(t, "Charlie", result.Rows[0][0])
+	})
+}

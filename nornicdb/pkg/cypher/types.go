@@ -16,6 +16,7 @@ type QueryStats struct {
 	RelationshipsCreated int `json:"relationships_created"`
 	RelationshipsDeleted int `json:"relationships_deleted"`
 	PropertiesSet        int `json:"properties_set"`
+	LabelsAdded          int `json:"labels_added"`
 }
 
 // nodePatternInfo holds parsed node pattern information

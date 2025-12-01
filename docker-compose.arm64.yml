@@ -1,6 +1,6 @@
 services:
   nornicdb:
-    image: timothyswt/nornicdb-arm64-metal:latest
+    image: timothyswt/nornicdb-arm64-metal-bge:latest
     container_name: nornicdb
     ports:
       - "7474:7474" # HTTP API & Browser UI
@@ -13,11 +13,9 @@ services:
       - NORNICDB_BOLT_PORT=7687
       # Embedding configuration - llama.cpp OpenAI-compatible API
       - NORNICDB_EMBEDDING_PROVIDER=local
-      # - NORNICDB_EMBEDDING_API_URL=http://llama-server:8080
-      # - NORNICDB_EMBEDDING_API_KEY=not-needed
       - NORNICDB_EMBEDDING_MODEL=bge-m3
       - NORNICDB_MODELS_DIR=/data/models
-      # - NORNICDB_EMBEDDING_DIMENSIONS=1024
+      - NORNICDB_EMBEDDING_DIMENSIONS=1024
       - NORNICDB_NO_AUTH=${NORNICDB_NO_AUTH:-true}
       - NORNICDB_ADMIN_PASSWORD=${NEO4J_PASSWORD:-password}
       - GOGC=50
@@ -40,37 +38,6 @@ services:
           memory: 512M
         reservations:
           memory: 256M
-
-  # neo4j:
-  #   image: neo4j:5.15-community
-  #   container_name: neo4j_db
-  #   ports:
-  #     - "7474:7474" # HTTP Browser UI
-  #     - "7687:7687" # Bolt protocol
-  #   volumes:
-  #     - ./data/neo4j:/data
-  #     - ./logs/neo4j:/logs
-  #     - ./data/neo4j/import:/var/lib/neo4j/import
-  #   environment:
-  #     - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
-  #     - NEO4J_dbms_memory_pagecache_size=512M
-  #     - NEO4J_dbms_memory_heap_initial__size=512M
-  #     - NEO4J_dbms_memory_heap_max__size=2G
-  #     - NEO4J_PLUGINS=["apoc"]
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test:
-  #       [
-  #         "CMD-SHELL",
-  #         "cypher-shell -u neo4j -p $${NEO4J_PASSWORD:-password} 'RETURN 1' || exit 1",
-  #       ]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 40s
-  #   networks:
-  #     - mcp_network
-
   copilot-api:
     image: timothyswt/copilot-api-arm64:latest
     container_name: copilot_api_server
@@ -91,55 +58,6 @@ services:
       start_period: 15s
     networks:
       - mcp_network
-
-  # llama.cpp server - OpenAI-compatible embeddings (ARM64 compatible)
-  # llama-server:
-  #   image: timothyswt/llama-cpp-server-arm64-mxbai:latest
-  #   container_name: llama_server
-  #   ports:
-  #     - "11434:8080" # External 11434 -> Internal 8080 (llama.cpp default)
-  #   # Note: Model is bundled in the image (nomic-embed-text, 261MB)
-  #   # No volumes needed unless you want to add additional models
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 30s
-  #   networks:
-  #     - mcp_network
-
-  # Vision-Language server for multimodal embeddings (images + text)
-  # Uncomment to enable image embeddings, or swap with llama-server above
-  # llama-vl-server:
-  #   image: timothyswt/llama-cpp-server-arm64-qwen2.5-vl-7b:latest
-  #   container_name: llama_vl_server
-  #   ports:
-  #     - "11435:8080"  # Different external port: 11435 -> Internal 8080
-  #   environment:
-  #    # Server Configuration
-  #     - LLAMA_ARG_HOST=0.0.0.0
-  #     - LLAMA_ARG_PORT=8080
-  #     - LLAMA_ARG_CTX_SIZE=8192
-  #     - LLAMA_ARG_N_PARALLEL=4
-
-  #     # Embeddings-specific
-  #     - LLAMA_ARG_EMBEDDINGS=true
-  #     - LLAMA_ARG_POOLING=mean
-
-  #     # Performance
-  #     - LLAMA_ARG_THREADS=-1
-  #     - LLAMA_ARG_NO_MMAP=false
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 30s
-  #   networks:
-  #     - mcp_network
 
   mimir-server:
     build:
@@ -173,10 +91,6 @@ services:
       - MIMIR_LLM_API_MODELS_PATH=${MIMIR_LLM_API_MODELS_PATH:-/v1/models}
       - MIMIR_LLM_API_KEY=${MIMIR_LLM_API_KEY:-dummy-key}
 
-      # PCTX Integration (Code Mode for 90-98% token reduction)
-      - PCTX_URL=${PCTX_URL:-http://host.docker.internal:8080}
-      - PCTX_ENABLED=${PCTX_ENABLED:-false}
-
       # Provider and Model Configuration (100% dynamic - no config file needed)
       - MIMIR_DEFAULT_MODEL=${MIMIR_DEFAULT_MODEL:-gpt-4.1}
 
@@ -188,35 +102,21 @@ services:
       # Context Window Configuration
       - MIMIR_DEFAULT_CONTEXT_WINDOW=${MIMIR_DEFAULT_CONTEXT_WINDOW:-128000}
 
-      # Embeddings API Configuration
-      - MIMIR_EMBEDDINGS_PROVIDER=${MIMIR_EMBEDDINGS_PROVIDER:-openai}
-      - MIMIR_EMBEDDINGS_API=${MIMIR_EMBEDDINGS_API:-http://llama-server:8080}
-      - MIMIR_EMBEDDINGS_API_PATH=${MIMIR_EMBEDDINGS_API_PATH:-/v1/embeddings}
-      - MIMIR_EMBEDDINGS_API_MODELS_PATH=${MIMIR_EMBEDDINGS_API_MODELS_PATH:-/v1/models}
-      - MIMIR_EMBEDDINGS_API_KEY=${MIMIR_EMBEDDINGS_API_KEY:-dummy-key}
-      # Embeddings Configuration
-      - MIMIR_EMBEDDINGS_ENABLED=${MIMIR_EMBEDDINGS_ENABLED:-true}
-      - MIMIR_EMBEDDINGS_MODEL=${MIMIR_EMBEDDINGS_MODEL:-mxbai-embed-large}
-      - MIMIR_EMBEDDINGS_DIMENSIONS=${MIMIR_EMBEDDINGS_DIMENSIONS:-1024}
-      - MIMIR_EMBEDDINGS_CHUNK_SIZE=${MIMIR_EMBEDDINGS_CHUNK_SIZE:-768}
-      - MIMIR_EMBEDDINGS_CHUNK_OVERLAP=${MIMIR_EMBEDDINGS_CHUNK_OVERLAP:-100}
-      - MIMIR_EMBEDDINGS_DELAY_MS=${MIMIR_EMBEDDINGS_DELAY_MS:-0}
-      - MIMIR_EMBEDDINGS_MAX_RETRIES=${MIMIR_EMBEDDINGS_MAX_RETRIES:-3}
       # Image/VL Embeddings Configuration (Vision-Language models)
       # Image Embeddings Control (disabled by default for safety)
       - MIMIR_EMBEDDINGS_IMAGES=${MIMIR_EMBEDDINGS_IMAGES:-false}  # Default: disabled
-      - MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE=${MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE:-true}  # Default: VL description mode
+      # - MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE=${MIMIR_EMBEDDINGS_IMAGES_DESCRIBE_MODE:-true}  # Default: VL description mode
       # Qwen2.5-VL Configuration (for llama.cpp server)
-      - MIMIR_EMBEDDINGS_VL_PROVIDER=${MIMIR_EMBEDDINGS_VL_PROVIDER:-llama.cpp}
-      - MIMIR_EMBEDDINGS_VL_API=${MIMIR_EMBEDDINGS_VL_API:-http://llama-vl-server:8080}
-      - MIMIR_EMBEDDINGS_VL_API_PATH=${MIMIR_EMBEDDINGS_VL_API_PATH:-/v1/chat/completions}
-      - MIMIR_EMBEDDINGS_VL_API_KEY=${MIMIR_EMBEDDINGS_VL_API_KEY:-dummy-key}
-      - MIMIR_EMBEDDINGS_VL_MODEL=${MIMIR_EMBEDDINGS_VL_MODEL:-qwen2.5-vl}
-      - MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE=${MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE:-131072}  # 128K tokens (7b/72b)
-      - MIMIR_EMBEDDINGS_VL_MAX_TOKENS=${MIMIR_EMBEDDINGS_VL_MAX_TOKENS:-2048}  # Max description length
-      - MIMIR_EMBEDDINGS_VL_TEMPERATURE=${MIMIR_EMBEDDINGS_VL_TEMPERATURE:-0.7}
-      - MIMIR_EMBEDDINGS_VL_DIMENSIONS=${MIMIR_EMBEDDINGS_VL_DIMENSIONS:-768}  # Falls back to text model dims
-      - MIMIR_EMBEDDINGS_VL_TIMEOUT=${MIMIR_EMBEDDINGS_VL_TIMEOUT:-180000}  # 3 minutes (VL processing is slow)
+      # - MIMIR_EMBEDDINGS_VL_PROVIDER=${MIMIR_EMBEDDINGS_VL_PROVIDER:-llama.cpp}
+      # - MIMIR_EMBEDDINGS_VL_API=${MIMIR_EMBEDDINGS_VL_API:-http://llama-vl-server:8080}
+      # - MIMIR_EMBEDDINGS_VL_API_PATH=${MIMIR_EMBEDDINGS_VL_API_PATH:-/v1/chat/completions}
+      # - MIMIR_EMBEDDINGS_VL_API_KEY=${MIMIR_EMBEDDINGS_VL_API_KEY:-dummy-key}
+      # - MIMIR_EMBEDDINGS_VL_MODEL=${MIMIR_EMBEDDINGS_VL_MODEL:-qwen2.5-vl}
+      # - MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE=${MIMIR_EMBEDDINGS_VL_CONTEXT_SIZE:-131072}  # 128K tokens (7b/72b)
+      # - MIMIR_EMBEDDINGS_VL_MAX_TOKENS=${MIMIR_EMBEDDINGS_VL_MAX_TOKENS:-2048}  # Max description length
+      # - MIMIR_EMBEDDINGS_VL_TEMPERATURE=${MIMIR_EMBEDDINGS_VL_TEMPERATURE:-0.7}
+      # - MIMIR_EMBEDDINGS_VL_DIMENSIONS=${MIMIR_EMBEDDINGS_VL_DIMENSIONS:-768}  # Falls back to text model dims
+      # - MIMIR_EMBEDDINGS_VL_TIMEOUT=${MIMIR_EMBEDDINGS_VL_TIMEOUT:-180000}  # 3 minutes (VL processing is slow)
       # Indexing Configuration
       - MIMIR_INDEXING_THREADS=${MIMIR_INDEXING_THREADS:-1}
 
@@ -248,6 +148,26 @@ services:
       - MIMIR_PARALLEL_EXECUTION=${MIMIR_PARALLEL_EXECUTION:-false}
       - MIMIR_INSTALL_DIR=${MIMIR_INSTALL_DIR:-/app}
       - MIMIR_AGENTS_DIR=${MIMIR_AGENTS_DIR:-/app/docs/agents}
+      # Embeddings API Configuration
+
+      # - MIMIR_EMBEDDINGS_PROVIDER=${MIMIR_EMBEDDINGS_PROVIDER:-openai}
+      # - MIMIR_EMBEDDINGS_API=${MIMIR_EMBEDDINGS_API:-http://llama-server:8080}
+      # - MIMIR_EMBEDDINGS_API_PATH=${MIMIR_EMBEDDINGS_API_PATH:-/v1/embeddings}
+      # - MIMIR_EMBEDDINGS_API_MODELS_PATH=${MIMIR_EMBEDDINGS_API_MODELS_PATH:-/v1/models}
+      # - MIMIR_EMBEDDINGS_API_KEY=${MIMIR_EMBEDDINGS_API_KEY:-dummy-key}
+      # Embeddings Configuration
+      # - MIMIR_EMBEDDINGS_ENABLED=${MIMIR_EMBEDDINGS_ENABLED:-true}
+      # - MIMIR_EMBEDDINGS_MODEL=${MIMIR_EMBEDDINGS_MODEL:-mxbai-embed-large}
+      # - MIMIR_EMBEDDINGS_DIMENSIONS=${MIMIR_EMBEDDINGS_DIMENSIONS:-1024}
+      # - MIMIR_EMBEDDINGS_CHUNK_SIZE=${MIMIR_EMBEDDINGS_CHUNK_SIZE:-768}
+      # - MIMIR_EMBEDDINGS_CHUNK_OVERLAP=${MIMIR_EMBEDDINGS_CHUNK_OVERLAP:-100}
+      # - MIMIR_EMBEDDINGS_DELAY_MS=${MIMIR_EMBEDDINGS_DELAY_MS:-0}
+      # - MIMIR_EMBEDDINGS_MAX_RETRIES=${MIMIR_EMBEDDINGS_MAX_RETRIES:-3}
+
+
+      # PCTX Integration (Code Mode for 90-98% token reduction)
+      - PCTX_URL=${PCTX_URL:-http://host.docker.internal:8080}
+      - PCTX_ENABLED=${PCTX_ENABLED:-false}
 
     volumes:
       - ./data:/app/data
@@ -274,8 +194,6 @@ services:
       #   condition: service_healthy
     networks:
       - mcp_network
-volumes:
-  ollama_models:
 
 networks:
   mcp_network:
