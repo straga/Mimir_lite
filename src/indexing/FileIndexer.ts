@@ -382,10 +382,14 @@ export class FileIndexer {
         if (config?.images?.enabled) {
           isImage = true;
           
-          if (config.images.describeMode && this.vlService && this.imageProcessor) {
-            // Path 1: VL Description Method (DEFAULT)
+          // For NornicDB: ALWAYS use VL description mode (NornicDB can only embed text)
+          // For Neo4j: Use configured mode (describeMode or direct multimodal)
+          const useVLDescription = this.isNornicDB || config.images.describeMode;
+          
+          if (useVLDescription && this.vlService && this.imageProcessor) {
+            // Path 1: VL Description Method (DEFAULT, REQUIRED for NornicDB)
             // Uses VL model to generate text description, then embeds the description
-            console.log(`🖼️  Processing image with VL description: ${relativePath}`);
+            console.log(`🖼️  Processing image with VL description: ${relativePath}${this.isNornicDB ? ' (NornicDB requires text)' : ''}`);
             
             // 1. Prepare image (resize if needed)
             const processedImage = await this.imageProcessor.prepareImageForVL(filePath);
@@ -402,9 +406,10 @@ export class FileIndexer {
             content = result.description;
             
             console.log(`   Generated description (${content.length} chars) in ${result.processingTimeMs}ms`);
-          } else if (!config.images.describeMode && this.imageProcessor) {
-            // Path 2: Direct Multimodal Embedding
+          } else if (!config.images.describeMode && !this.isNornicDB && this.imageProcessor) {
+            // Path 2: Direct Multimodal Embedding (Neo4j only)
             // Sends image directly to multimodal embeddings endpoint
+            // NOTE: This path is NOT available for NornicDB (requires text content)
             console.log(`🖼️  Processing image with direct multimodal embedding: ${relativePath}`);
             
             // 1. Prepare image (resize if needed)
@@ -422,6 +427,10 @@ export class FileIndexer {
             content = dataURL;
             
             console.log(`   Prepared image for direct embedding (${processedImage.sizeBytes} bytes)`);
+          } else if (this.isNornicDB && !this.vlService) {
+            // NornicDB requires VL service for image embedding (can't do multimodal)
+            console.warn(`⚠️  Skipping image ${relativePath}: NornicDB requires VL service for image descriptions`);
+            throw new Error('Image indexing requires VL service for NornicDB (text-only embedding)');
           } else {
             // Missing required services
             const missingServices = [];
@@ -496,6 +505,24 @@ export class FileIndexer {
       // - If embeddings ENABLED and file is SMALL → Store content on File node + embedding
       const shouldStoreFullContent = this.isNornicDB || !generateEmbeddings || !needsChunking;
       
+      // For NornicDB: Enrich content with metadata BEFORE storing
+      // This gives NornicDB's embedding worker richer context for better embeddings
+      // (Same enrichment that happens for Neo4j in the chunking/embedding path below)
+      let contentToStore = content;
+      if (this.isNornicDB && shouldStoreFullContent && generateEmbeddings) {
+        const fileMetadata: FileMetadata = {
+          name: path.basename(filePath),
+          relativePath: relativePath,
+          language: language,
+          extension: extension,
+          directory: path.dirname(relativePath),
+          sizeBytes: stats.size
+        };
+        const metadataPrefix = formatMetadataForEmbedding(fileMetadata);
+        contentToStore = metadataPrefix + content;
+        console.log(`📝 Enriched content for NornicDB embedding: ${relativePath} (+${metadataPrefix.length} chars metadata)`);
+      }
+      
       // Create File node with BOTH container and host paths
       // f.path = absolute container path (e.g., /app/docs/README.md)
       // f.host_path = absolute host path (e.g., /Users/user/src/Mimir/docs/README.md)
@@ -557,7 +584,7 @@ export class FileIndexer {
           line_count: content.split('\n').length,
           last_modified: stats.mtime.toISOString(),
           has_chunks: needsChunking,
-          content: shouldStoreFullContent ? content : null, // Store full content when embeddings disabled OR file is small
+          content: shouldStoreFullContent ? contentToStore : null, // Store enriched content for NornicDB, raw content for Neo4j
           watchConfigId: watchConfigId || null
         });
       }, `Create/update File node for ${relativePath}`);
