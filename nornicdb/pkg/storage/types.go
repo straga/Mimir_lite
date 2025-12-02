@@ -819,7 +819,7 @@ func NodeNeedsEmbedding(node *Node) bool {
 		}
 	}
 
-	// Skip if already has embedding
+	// Skip if already has embedding vector
 	if len(node.Embedding) > 0 {
 		return false
 	}
@@ -829,8 +829,20 @@ func NodeNeedsEmbedding(node *Node) bool {
 		return false
 	}
 
-	// Skip if explicitly marked as not needing embedding
-	if hasEmbed, ok := node.Properties["has_embedding"].(bool); ok && !hasEmbed {
+	// Skip if explicitly marked as already having embedding
+	// This handles File nodes that were chunked - they don't have a native embedding
+	// but their FileChunk children do, so has_embedding=true on the parent
+	if hasEmbed, ok := node.Properties["has_embedding"].(bool); ok {
+		if hasEmbed {
+			return false // Already processed (chunked files have has_embedding=true but no vector)
+		}
+		// has_embedding=false means explicitly marked to skip
+		return false
+	}
+
+	// Skip if node has chunks (parent File with FileChunk children)
+	// The chunks have embeddings, not the parent
+	if hasChunks, ok := node.Properties["has_chunks"].(bool); ok && hasChunks {
 		return false
 	}
 
