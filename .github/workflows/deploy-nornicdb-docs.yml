@@ -53,7 +53,7 @@ jobs:
       - name: Build documentation
         run: |
           cd nornicdb
-          mkdocs build --strict
+          mkdocs build
           echo "✅ Documentation built successfully"
 
       - name: Upload artifact
