@@ -332,4 +332,4 @@ go test ./pkg/mcp/... -run Integration
 
 ---
 
-_See also: [Vector Search Guide](guides/VECTOR_SEARCH.md) | [MCP Tools Reference](MCP_TOOLS_QUICKREF.md) | [Roadmap](ROADMAP_POST_TLP.md)_
+_See also: [Vector Search Guide](../user-guides/vector-search.md) | [User Guides](../user-guides/) | [API Reference](../api-reference/)_

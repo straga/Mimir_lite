@@ -263,10 +263,10 @@ No error is returned to the caller - the search continues with best-effort resul
 
 ## Related Documentation
 
-- [Vector Search Guide](VECTOR_SEARCH.md)
-- [RRF Search Implementation](../RRF_SEARCH_IMPLEMENTATION.md)
-- [MMR Diversification](../RRF_SEARCH_IMPLEMENTATION.md#mmr)
-- [Eval Harness](EVAL_HARNESS.md)
+- [Vector Search Guide](../user-guides/vector-search.md)
+- [Hybrid Search Guide](../user-guides/hybrid-search.md)
+- [RRF Algorithm](../user-guides/hybrid-search.md#rrf-algorithm)
+- [Search Evaluation](../advanced/search-evaluation.md)
 
 ---
 

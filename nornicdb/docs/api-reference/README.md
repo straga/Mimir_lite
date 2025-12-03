@@ -6,13 +6,13 @@
 
 ### Cypher Functions
 
-- **[Function Index](cypher-functions/)** - Complete list of all 52 functions
-- **[String Functions](cypher-functions/README.md#string-functions)** - Text manipulation
-- **[Math Functions](cypher-functions/README.md#mathematical-functions)** - Calculations
-- **[Aggregation Functions](cypher-functions/README.md#aggregation-functions)** - COUNT, SUM, AVG
-- **[List Functions](cypher-functions/README.md#list-functions)** - Array operations
-- **[Temporal Functions](cypher-functions/README.md#temporal-functions)** - Date/time
-- **[Graph Functions](cypher-functions/README.md#graph-functions)** - Node/relationship operations
+- **[Function Index](cypher-functions/)** - Complete list of all 62 functions
+- **[String Functions](cypher-functions/#string-functions-15-functions)** - Text manipulation
+- **[Math Functions](cypher-functions/#mathematical-functions-7-functions)** - Calculations
+- **[Aggregation Functions](cypher-functions/#aggregation-functions-2-functions)** - COUNT, SUM, AVG
+- **[List Functions](cypher-functions/#list-functions-9-functions)** - Array operations
+- **[Date/Time Functions](cypher-functions/#datetime-functions-4-functions)** - Date/time
+- **[Node & Relationship Functions](cypher-functions/#node--relationship-functions-11-functions)** - Graph operations
 
 ### HTTP API
 
@@ -75,7 +75,7 @@ Transform and manipulate text data.
 
 **Common:** `toLower()`, `toUpper()`, `trim()`, `substring()`, `replace()`
 
-[See all string functions →](cypher-functions/README.md#string-functions)
+[See all string functions →](cypher-functions/#string-functions-15-functions)
 
 ### Mathematical Functions (7 functions)
 
@@ -83,7 +83,7 @@ Perform calculations and transformations.
 
 **Common:** `abs()`, `round()`, `sqrt()`, `rand()`
 
-[See all math functions →](cypher-functions/README.md#mathematical-functions)
+[See all math functions →](cypher-functions/#mathematical-functions-7-functions)
 
 ### Aggregation Functions (6 functions)
 
@@ -91,7 +91,7 @@ Summarize data across multiple rows.
 
 **Common:** `count()`, `sum()`, `avg()`, `min()`, `max()`, `collect()`
 
-[See all aggregation functions →](cypher-functions/README.md#aggregation-functions)
+[See all aggregation functions →](cypher-functions/#aggregation-functions-2-functions)
 
 ### List Functions (8 functions)
 
@@ -99,7 +99,7 @@ Work with arrays and collections.
 
 **Common:** `size()`, `head()`, `tail()`, `range()`
 
-[See all list functions →](cypher-functions/README.md#list-functions)
+[See all list functions →](cypher-functions/#list-functions-9-functions)
 
 ### Temporal Functions (4 functions)
 
@@ -107,15 +107,15 @@ Handle dates, times, and durations.
 
 **Common:** `timestamp()`, `date()`, `datetime()`, `duration()`
 
-[See all temporal functions →](cypher-functions/README.md#temporal-functions)
+[See all date/time functions →](cypher-functions/#datetime-functions-4-functions)
 
-### Graph Functions (11 functions)
+### Node & Relationship Functions (11 functions)
 
 Access graph structure and metadata.
 
 **Common:** `id()`, `labels()`, `type()`, `properties()`, `nodes()`, `relationships()`
 
-[See all graph functions →](cypher-functions/README.md#graph-functions)
+[See all node/relationship functions →](cypher-functions/#node--relationship-functions-11-functions)
 
 ## 🌐 HTTP API Endpoints
 

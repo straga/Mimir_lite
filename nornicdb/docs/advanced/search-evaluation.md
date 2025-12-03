@@ -288,9 +288,9 @@ curl -X POST http://localhost:7474/nornicdb/search/rebuild
 
 ## Related Documentation
 
-- [Vector Search Guide](VECTOR_SEARCH.md)
-- [RRF Search Implementation](../RRF_SEARCH_IMPLEMENTATION.md)
-- [MMR Diversification](../search/search.go)
+- [Vector Search Guide](../user-guides/vector-search.md)
+- [Hybrid Search Guide](../user-guides/hybrid-search.md)
+- [Hybrid Search - RRF Algorithm](../user-guides/hybrid-search.md#rrf-algorithm)
 
 ---
 

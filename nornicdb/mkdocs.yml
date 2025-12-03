@@ -80,35 +80,55 @@ markdown_extensions:
   - pymdownx.tilde
 
 nav:
-  - Home: index.md
+  - Home: README.md
   - Getting Started:
-      - Quick Start: guides/getting-started.md
-      - Installation: guides/getting-started.md#installation
-      - Configuration: guides/configuration.md
+      - Overview: getting-started/README.md
+      - Quick Start: getting-started/quick-start.md
+      - Installation: getting-started/installation.md
+      - Docker Deployment: getting-started/docker-deployment.md
+      - First Queries: getting-started/first-queries.md
   - User Guides:
-      - Architecture: guides/architecture.md
-      - Vector Search: guides/vector-search.md
-      - Cypher Queries: guides/cypher-queries.md
-      - Memory Decay: guides/memory-decay.md
-      - GPU Acceleration: guides/gpu-acceleration.md
-      - Neo4j Compatibility: guides/neo4j-compatibility.md
-      - Performance Tuning: guides/performance-tuning.md
-  - Developer Docs:
-      - API Reference: api-reference.md
-      - Examples: guides/examples.md
-      - Advanced Patterns: guides/advanced-patterns.md
+      - Overview: user-guides/README.md
+      - Vector Search: user-guides/vector-search.md
+      - Hybrid Search: user-guides/hybrid-search.md
+      - Cypher Queries: user-guides/cypher-queries.md
+      - Graph Traversal: user-guides/graph-traversal.md
+      - Transactions: user-guides/transactions.md
+      - Data Import/Export: user-guides/data-import-export.md
+      - Clustering: user-guides/clustering.md
+      - Plugin System: user-guides/plugin-system.md
+      - Complete Examples: user-guides/complete-examples.md
+      - Heimdall AI Assistant: user-guides/heimdall-ai-assistant.md
+      - Heimdall Plugins: user-guides/heimdall-plugins.md
+  - Architecture:
+      - Overview: architecture/README.md
+      - System Design: architecture/system-design.md
+      - Replication: architecture/replication.md
+      - Plugin System: architecture/plugin-system.md
+  - API Reference:
+      - Overview: api-reference/README.md
+      - Cypher Functions: api-reference/cypher-functions/README.md
+  - Features:
+      - Overview: features/README.md
+      - Cross-Encoder Reranking: features/cross-encoder-reranking.md
+  - Advanced:
+      - Overview: advanced/README.md
+      - Search Evaluation: advanced/search-evaluation.md
+      - K-Means Clustering: advanced/k-means-clustering/README.md
+      - Embeddings: advanced/embeddings/README.md
+  - Performance:
+      - Overview: performance/README.md
   - Operations:
-      - Deployment: guides/deployment.md
-      - Monitoring: guides/monitoring.md
-      - Backup & Recovery: guides/backup-recovery.md
-      - Troubleshooting: guides/troubleshooting.md
-  - Compliance & Security:
-      - Compliance: guides/compliance.md
-      - Security: guides/security.md
-      - Encryption: guides/encryption.md
-  - API Reference: api-reference.md
+      - Overview: operations/README.md
+  - Compliance:
+      - Overview: compliance/README.md
+  - Development:
+      - Overview: development/README.md
+  - AI Agents:
+      - Overview: ai-agents/README.md
+      - Chat Modes: ai-agents/chat-modes.md
   - Contributing: CONTRIBUTING.md
-  - License: LICENSE.md
+  - Changelog: CHANGELOG.md
 
 extra:
   social:

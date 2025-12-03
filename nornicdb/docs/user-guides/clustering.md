@@ -10,7 +10,7 @@ This guide covers how to set up, configure, and operate NornicDB in clustered co
 4. [Mode 2: Raft Cluster (3+ Nodes)](#mode-2-raft-cluster-3-nodes)
 5. [Mode 3: Multi-Region](#mode-3-multi-region)
 6. [Client Connection](#client-connection)
-7. [Monitoring & Health Checks](#monitoring--health-checks)
+7. [Monitoring & Health Checks](#monitoring-health-checks)
 8. [Failover Operations](#failover-operations)
 9. [Troubleshooting](#troubleshooting)
 

@@ -93,28 +93,28 @@ See [Vector Search](vector-search.md) and [Hybrid Search](hybrid-search.md) for 
 - Find relationships between concepts
 - Semantic search across documents
 
-**Example:** [Complete Examples](complete-examples.md#knowledge-graph)
+**Example:** [Personal Knowledge Graph](complete-examples.md#3-personal-knowledge-graph)
 
-### Recommendation Systems
-- User-item relationships
-- Collaborative filtering
-- Content-based recommendations
+### AI Agent Memory
+- User preferences and context
+- Project decisions and architecture
+- Semantic memory with decay
 
-**Example:** [Complete Examples](complete-examples.md#recommendations)
+**Example:** [AI Agent Memory System](complete-examples.md#1-ai-agent-memory-system)
 
-### Social Networks
-- Friend connections
-- Activity feeds
-- Community detection
+### Code Knowledge Bases
+- Code structure and dependencies
+- Documentation search
+- Pattern recognition
 
-**Example:** [Complete Examples](complete-examples.md#social-network)
+**Example:** [Code Knowledge Base](complete-examples.md#2-code-knowledge-base)
 
 ### Document Management
 - Semantic document search
 - Automatic categorization
 - Related document discovery
 
-**Example:** [Vector Search](vector-search.md#document-search)
+**Example:** [Vector Search Guide](vector-search.md#quick-start)
 
 ## 🆘 Common Questions
 
