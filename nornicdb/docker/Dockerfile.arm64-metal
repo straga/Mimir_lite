@@ -76,17 +76,24 @@ COPY . .
 COPY --from=ui /ui/dist ./ui/dist
 
 # Build (with or without UI based on HEADLESS arg)
+# NOTE: Cannot use -static linking because Go plugins require dynamic linking
 RUN if [ "$HEADLESS" = "true" ]; then \
       echo "Building headless (no UI)..." && \
       CGO_ENABLED=1 go build -tags="localllm noui" \
-        -ldflags="-s -w -linkmode external -extldflags '-static' -X main.buildTime=$(date -u +%Y%m%d-%H%M%S)" \
+        -ldflags="-s -w -X main.buildTime=$(date -u +%Y%m%d-%H%M%S)" \
         -o nornicdb ./cmd/nornicdb; \
     else \
       echo "Building with UI..." && \
       CGO_ENABLED=1 go build -tags=localllm \
-        -ldflags="-s -w -linkmode external -extldflags '-static' -X main.buildTime=$(date -u +%Y%m%d-%H%M%S)" \
+        -ldflags="-s -w -X main.buildTime=$(date -u +%Y%m%d-%H%M%S)" \
         -o nornicdb ./cmd/nornicdb; \
     fi
+
+# Build APOC plugin
+RUN echo "Building APOC plugin..." && \
+    mkdir -p apoc/built-plugins && \
+    cd apoc/plugin-src/apoc && go build -buildmode=plugin -o ../../../apoc/built-plugins/apoc.so apoc_plugin.go && \
+    echo "✓ Built plugin:" && ls -lh /build/apoc/built-plugins/*.so
 
 # =============================================================================
 # Stage 4: Runtime
@@ -99,6 +106,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mkdir -p /data /app/models
 
 COPY --from=builder /build/nornicdb /app/
+COPY --from=builder /build/apoc/built-plugins /app/plugins/
 COPY docker/entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 
@@ -135,6 +143,7 @@ ENV NORNICDB_DATA_DIR=/data \
     NORNICDB_MODELS_DIR=/app/models \
     NORNICDB_EMBEDDING_GPU_LAYERS=0 \
     NORNICDB_NO_AUTH=true \
-    NORNICDB_HEADLESS=${HEADLESS}
+    NORNICDB_HEADLESS=${HEADLESS} \
+    NORNICDB_APOC_PLUGINS_DIR=/app/plugins
 
 ENTRYPOINT ["/app/entrypoint.sh"]

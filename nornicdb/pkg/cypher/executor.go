@@ -480,30 +480,6 @@ func (e *StorageExecutor) executeImplicitAsync(ctx context.Context, cypher strin
 	return result, nil
 }
 
-// executeImplicit wraps a single query in an implicit transaction.
-// This provides strict ACID guarantees but is slower than executeImplicitAsync.
-func (e *StorageExecutor) executeImplicit(ctx context.Context, cypher string, upperQuery string) (*ExecuteResult, error) {
-	// Start implicit transaction
-	if _, err := e.handleBegin(); err != nil {
-		return nil, fmt.Errorf("implicit transaction begin failed: %w", err)
-	}
-
-	// Execute query
-	result, err := e.executeInTransaction(ctx, cypher, upperQuery)
-
-	// Auto-commit or rollback
-	if err != nil {
-		e.handleRollback()
-		return nil, err
-	}
-
-	if _, commitErr := e.handleCommit(); commitErr != nil {
-		return nil, fmt.Errorf("implicit transaction commit failed: %w", commitErr)
-	}
-
-	return result, nil
-}
-
 // tryFastPathCompoundQuery attempts to handle common compound query patterns
 // using pre-compiled regex for faster routing. Returns (result, true) if handled,
 // (nil, false) if the query should go through normal routing.

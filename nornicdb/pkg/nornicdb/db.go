@@ -130,6 +130,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -756,6 +757,23 @@ func Open(dataDir string, config *Config) (*DB, error) {
 
 	// Initialize Cypher executor
 	db.cypherExecutor = cypher.NewStorageExecutor(db.storage)
+
+	// Load plugins from configured directory (NORNICDB_APOC_PLUGINS_DIR)
+	pluginsDir := os.Getenv("NORNICDB_APOC_PLUGINS_DIR")
+	if pluginsDir != "" {
+		if err := LoadPluginsFromDir(pluginsDir); err != nil {
+			fmt.Printf("⚠️  Plugin loading warning: %v\n", err)
+		}
+	}
+
+	// Wire up plugin function lookup for Cypher executor
+	cypher.PluginFunctionLookup = func(name string) (interface{}, bool) {
+		fn, found := GetPluginFunction(name)
+		if !found {
+			return nil, false
+		}
+		return fn.Handler, true
+	}
 
 	// Configure parallel execution
 	parallelCfg := cypher.ParallelConfig{

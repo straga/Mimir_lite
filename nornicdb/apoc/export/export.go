@@ -2,7 +2,7 @@
 //
 // This package implements all apoc.export.* functions for exporting
 // graph data to various formats (JSON, CSV, Cypher, GraphML).
-package export
+package apocexport
 
 import (
 	"encoding/csv"

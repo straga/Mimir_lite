@@ -150,6 +150,25 @@ CALL db.index.vector.queryNodes(
 RETURN node.content, score
 ```
 
+### 🧩 APOC Functions
+
+60+ built-in functions for text, math, collections, and more. Plus a plugin system for custom extensions.
+
+```cypher
+// Text processing
+RETURN apoc.text.camelCase('hello world')  // "helloWorld"
+RETURN apoc.text.slugify('Hello World!')   // "hello-world"
+
+// Machine learning
+RETURN apoc.ml.sigmoid(0)                  // 0.5
+RETURN apoc.ml.cosineSimilarity([1,0], [0,1])  // 0.0
+
+// Collections
+RETURN apoc.coll.sum([1, 2, 3, 4, 5])      // 15
+```
+
+Drop custom `.so` plugins into `/app/plugins/` for automatic loading. See the [APOC Plugin Guide](docs/user-guides/APOC_PLUGINS.md).
+
 ## Docker Images
 
 | Image                           | Platform      | Size   | Model    | UI  |

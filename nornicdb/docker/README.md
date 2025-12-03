@@ -206,6 +206,37 @@ docker/
 └── README.md
 ```
 
+## APOC Plugins
+
+All Docker images include the pre-built APOC plugin at `/app/plugins/`:
+
+- **apoc.so**: Full APOC plugin (coll, text, math, convert, date, json, util, agg, create functions)
+
+### Using Plugins
+
+Plugins are automatically loaded at startup. Use them in Cypher queries:
+
+```cypher
+RETURN apoc.coll.sum([1, 2, 3, 4, 5])  // 15
+RETURN apoc.text.capitalize('hello world')  // "Hello World"
+RETURN apoc.math.round(3.14159, 2)  // 3.14
+RETURN apoc.create.uuid()  // UUID string
+```
+
+### Custom Plugins
+
+Mount custom plugins to extend functionality:
+
+```bash
+docker run -d \
+  -v ./my-plugins:/app/plugins \
+  timothyswt/nornicdb-arm64-metal:latest
+```
+
+See [APOC Plugin Guide](../docs/user-guides/APOC_PLUGINS.md) for creating custom plugins.
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -217,3 +248,5 @@ docker/
 | `NORNICDB_EMBEDDING_MODEL` | `bge-m3` | Embedding model name |
 | `NORNICDB_MODELS_DIR` | `/app/models` | Models directory |
 | `NORNICDB_EMBEDDING_GPU_LAYERS` | `-1` (CUDA) / `0` (Metal) | GPU layers |
+| `NORNICDB_APOC_PLUGINS_DIR` | `/app/plugins` | APOC plugins directory |
+| `NORNICDB_APOC_ENABLED` | `true` | Enable APOC functions |

@@ -239,17 +239,29 @@ deploy-llama-cuda: build-llama-cuda push-llama-cuda
 # Local Development (native binary, not Docker)
 # ==============================================================================
 
-build:
+# Build NornicDB binary + APOC plugins (on supported platforms)
+build: build-binary build-plugins-if-supported
+	@echo "✓ Build complete: bin/nornicdb + plugins (if supported)"
+
+build-binary:
 	go build -o bin/nornicdb ./cmd/nornicdb
 
-build-localllm:
+# Build plugins only if platform supports Go plugins (Linux/macOS, not Windows)
+build-plugins-if-supported:
+ifeq ($(OS),Windows_NT)
+	@echo "Note: Go plugins not supported on Windows, skipping plugin build"
+else
+	@$(MAKE) plugins
+endif
+
+build-localllm: build-plugins-if-supported
 	CGO_ENABLED=1 go build -tags localllm -o bin/nornicdb ./cmd/nornicdb
 
 # Build without UI (headless mode)
-build-headless:
+build-headless: build-plugins-if-supported
 	go build -tags noui -o bin/nornicdb-headless ./cmd/nornicdb
 
-build-localllm-headless:
+build-localllm-headless: build-plugins-if-supported
 	CGO_ENABLED=1 go build -tags "localllm noui" -o bin/nornicdb-headless ./cmd/nornicdb
 
 test:
@@ -356,6 +368,70 @@ images:
 	@echo ""
 	@echo "CUDA prerequisite:"
 	@echo "  $(LLAMA_CUDA)"
+
+# ==============================================================================
+# APOC Plugin System
+# ==============================================================================
+# Go plugins (.so files) that can be dynamically loaded at runtime.
+# Note: Go plugins only work on Linux and macOS (not Windows).
+# Plugins must be built with the same Go version as the main binary.
+
+PLUGINS_DIR := apoc/built-plugins
+
+# Check if plugins are supported on this platform
+.PHONY: plugin-check
+plugin-check:
+ifeq ($(OS),Windows_NT)
+	@echo "Error: Go plugins are not supported on Windows"
+	@echo "Use static linking instead (functions are built into the binary)"
+	@exit 1
+else
+	@echo "Platform $(shell uname -s) supports Go plugins"
+endif
+
+# Build APOC plugin
+.PHONY: plugins
+plugins: plugin-check plugin-apoc
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════╗"
+	@echo "║ Plugins built successfully!                                  ║"
+	@echo "╚══════════════════════════════════════════════════════════════╝"
+	@ls -lh $(PLUGINS_DIR)/*.so 2>/dev/null || echo "No plugins found"
+	@echo ""
+	@echo "To use: NORNICDB_APOC_PLUGINS_DIR=$(PLUGINS_DIR) ./nornicdb"
+
+# Plugin source directory
+PLUGINS_SRC_DIR := apoc/plugin-src
+
+# Build APOC plugin (function count determined at runtime from plugin)
+.PHONY: plugin-apoc
+plugin-apoc: plugin-check
+	@mkdir -p $(PLUGINS_DIR)
+	@echo "Building APOC plugin..."
+	cd $(PLUGINS_SRC_DIR)/apoc && go build -buildmode=plugin -o ../../../$(PLUGINS_DIR)/apoc.so apoc_plugin.go
+	@echo "Built: $(PLUGINS_DIR)/apoc.so"
+
+# Clean plugins
+.PHONY: plugins-clean
+plugins-clean:
+	rm -rf $(PLUGINS_DIR)
+	@echo "Cleaned plugin build artifacts"
+
+# List available plugins
+.PHONY: plugins-list
+plugins-list:
+	@echo "Available Plugin Targets:"
+	@echo ""
+	@echo "  make plugins          Build APOC plugin"
+	@echo "  make plugin-apoc      Build APOC plugin"
+	@echo "  make plugins-clean    Remove built plugins"
+	@echo ""
+	@if [ -d "$(PLUGINS_DIR)" ]; then \
+		echo "Built plugins:"; \
+		ls -lh $(PLUGINS_DIR)/*.so 2>/dev/null || echo "  (none)"; \
+	else \
+		echo "No plugins built yet. Run 'make plugins' to build."; \
+	fi
 
 clean:
 	rm -rf bin/nornicdb bin/nornicdb-headless bin/nornicdb.exe \

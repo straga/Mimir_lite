@@ -72,6 +72,12 @@ RUN if [ "$HEADLESS" = "true" ]; then \
         -o nornicdb ./cmd/nornicdb; \
     fi
 
+# Build APOC plugin
+RUN echo "Building APOC plugin..." && \
+    mkdir -p apoc/built-plugins && \
+    cd apoc/plugin-src/apoc && go build -buildmode=plugin -o ../../../apoc/built-plugins/apoc.so apoc_plugin.go && \
+    echo "✓ Built plugin:" && ls -lh /build/apoc/built-plugins/*.so
+
 # =============================================================================
 # Stage 4: Runtime
 # =============================================================================
@@ -83,6 +89,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mkdir -p /data /app/models
 
 COPY --from=builder /build/nornicdb /app/
+COPY --from=builder /build/apoc/built-plugins /app/plugins/
 COPY docker/entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 
@@ -121,6 +128,7 @@ ENV NORNICDB_DATA_DIR=/data \
     NORNICDB_NO_AUTH=true \
     NORNICDB_GPU_ENABLED=true \
     NORNICDB_HEADLESS=${HEADLESS} \
+    NORNICDB_APOC_PLUGINS_DIR=/app/plugins \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 

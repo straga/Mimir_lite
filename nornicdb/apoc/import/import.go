@@ -2,7 +2,7 @@
 //
 // This package implements all apoc.import.* functions for importing
 // graph data from various formats (JSON, CSV, GraphML).
-package imports
+package apocimport
 
 import (
 	"encoding/csv"
