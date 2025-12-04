@@ -96,15 +96,26 @@ func NewManager(cfg Config) (*Manager, error) {
 		gpuLayers = -1 // Auto
 	}
 
+	// Context and batch size - maxed out (no performance impact)
+	contextSize := cfg.ContextSize
+	if contextSize == 0 {
+		contextSize = 32768 // 32K max for qwen2.5-0.5b
+	}
+	batchSize := cfg.BatchSize
+	if batchSize == 0 {
+		batchSize = 8192 // 8K max batch
+	}
+
 	fmt.Printf("🛡️ Loading Heimdall model: %s\n", modelPath)
 	fmt.Printf("   GPU layers: %d (-1 = auto, falls back to CPU if needed)\n", gpuLayers)
+	fmt.Printf("   Context: %d tokens, Batch: %d tokens (single-shot mode)\n", contextSize, batchSize)
 
 	// Load the model - this uses the stub for now, will be replaced with CGO impl
-	generator, err := loadGenerator(modelPath, gpuLayers)
+	generator, err := loadGenerator(modelPath, gpuLayers, contextSize, batchSize)
 	if err != nil {
 		// Try CPU fallback
 		fmt.Printf("⚠️  GPU loading failed, trying CPU fallback: %v\n", err)
-		generator, err = loadGenerator(modelPath, 0) // 0 = CPU only
+		generator, err = loadGenerator(modelPath, 0, contextSize, batchSize) // 0 = CPU only
 		if err != nil {
 			return nil, fmt.Errorf("failed to load SLM model: %w", err)
 		}
@@ -112,6 +123,10 @@ func NewManager(cfg Config) (*Manager, error) {
 	} else {
 		fmt.Printf("✅ SLM model loaded: %s\n", modelName)
 	}
+
+	// Log token budget allocation
+	fmt.Printf("   Token budget: %dK context = %dK system + %dK user (multi-batch prefill)\n",
+		MaxContextTokens/1024, MaxSystemPromptTokens/1024, MaxUserMessageTokens/1024)
 
 	return &Manager{
 		generator: generator,
@@ -123,10 +138,15 @@ func NewManager(cfg Config) (*Manager, error) {
 
 // GeneratorLoader is a function type for loading generators.
 // This can be replaced for testing or by CGO implementation.
-type GeneratorLoader func(modelPath string, gpuLayers int) (Generator, error)
+// Parameters:
+//   - modelPath: Path to the GGUF model file
+//   - gpuLayers: GPU layer offload (-1=auto, 0=CPU only)
+//   - contextSize: Context window size (single-shot = 8192)
+//   - batchSize: Batch processing size (match context for single-shot)
+type GeneratorLoader func(modelPath string, gpuLayers, contextSize, batchSize int) (Generator, error)
 
 // DefaultGeneratorLoader is the default loader (stub without CGO).
-var DefaultGeneratorLoader GeneratorLoader = func(modelPath string, gpuLayers int) (Generator, error) {
+var DefaultGeneratorLoader GeneratorLoader = func(modelPath string, gpuLayers, contextSize, batchSize int) (Generator, error) {
 	return nil, fmt.Errorf("SLM generation requires CGO build with localllm tag")
 }
 
@@ -143,8 +163,8 @@ func SetGeneratorLoader(loader GeneratorLoader) GeneratorLoader {
 }
 
 // loadGenerator creates a generator for the model using the active loader.
-func loadGenerator(modelPath string, gpuLayers int) (Generator, error) {
-	return generatorLoader(modelPath, gpuLayers)
+func loadGenerator(modelPath string, gpuLayers, contextSize, batchSize int) (Generator, error) {
+	return generatorLoader(modelPath, gpuLayers, contextSize, batchSize)
 }
 
 // Generate produces a response for the given prompt.

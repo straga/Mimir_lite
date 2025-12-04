@@ -339,6 +339,16 @@ type FeatureFlagsConfig struct {
 	// Environment: NORNICDB_HEIMDALL_GPU_LAYERS (default: -1)
 	HeimdallGPULayers int
 
+	// Context size for Heimdall model (max tokens in context window)
+	// Default: 32768 (32K - maxed out, no performance impact)
+	// Environment: NORNICDB_HEIMDALL_CONTEXT_SIZE (default: 32768)
+	HeimdallContextSize int
+
+	// Batch size for Heimdall model (tokens processed at once)
+	// Default: 8192 (8K - maxed out, no performance impact)
+	// Environment: NORNICDB_HEIMDALL_BATCH_SIZE (default: 8192)
+	HeimdallBatchSize int
+
 	// Max tokens for Heimdall generation
 	// Environment: NORNICDB_HEIMDALL_MAX_TOKENS (default: 512)
 	HeimdallMaxTokens int
@@ -364,6 +374,8 @@ type FeatureFlagsConfig struct {
 func (f *FeatureFlagsConfig) GetHeimdallEnabled() bool          { return f.HeimdallEnabled }
 func (f *FeatureFlagsConfig) GetHeimdallModel() string          { return f.HeimdallModel }
 func (f *FeatureFlagsConfig) GetHeimdallGPULayers() int         { return f.HeimdallGPULayers }
+func (f *FeatureFlagsConfig) GetHeimdallContextSize() int       { return f.HeimdallContextSize }
+func (f *FeatureFlagsConfig) GetHeimdallBatchSize() int         { return f.HeimdallBatchSize }
 func (f *FeatureFlagsConfig) GetHeimdallMaxTokens() int         { return f.HeimdallMaxTokens }
 func (f *FeatureFlagsConfig) GetHeimdallTemperature() float32   { return f.HeimdallTemperature }
 func (f *FeatureFlagsConfig) GetHeimdallAnomalyDetection() bool { return f.HeimdallAnomalyDetection }
@@ -724,8 +736,10 @@ func LoadFromEnv() *Config {
 	// Opt-in cognitive database features - disabled by default
 	config.Features.HeimdallEnabled = getEnvBool("NORNICDB_HEIMDALL_ENABLED", false)
 	config.Features.HeimdallModel = getEnv("NORNICDB_HEIMDALL_MODEL", "qwen2.5-0.5b-instruct")
-	config.Features.HeimdallGPULayers = getEnvInt("NORNICDB_HEIMDALL_GPU_LAYERS", -1) // -1 = auto
-	config.Features.HeimdallMaxTokens = getEnvInt("NORNICDB_HEIMDALL_MAX_TOKENS", 512)
+	config.Features.HeimdallGPULayers = getEnvInt("NORNICDB_HEIMDALL_GPU_LAYERS", -1)        // -1 = auto
+	config.Features.HeimdallContextSize = getEnvInt("NORNICDB_HEIMDALL_CONTEXT_SIZE", 32768) // 32K max (no perf impact)
+	config.Features.HeimdallBatchSize = getEnvInt("NORNICDB_HEIMDALL_BATCH_SIZE", 8192)      // 8K max (no perf impact)
+	config.Features.HeimdallMaxTokens = getEnvInt("NORNICDB_HEIMDALL_MAX_TOKENS", 1024)      // 1K output (faster)
 	config.Features.HeimdallTemperature = float32(getEnvFloat("NORNICDB_HEIMDALL_TEMPERATURE", 0.1))
 	// Sub-features default to true when Heimdall is enabled
 	config.Features.HeimdallAnomalyDetection = getEnvBool("NORNICDB_HEIMDALL_ANOMALY_DETECTION", config.Features.HeimdallEnabled)

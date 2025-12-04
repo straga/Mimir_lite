@@ -9,7 +9,8 @@
 - **[Hybrid Search (RRF)](hybrid-search.md)** - Combine vector + BM25 search
 - **[Transactions](transactions.md)** - ACID guarantees and transaction management
 - **[Clustering](clustering.md)** - High availability and replication
-- **[Heimdall AI Assistant](heimdall-ai-assistant.md)** - Built-in AI for natural language database interaction ⭐ **NEW**
+- **[Heimdall AI Assistant](heimdall-ai-assistant.md)** - Built-in AI for natural language database interaction
+- **[Heimdall Context & Tokens](heimdall-context.md)** - Understanding the token budget and context handling
 - **[Complete Examples](complete-examples.md)** - Full application examples
 
 ### Query & Data Management
@@ -55,6 +56,9 @@
 
 **Extend Heimdall with custom actions**
 → [Heimdall Plugins](heimdall-plugins.md)
+
+**Understand Heimdall's token budget**
+→ [Heimdall Context & Tokens](heimdall-context.md)
 
 **Build event-driven automation**
 → [Heimdall Plugins - Autonomous Actions](heimdall-plugins.md#autonomous-action-invocation-heimdallinvoker)

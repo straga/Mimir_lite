@@ -259,6 +259,15 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	systemContent := promptCtx.BuildFinalPrompt()
 	systemMsg := ChatMessage{Role: "system", Content: systemContent}
 
+	// Validate token budget before proceeding
+	if err := promptCtx.ValidateTokenBudget(); err != nil {
+		budgetInfo := promptCtx.GetBudgetInfo()
+		log.Printf("[Bifrost] Token budget exceeded: %v (system: %d, user: %d, total: %d)",
+			err, budgetInfo.SystemTokens, budgetInfo.UserTokens, budgetInfo.TotalTokens)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// Build messages: system + user message
 	messages := []ChatMessage{systemMsg}
 	for _, msg := range promptCtx.Messages {
@@ -311,12 +320,38 @@ type requestLifecycle struct {
 }
 
 // defaultExamples returns built-in examples for action mapping.
+// These help Heimdall understand common user intents and map them to actions.
 func defaultExamples() []PromptExample {
 	return []PromptExample{
+		// === STATUS & METRICS ===
+		{UserSays: "status", ActionJSON: `{"action": "heimdall.watcher.status", "params": {}}`},
 		{UserSays: "what is the status", ActionJSON: `{"action": "heimdall.watcher.status", "params": {}}`},
 		{UserSays: "show me metrics", ActionJSON: `{"action": "heimdall.watcher.metrics", "params": {}}`},
 		{UserSays: "database stats", ActionJSON: `{"action": "heimdall.watcher.db_stats", "params": {}}`},
-		{UserSays: "how many nodes", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n) RETURN count(n)"}}`},
+		{UserSays: "health check", ActionJSON: `{"action": "heimdall.watcher.status", "params": {}}`},
+
+		// === COUNTING & STATISTICS ===
+		{UserSays: "how many nodes", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n) RETURN count(n) AS total_nodes"}}`},
+		{UserSays: "count all relationships", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH ()-[r]->() RETURN count(r) AS total_relationships"}}`},
+		{UserSays: "what labels exist", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "CALL db.labels() YIELD label RETURN label"}}`},
+		{UserSays: "show relationship types", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"}}`},
+
+		// === SAMPLING & EXPLORATION ===
+		{UserSays: "show me some nodes", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n) RETURN n LIMIT 10"}}`},
+		{UserSays: "sample Person nodes", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n:Person) RETURN n LIMIT 5"}}`},
+		{UserSays: "show relationships", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (a)-[r]->(b) RETURN a, type(r), b LIMIT 10"}}`},
+
+		// === SEARCHING ===
+		{UserSays: "find nodes with name Alice", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n {name: 'Alice'}) RETURN n"}}`},
+		{UserSays: "search for nodes containing test", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n) WHERE n.name CONTAINS 'test' RETURN n LIMIT 20"}}`},
+
+		// === AGGREGATIONS ===
+		{UserSays: "nodes per label", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n) RETURN labels(n) AS label, count(n) AS count ORDER BY count DESC"}}`},
+		{UserSays: "relationship distribution", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH ()-[r]->() RETURN type(r) AS type, count(r) AS count ORDER BY count DESC"}}`},
+
+		// === GRAPH ANALYSIS ===
+		{UserSays: "find highly connected nodes", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n)-[r]-() RETURN n, count(r) AS connections ORDER BY connections DESC LIMIT 10"}}`},
+		{UserSays: "orphan nodes", ActionJSON: `{"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n) WHERE NOT (n)--() RETURN n LIMIT 20"}}`},
 	}
 }
 

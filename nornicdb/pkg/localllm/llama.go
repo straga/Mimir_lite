@@ -726,10 +726,12 @@ func (m *Model) Close() error {
 
 // GenerationModel wraps a GGUF model for text generation.
 type GenerationModel struct {
-	model     *C.struct_llama_model
-	ctx       *C.struct_llama_context
-	modelPath string
-	mu        sync.Mutex
+	model       *C.struct_llama_model
+	ctx         *C.struct_llama_context
+	modelPath   string
+	batchSize   int // Store for pre-flight validation
+	contextSize int // Store for pre-flight validation
+	mu          sync.Mutex
 }
 
 // GenerationOptions configures generation model loading.
@@ -773,9 +775,11 @@ func LoadGenerationModel(opts GenerationOptions) (*GenerationModel, error) {
 	}
 
 	return &GenerationModel{
-		model:     model,
-		ctx:       ctx,
-		modelPath: opts.ModelPath,
+		model:       model,
+		ctx:         ctx,
+		modelPath:   opts.ModelPath,
+		batchSize:   opts.BatchSize,
+		contextSize: opts.ContextSize,
 	}, nil
 }
 
@@ -833,26 +837,50 @@ func (g *GenerationModel) GenerateStream(ctx context.Context, prompt string, par
 		return fmt.Errorf("prompt produced no tokens")
 	}
 
+	// Pre-flight validation: check token count against CONTEXT size (not batch)
+	// Batch size just limits how many tokens we process per forward pass
+	// We can process large prompts in multiple batches
+	tokenCount := int(n)
+	if tokenCount > g.contextSize {
+		return fmt.Errorf("prompt too large: %d tokens exceeds context size of %d tokens. "+
+			"Try a shorter message or increase NORNICDB_HEIMDALL_CONTEXT_SIZE",
+			tokenCount, g.contextSize)
+	}
+
 	// Error buffer for detailed error messages from C
 	errorBuf := make([]byte, 512)
 
-	// Process prompt (prefill) with validation
-	result := C.safe_gen_decode(
-		g.ctx,
-		g.model,
-		(*C.int)(&tokens[0]),
-		n,
-		0,
-		(*C.char)(unsafe.Pointer(&errorBuf[0])),
-		C.int(len(errorBuf)),
-	)
-	if result != 0 {
-		errMsg := C.GoString((*C.char)(unsafe.Pointer(&errorBuf[0])))
-		return fmt.Errorf("prefill failed: %s (code=%d)", errMsg, result)
+	// Process prompt (prefill) - may require multiple batches for large prompts
+	// Each batch adds to the KV cache, so the model "remembers" everything
+	pos := 0
+	remaining := tokenCount
+	for remaining > 0 {
+		// Process up to batchSize tokens at a time
+		batchTokens := remaining
+		if batchTokens > g.batchSize {
+			batchTokens = g.batchSize
+		}
+
+		result := C.safe_gen_decode(
+			g.ctx,
+			g.model,
+			(*C.int)(&tokens[pos]),
+			C.int(batchTokens),
+			C.int(pos), // Position in KV cache
+			(*C.char)(unsafe.Pointer(&errorBuf[0])),
+			C.int(len(errorBuf)),
+		)
+		if result != 0 {
+			errMsg := C.GoString((*C.char)(unsafe.Pointer(&errorBuf[0])))
+			return fmt.Errorf("prefill failed at position %d: %s (code=%d)", pos, errMsg, result)
+		}
+
+		pos += batchTokens
+		remaining -= batchTokens
 	}
 
 	// Autoregressive generation
-	pos := int(n)
+	genPos := tokenCount     // Start generation after all prompt tokens
 	buf := make([]byte, 256) // Buffer for detokenization
 
 	for i := 0; i < params.MaxTokens; i++ {
@@ -892,15 +920,15 @@ func (g *GenerationModel) GenerateStream(ctx context.Context, prompt string, par
 			g.ctx,
 			g.model,
 			token,
-			C.int(pos),
+			C.int(genPos),
 			(*C.char)(unsafe.Pointer(&errorBuf[0])),
 			C.int(len(errorBuf)),
 		)
 		if result != 0 {
 			errMsg := C.GoString((*C.char)(unsafe.Pointer(&errorBuf[0])))
-			return fmt.Errorf("decode failed at position %d: %s (code=%d)", pos, errMsg, result)
+			return fmt.Errorf("decode failed at position %d: %s (code=%d)", genPos, errMsg, result)
 		}
-		pos++
+		genPos++
 	}
 
 	return nil

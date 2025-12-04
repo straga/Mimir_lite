@@ -29,11 +29,15 @@ environment:
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `NORNICDB_HEIMDALL_ENABLED` | `false` | Enable/disable the AI assistant |
-| `NORNICDB_HEIMDALL_MODEL` | `qwen2.5-1.5b-instruct-q4_k_m` | GGUF model to use |
+| `NORNICDB_HEIMDALL_MODEL` | `qwen2.5-0.5b-instruct` | GGUF model to use |
 | `NORNICDB_MODELS_DIR` | `/app/models` | Directory containing GGUF models |
 | `NORNICDB_HEIMDALL_GPU_LAYERS` | `-1` | GPU layers (-1 = auto) |
-| `NORNICDB_HEIMDALL_MAX_TOKENS` | `512` | Max tokens per response |
+| `NORNICDB_HEIMDALL_CONTEXT_SIZE` | `32768` | Context window (32K max) |
+| `NORNICDB_HEIMDALL_BATCH_SIZE` | `8192` | Batch size for prefill (8K max) |
+| `NORNICDB_HEIMDALL_MAX_TOKENS` | `1024` | Max tokens per response |
 | `NORNICDB_HEIMDALL_TEMPERATURE` | `0.1` | Response creativity (0.0-1.0) |
+
+For detailed information about context handling and token budgets, see [Heimdall Context & Tokens](./heimdall-context.md).
 
 ## Available Commands
 

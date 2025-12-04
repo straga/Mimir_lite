@@ -100,6 +100,7 @@ nav:
       - Complete Examples: user-guides/complete-examples.md
       - Heimdall AI Assistant: user-guides/heimdall-ai-assistant.md
       - Heimdall Plugins: user-guides/heimdall-plugins.md
+      - Heimdall Context & Tokens: user-guides/heimdall-context.md
   - Architecture:
       - Overview: architecture/README.md
       - System Design: architecture/system-design.md

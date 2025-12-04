@@ -164,6 +164,8 @@ type Config struct {
 
 	ModelsDir   string  `json:"models_dir"`
 	Model       string  `json:"model"`
+	ContextSize int     `json:"context_size"` // Context window size (single-shot, max out)
+	BatchSize   int     `json:"batch_size"`   // Batch size (match context for single-shot)
 	MaxTokens   int     `json:"max_tokens"`
 	Temperature float32 `json:"temperature"`
 	GPULayers   int     `json:"gpu_layers"`
@@ -186,7 +188,9 @@ func DefaultConfig() Config {
 		BifrostEnabled:   false, // Bifrost follows Heimdall state
 		ModelsDir:        "",    // Empty = use NORNICDB_MODELS_DIR env var
 		Model:            "qwen2.5-0.5b-instruct",
-		MaxTokens:        512,
+		ContextSize:      32768, // 32K max (no perf impact)
+		BatchSize:        8192,  // 8K max (no perf impact)
+		MaxTokens:        1024,  // 1K output (faster)
 		Temperature:      0.1,
 		GPULayers:        -1, // Auto
 		AnomalyDetection: true,
@@ -204,6 +208,8 @@ type FeatureFlagsSource interface {
 	GetHeimdallEnabled() bool
 	GetHeimdallModel() string
 	GetHeimdallGPULayers() int
+	GetHeimdallContextSize() int
+	GetHeimdallBatchSize() int
 	GetHeimdallMaxTokens() int
 	GetHeimdallTemperature() float32
 	GetHeimdallAnomalyDetection() bool
@@ -227,6 +233,8 @@ func ConfigFromFeatureFlags(flags FeatureFlagsSource) Config {
 	cfg.BifrostEnabled = cfg.Enabled
 	cfg.Model = flags.GetHeimdallModel()
 	cfg.GPULayers = flags.GetHeimdallGPULayers()
+	cfg.ContextSize = flags.GetHeimdallContextSize()
+	cfg.BatchSize = flags.GetHeimdallBatchSize()
 	cfg.MaxTokens = flags.GetHeimdallMaxTokens()
 	cfg.Temperature = flags.GetHeimdallTemperature()
 	cfg.AnomalyDetection = flags.GetHeimdallAnomalyDetection()
@@ -420,16 +428,77 @@ type PromptExample struct {
 	ActionJSON string // The JSON action Heimdall should output
 }
 
+// Token budget constants for Heimdall (16K context for efficiency)
+const (
+	// MaxContextTokens is the total context window (16K for balanced performance)
+	MaxContextTokens = 16384
+
+	// MaxSystemPromptTokens is reserved for system prompt (actions + instructions)
+	// This leaves ~4K for user message
+	MaxSystemPromptTokens = 12000
+
+	// MaxUserMessageTokens is reserved for the user's single-shot command
+	MaxUserMessageTokens = 4000
+
+	// TokensPerChar is a rough estimate (~4 chars per token for English)
+	TokensPerChar = 0.25
+)
+
+// EstimateTokens provides a rough token count estimate for a string.
+// Uses ~4 chars per token which is typical for English text.
+// For exact counts, use the actual tokenizer.
+func EstimateTokens(text string) int {
+	return int(float64(len(text)) * TokensPerChar)
+}
+
 // BuildFinalPrompt constructs the complete prompt for Heimdall.
 // ActionPrompt is ALWAYS first and immutable.
+// Falls back to minimal prompt if full prompt exceeds budget.
 func (p *PromptContext) BuildFinalPrompt() string {
+	// Try full prompt first
+	fullPrompt := p.buildFullPrompt()
+	if EstimateTokens(fullPrompt) <= MaxSystemPromptTokens {
+		return fullPrompt
+	}
+
+	// Fall back to minimal prompt (actions only)
+	return p.buildMinimalPrompt()
+}
+
+// buildFullPrompt creates the comprehensive system prompt with Cypher primer.
+func (p *PromptContext) buildFullPrompt() string {
 	var sb strings.Builder
 
-	// === IMMUTABLE SECTION (always first) ===
-	sb.WriteString("You are Heimdall, the AI assistant for NornicDB graph database.\n\n")
+	// === IDENTITY & ROLE ===
+	sb.WriteString(`You are Heimdall, the AI assistant for NornicDB - a high-performance graph database.
+Your role is to help users manage the database by executing actions and running Cypher queries.
+
+`)
+
+	// === AVAILABLE ACTIONS (immutable, from plugins) ===
 	sb.WriteString("AVAILABLE ACTIONS:\n")
 	sb.WriteString(p.ActionPrompt)
 	sb.WriteString("\n")
+
+	// === CYPHER QUERY PRIMER ===
+	sb.WriteString(CypherPrimer)
+	sb.WriteString("\n")
+
+	// === RESPONSE MODES ===
+	sb.WriteString(`RESPONSE MODES:
+
+1. ACTION MODE - For database operations, respond with JSON:
+   {"action": "heimdall.watcher.status", "params": {}}
+   {"action": "heimdall.watcher.query", "params": {"cypher": "MATCH (n) RETURN count(n)"}}
+
+2. HELP MODE - For Cypher questions, explain and provide examples:
+   - If asked about Cypher syntax, explain clearly with examples
+   - If asked how to write a query, provide the query AND explain it
+   - Be helpful and educational
+
+IMPORTANT: Always complete your JSON responses with proper closing braces.
+
+`)
 
 	// === MUTABLE SECTION (from plugins) ===
 	if p.AdditionalInstructions != "" {
@@ -438,18 +507,131 @@ func (p *PromptContext) BuildFinalPrompt() string {
 		sb.WriteString("\n\n")
 	}
 
-	// Examples (built-in + plugin-added)
+	// === EXAMPLES ===
 	if len(p.Examples) > 0 {
 		sb.WriteString("EXAMPLES:\n")
 		for _, ex := range p.Examples {
-			sb.WriteString(fmt.Sprintf("User: \"%s\" → %s\n", ex.UserSays, ex.ActionJSON))
+			sb.WriteString(fmt.Sprintf("User: \"%s\"\n→ %s\n\n", ex.UserSays, ex.ActionJSON))
 		}
-		sb.WriteString("\n")
 	}
 
-	sb.WriteString("Respond with JSON action command only. No explanations.\n")
+	// === FINAL INSTRUCTION ===
+	sb.WriteString("Respond with JSON action command only. No explanations, no markdown.\n")
 
 	return sb.String()
+}
+
+// buildMinimalPrompt creates a minimal fallback prompt when full prompt is too large.
+func (p *PromptContext) buildMinimalPrompt() string {
+	var sb strings.Builder
+
+	sb.WriteString("You are Heimdall, AI assistant for NornicDB graph database.\n\n")
+	sb.WriteString("ACTIONS:\n")
+	sb.WriteString(p.ActionPrompt)
+	sb.WriteString("\nFor queries: {\"action\": \"heimdall.watcher.query\", \"params\": {\"cypher\": \"...\"}}\n")
+	sb.WriteString("Respond with JSON only.\n")
+
+	return sb.String()
+}
+
+// CypherPrimer is a comprehensive Cypher query reference for Heimdall.
+const CypherPrimer = `CYPHER QUERY REFERENCE:
+
+Basic Patterns:
+  MATCH (n)                     - All nodes
+  MATCH (n:Label)               - Nodes with label
+  MATCH (n {prop: value})       - Nodes with property
+  MATCH (n)-[r]->(m)           - Relationships
+  MATCH (n)-[r:TYPE]->(m)      - Typed relationships
+
+Common Queries:
+  MATCH (n) RETURN count(n)                           - Count all nodes
+  MATCH (n:Person) RETURN n LIMIT 10                  - Sample nodes
+  MATCH (n)-[r]->(m) RETURN type(r), count(r)        - Relationship stats
+  MATCH (n) RETURN labels(n), count(n) GROUP BY labels(n)  - Label distribution
+
+Filtering:
+  WHERE n.prop = 'value'        - Exact match
+  WHERE n.prop CONTAINS 'text'  - Substring
+  WHERE n.prop STARTS WITH 'x'  - Prefix
+  WHERE n.prop IS NOT NULL      - Exists check
+  WHERE n.prop > 10             - Comparison
+
+Aggregations:
+  count(n)                      - Count
+  collect(n.prop)               - List
+  sum(n.value), avg(n.value)    - Math
+  max(n.value), min(n.value)    - Extremes
+
+Path Queries:
+  MATCH path = (a)-[*1..3]->(b) - Variable length (1-3 hops)
+  MATCH (a)-[:KNOWS*]->(b)      - Any length
+  shortestPath((a)-[*]->(b))    - Shortest path
+
+Modifications (use carefully):
+  CREATE (n:Label {prop: 'value'})                    - Create node
+  MATCH (n) SET n.prop = 'value'                      - Update property
+  MATCH (n) DETACH DELETE n                           - Delete with relationships
+  MATCH (a),(b) CREATE (a)-[:REL]->(b)               - Create relationship
+
+Subqueries:
+  CALL { MATCH (n) RETURN count(n) as c } RETURN c   - Subquery
+  UNWIND [1,2,3] AS x RETURN x                        - List expansion
+`
+
+// EstimatedSystemTokens returns estimated token count for the system prompt.
+func (p *PromptContext) EstimatedSystemTokens() int {
+	return EstimateTokens(p.BuildFinalPrompt())
+}
+
+// ValidateTokenBudget checks if the prompt fits within the token budget.
+// Returns an error if the system prompt is too large.
+func (p *PromptContext) ValidateTokenBudget() error {
+	systemTokens := p.EstimatedSystemTokens()
+	userTokens := EstimateTokens(p.UserMessage)
+
+	if systemTokens > MaxSystemPromptTokens {
+		return fmt.Errorf("system prompt too large: ~%d tokens (max %d). "+
+			"Reduce plugin instructions or examples",
+			systemTokens, MaxSystemPromptTokens)
+	}
+
+	totalTokens := systemTokens + userTokens
+	if totalTokens > MaxContextTokens {
+		return fmt.Errorf("total prompt too large: ~%d tokens (max %d). "+
+			"System: ~%d, User: ~%d. Try a shorter message",
+			totalTokens, MaxContextTokens, systemTokens, userTokens)
+	}
+
+	return nil
+}
+
+// PromptBudgetInfo returns token budget information for debugging.
+type PromptBudgetInfo struct {
+	SystemTokens    int `json:"system_tokens"`
+	UserTokens      int `json:"user_tokens"`
+	TotalTokens     int `json:"total_tokens"`
+	MaxSystem       int `json:"max_system"`
+	MaxUser         int `json:"max_user"`
+	MaxTotal        int `json:"max_total"`
+	SystemAvailable int `json:"system_available"`
+	UserAvailable   int `json:"user_available"`
+}
+
+// GetBudgetInfo returns current token budget information.
+func (p *PromptContext) GetBudgetInfo() PromptBudgetInfo {
+	systemTokens := p.EstimatedSystemTokens()
+	userTokens := EstimateTokens(p.UserMessage)
+	return PromptBudgetInfo{
+		SystemTokens:    systemTokens,
+		UserTokens:      userTokens,
+		TotalTokens:     systemTokens + userTokens,
+		MaxSystem:       MaxSystemPromptTokens,
+		MaxUser:         MaxUserMessageTokens,
+		MaxTotal:        MaxContextTokens,
+		SystemAvailable: MaxSystemPromptTokens - systemTokens,
+		UserAvailable:   MaxUserMessageTokens - userTokens,
+	}
 }
 
 // PreExecuteContext contains the parsed action before execution.

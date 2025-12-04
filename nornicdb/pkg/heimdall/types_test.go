@@ -85,6 +85,8 @@ type MockFeatureFlags struct {
 	enabled          bool
 	model            string
 	gpuLayers        int
+	contextSize      int
+	batchSize        int
 	maxTokens        int
 	temperature      float32
 	anomalyDetection bool
@@ -95,6 +97,8 @@ type MockFeatureFlags struct {
 func (m *MockFeatureFlags) GetHeimdallEnabled() bool          { return m.enabled }
 func (m *MockFeatureFlags) GetHeimdallModel() string          { return m.model }
 func (m *MockFeatureFlags) GetHeimdallGPULayers() int         { return m.gpuLayers }
+func (m *MockFeatureFlags) GetHeimdallContextSize() int       { return m.contextSize }
+func (m *MockFeatureFlags) GetHeimdallBatchSize() int         { return m.batchSize }
 func (m *MockFeatureFlags) GetHeimdallMaxTokens() int         { return m.maxTokens }
 func (m *MockFeatureFlags) GetHeimdallTemperature() float32   { return m.temperature }
 func (m *MockFeatureFlags) GetHeimdallAnomalyDetection() bool { return m.anomalyDetection }

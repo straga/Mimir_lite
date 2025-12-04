@@ -16,9 +16,11 @@ func init() {
 }
 
 // cgoGeneratorLoader loads a generation model using localllm CGO bindings.
-func cgoGeneratorLoader(modelPath string, gpuLayers int) (Generator, error) {
+func cgoGeneratorLoader(modelPath string, gpuLayers, contextSize, batchSize int) (Generator, error) {
 	opts := localllm.DefaultGenerationOptions(modelPath)
 	opts.GPULayers = gpuLayers
+	opts.ContextSize = contextSize
+	opts.BatchSize = batchSize
 
 	model, err := localllm.LoadGenerationModel(opts)
 	if err != nil {

@@ -17,15 +17,15 @@ import (
 func TestCGOGeneratorLoader_Registered(t *testing.T) {
 	// The CGO loader should be registered, not the default stub
 	// Check by seeing if it returns a different error than the stub
-	
+
 	// First, save current loader
 	originalLoader := generatorLoader
 	defer func() { generatorLoader = originalLoader }()
-	
+
 	// The default stub returns "SLM generation requires CGO build"
 	// The CGO loader should return a different error (file not found)
-	_, err := generatorLoader("/nonexistent/model.gguf", 0)
-	
+	_, err := generatorLoader("/nonexistent/model.gguf", 0, 8192, 8192)
+
 	// If CGO loader is registered, error should be about file not found, not about CGO
 	if err != nil {
 		assert.NotContains(t, err.Error(), "requires CGO build",
@@ -42,7 +42,7 @@ func TestCGOGenerator_LoadModel(t *testing.T) {
 	}
 
 	// Try to load with CGO
-	generator, err := cgoGeneratorLoader(modelPath, 0) // CPU only for test
+	generator, err := cgoGeneratorLoader(modelPath, 0, 32768, 8192) // CPU only for test
 	if err != nil {
 		t.Skipf("Could not load model (may be incompatible): %v", err)
 	}
@@ -59,7 +59,7 @@ func TestCGOGenerator_Generate(t *testing.T) {
 		t.Skip("No test model available")
 	}
 
-	generator, err := cgoGeneratorLoader(modelPath, 0)
+	generator, err := cgoGeneratorLoader(modelPath, 0, 32768, 8192)
 	if err != nil {
 		t.Skipf("Could not load model: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCGOGenerator_GenerateStream(t *testing.T) {
 		t.Skip("No test model available")
 	}
 
-	generator, err := cgoGeneratorLoader(modelPath, 0)
+	generator, err := cgoGeneratorLoader(modelPath, 0, 32768, 8192)
 	if err != nil {
 		t.Skipf("Could not load model: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestCGOGenerator_ContextCancellation(t *testing.T) {
 		t.Skip("No test model available")
 	}
 
-	generator, err := cgoGeneratorLoader(modelPath, 0)
+	generator, err := cgoGeneratorLoader(modelPath, 0, 32768, 8192)
 	if err != nil {
 		t.Skipf("Could not load model: %v", err)
 	}
