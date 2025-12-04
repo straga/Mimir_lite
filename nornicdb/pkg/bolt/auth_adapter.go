@@ -12,13 +12,34 @@ import (
 // service accounts, and the UI.
 //
 // The adapter translates Neo4j-style Bolt authentication (scheme, principal, credentials)
-// to NornicDB's auth.Authenticator (username, password).
+// to NornicDB's auth.Authenticator (username, password or JWT token).
+//
+// Supported authentication schemes:
+//   - "basic": Username/password authentication (same as HTTP basic auth)
+//   - "bearer": JWT token authentication (for cluster inter-node auth)
+//   - "none": Anonymous access (if enabled, grants viewer role)
+//
+// # Cluster Authentication with Shared JWT
+//
+// For cluster deployments where all nodes need to authenticate with each other,
+// use bearer token authentication with a shared JWT secret:
+//
+//  1. Configure all nodes with the same JWT secret:
+//     NORNICDB_JWT_SECRET=your-shared-secret-min-32-bytes
+//
+//  2. Generate a cluster token on any node:
+//     POST /api/v1/auth/cluster-token
+//     {"node_id": "node-2", "role": "admin"}
+//
+//  3. Connect from other nodes using the bearer scheme:
+//     driver = GraphDatabase.driver("bolt://node1:7687",
+//     auth=("", token))  # Empty username triggers bearer auth
 //
 // Example:
 //
 //	// Create the shared authenticator
 //	authConfig := auth.DefaultAuthConfig()
-//	authConfig.JWTSecret = []byte("your-secret-key")
+//	authConfig.JWTSecret = []byte("your-secret-key-shared-across-cluster")
 //	authenticator, _ := auth.NewAuthenticator(authConfig)
 //
 //	// Create service accounts for server-to-server communication
@@ -74,20 +95,30 @@ func NewAuthenticatorAdapterWithAnonymous(authenticator *auth.Authenticator) *Au
 //
 // Supported schemes:
 //   - "basic": Username/password authentication (same as HTTP basic auth)
+//   - "bearer": JWT token authentication (credentials contains JWT, principal is ignored)
 //   - "none": Anonymous access (if enabled, grants viewer role)
 //
-// For server-to-server clustering, use service accounts with "basic" scheme.
-// Service accounts are regular users created via auth.CreateUser().
+// # Cluster Authentication
 //
-// Example service account setup:
+// For server-to-server clustering, you have two options:
 //
-//	// Create service account for cluster node
+// Option 1: Service accounts with "basic" scheme
+//
 //	authenticator.CreateUser("cluster-node-west", "secure-password-123",
 //		[]auth.Role{auth.RoleAdmin})
-//
-//	// Connect from another node using Neo4j driver
 //	driver = GraphDatabase.driver("bolt://node-east:7687",
 //		basic_auth("cluster-node-west", "secure-password-123"))
+//
+// Option 2: JWT tokens with "bearer" scheme (recommended for clusters)
+//
+//	# Generate token via API:
+//	curl -X POST http://node:7474/api/v1/auth/cluster-token \
+//	  -H "Authorization: Bearer $ADMIN_TOKEN" \
+//	  -d '{"node_id": "node-2", "role": "admin"}'
+//
+//	# Connect with bearer token:
+//	driver = GraphDatabase.driver("bolt://node:7687",
+//		basic_auth("", token))  # Empty username = bearer auth
 func (a *AuthenticatorAdapter) Authenticate(scheme, principal, credentials string) (*BoltAuthResult, error) {
 	// Handle anonymous authentication
 	if scheme == "none" || scheme == "" {
@@ -101,9 +132,46 @@ func (a *AuthenticatorAdapter) Authenticate(scheme, principal, credentials strin
 		}, nil
 	}
 
-	// Only "basic" scheme supported for authenticated connections
+	// Handle bearer token authentication (JWT)
+	// This is the recommended method for cluster inter-node authentication
+	if scheme == "bearer" {
+		if credentials == "" {
+			return nil, fmt.Errorf("bearer token required")
+		}
+
+		// Validate the JWT token using the shared authenticator
+		// The token was generated with the same JWT secret
+		claims, err := a.auth.ValidateToken(credentials)
+		if err != nil {
+			return nil, fmt.Errorf("invalid bearer token: %w", err)
+		}
+
+		return &BoltAuthResult{
+			Authenticated: true,
+			Username:      claims.Username,
+			Roles:         claims.Roles,
+		}, nil
+	}
+
+	// Handle basic auth - check if it's actually a bearer token in disguise
+	// This supports Neo4j drivers that only support basic auth:
+	// When principal is empty and credentials looks like a JWT, treat as bearer
+	if scheme == "basic" && principal == "" && looksLikeJWT(credentials) {
+		claims, err := a.auth.ValidateToken(credentials)
+		if err != nil {
+			return nil, fmt.Errorf("invalid bearer token: %w", err)
+		}
+
+		return &BoltAuthResult{
+			Authenticated: true,
+			Username:      claims.Username,
+			Roles:         claims.Roles,
+		}, nil
+	}
+
+	// Only "basic" scheme supported for username/password authentication
 	if scheme != "basic" {
-		return nil, fmt.Errorf("unsupported authentication scheme: %s (only 'basic' and 'none' supported)", scheme)
+		return nil, fmt.Errorf("unsupported authentication scheme: %s (supported: 'basic', 'bearer', 'none')", scheme)
 	}
 
 	// Validate credentials using the shared authenticator
@@ -133,4 +201,19 @@ func (a *AuthenticatorAdapter) Authenticate(scheme, principal, credentials strin
 // SetAllowAnonymous enables or disables anonymous authentication.
 func (a *AuthenticatorAdapter) SetAllowAnonymous(allow bool) {
 	a.allowAnonymous = allow
+}
+
+// looksLikeJWT checks if a string appears to be a JWT token.
+// JWTs have the format: header.payload.signature (3 base64url parts separated by dots)
+func looksLikeJWT(s string) bool {
+	if len(s) < 20 {
+		return false
+	}
+	dots := 0
+	for _, c := range s {
+		if c == '.' {
+			dots++
+		}
+	}
+	return dots == 2
 }

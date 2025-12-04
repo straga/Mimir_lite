@@ -9,6 +9,7 @@
 - **[Monitoring](monitoring.md)** - Metrics and alerting
 - **[Backup & Restore](backup-restore.md)** - Data protection
 - **[Scaling](scaling.md)** - Horizontal and vertical scaling
+- **[Cluster Security](cluster-security.md)** - Authentication for clusters
 - **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
 
 ## 🚀 Quick Start

@@ -1277,7 +1277,8 @@ curl -X POST http://localhost:7474/admin/raft/snapshot
 
 ## Next Steps
 
+- [Cluster Security](../operations/cluster-security.md) - Authentication for clusters
 - [Replication Architecture](../architecture/replication.md) - Internal architecture details
+- [Clustering Roadmap](../architecture/clustering-roadmap.md) - Future sharding plans
 - [Complete Examples](./complete-examples.md) - End-to-end usage examples
 - [System Design](../architecture/system-design.md) - Overall system architecture
-- [Plugin System](./plugin-system.md) - APOC functions and plugins

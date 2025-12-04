@@ -1139,6 +1139,144 @@ func (a *Authenticator) IsSecurityEnabled() bool {
 	return a.config.SecurityEnabled
 }
 
+// GenerateClusterToken creates a JWT token for cluster inter-node authentication.
+// This token can be used by cluster nodes to authenticate with each other
+// using the same shared JWT secret.
+//
+// The token contains:
+//   - Sub: node identifier (e.g., "cluster-node-2")
+//   - Username: same as nodeID for identification
+//   - Roles: specified role (typically "admin" for cluster nodes)
+//   - Iat: issued at timestamp
+//   - Exp: expiration (if TokenExpiry is configured, otherwise never expires)
+//
+// Usage:
+//
+//  1. Generate the secret (must be same on all nodes):
+//     openssl rand -base64 48
+//
+//  2. Configure all cluster nodes with the same secret:
+//     NORNICDB_JWT_SECRET=<your-generated-secret>
+//
+//  3. Generate a cluster token (from admin API or code):
+//     token, _ := authenticator.GenerateClusterToken("node-2", auth.RoleAdmin)
+//
+//  4. Use the token to connect from other nodes:
+//     driver = GraphDatabase.driver("bolt://node1:7687",
+//     basic_auth("", token))  # Empty principal triggers bearer/JWT auth
+//
+// Example:
+//
+//	// On cluster setup, generate tokens for each node
+//	token, err := authenticator.GenerateClusterToken("cluster-node-west", auth.RoleAdmin)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	// Distribute token securely to node-west
+//	// Node-west uses it to connect:
+//	driver, _ := neo4j.NewDriverWithContext(
+//		"bolt://node-east:7687",
+//		neo4j.BasicAuth("", token, ""),  // Empty username = bearer auth
+//	)
+//
+// Security considerations:
+//   - Tokens are signed with HMAC-SHA256 using the shared JWT secret
+//   - All cluster nodes MUST use the same JWT secret
+//   - Store the secret securely (e.g., HashiCorp Vault, K8s Secrets)
+//   - Rotate secrets periodically by generating new tokens
+func (a *Authenticator) GenerateClusterToken(nodeID string, role Role) (string, error) {
+	if len(a.config.JWTSecret) == 0 {
+		return "", ErrMissingSecret
+	}
+
+	// Create a virtual user for the cluster node
+	user := &User{
+		ID:       "cluster-" + nodeID,
+		Username: nodeID,
+		Roles:    []Role{role},
+	}
+
+	token, err := a.generateJWT(user)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate cluster token: %w", err)
+	}
+
+	a.logAudit(AuditEvent{
+		Timestamp: time.Now(),
+		EventType: "cluster_token_generated",
+		Username:  nodeID,
+		UserID:    user.ID,
+		Success:   true,
+		Details:   fmt.Sprintf("cluster token generated for node %s with role %s", nodeID, role),
+	})
+
+	return token, nil
+}
+
+// GenerateClusterTokenWithExpiry creates a JWT token with a custom expiration time.
+// Useful for short-lived tokens during initial cluster setup or testing.
+//
+// Parameters:
+//   - nodeID: identifier for the cluster node (e.g., "node-2", "replica-west")
+//   - role: role to assign (typically RoleAdmin for cluster nodes)
+//   - expiry: token lifetime (e.g., 24*time.Hour, 0 for never expires)
+//
+// Example:
+//
+//	// Generate a token that expires in 7 days
+//	token, _ := auth.GenerateClusterTokenWithExpiry("node-2", auth.RoleAdmin, 7*24*time.Hour)
+func (a *Authenticator) GenerateClusterTokenWithExpiry(nodeID string, role Role, expiry time.Duration) (string, error) {
+	if len(a.config.JWTSecret) == 0 {
+		return "", ErrMissingSecret
+	}
+
+	now := time.Now().Unix()
+
+	claims := JWTClaims{
+		Sub:      "cluster-" + nodeID,
+		Username: nodeID,
+		Roles:    []string{string(role)},
+		Iat:      now,
+	}
+
+	// Set expiration if provided
+	if expiry > 0 {
+		claims.Exp = now + int64(expiry.Seconds())
+	}
+
+	// Build JWT manually (header.payload.signature)
+	header := map[string]string{
+		"alg": "HS256",
+		"typ": "JWT",
+	}
+
+	headerJSON, _ := json.Marshal(header)
+	claimsJSON, _ := json.Marshal(claims)
+
+	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
+	claimsB64 := base64.RawURLEncoding.EncodeToString(claimsJSON)
+
+	// Sign with HMAC-SHA256
+	message := headerB64 + "." + claimsB64
+	mac := hmac.New(sha256.New, a.config.JWTSecret)
+	mac.Write([]byte(message))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+	token := message + "." + signature
+
+	a.logAudit(AuditEvent{
+		Timestamp: time.Now(),
+		EventType: "cluster_token_generated",
+		Username:  nodeID,
+		UserID:    "cluster-" + nodeID,
+		Success:   true,
+		Details:   fmt.Sprintf("cluster token generated for node %s with role %s, expiry=%v", nodeID, role, expiry),
+	})
+
+	return token, nil
+}
+
 // JWT Generation and Validation
 
 // generateJWT creates a JWT token for the user.

@@ -722,3 +722,347 @@ func newTestAuthenticator(t *testing.T) *Authenticator {
 	}
 	return auth
 }
+
+// TestGenerateClusterToken tests cluster token generation
+func TestGenerateClusterToken(t *testing.T) {
+	auth := newTestAuthenticator(t)
+
+	t.Run("generates valid admin token", func(t *testing.T) {
+		token, err := auth.GenerateClusterToken("cluster-node-1", RoleAdmin)
+		if err != nil {
+			t.Fatalf("GenerateClusterToken() error = %v", err)
+		}
+
+		// Token should be a valid JWT
+		parts := strings.Split(token, ".")
+		if len(parts) != 3 {
+			t.Errorf("expected JWT format (3 parts), got %d", len(parts))
+		}
+
+		// Validate the token
+		claims, err := auth.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() error = %v", err)
+		}
+
+		if claims.Username != "cluster-node-1" {
+			t.Errorf("expected username 'cluster-node-1', got %q", claims.Username)
+		}
+
+		if !strings.HasPrefix(claims.Sub, "cluster-") {
+			t.Errorf("expected Sub to start with 'cluster-', got %q", claims.Sub)
+		}
+
+		if len(claims.Roles) != 1 || claims.Roles[0] != "admin" {
+			t.Errorf("expected roles ['admin'], got %v", claims.Roles)
+		}
+	})
+
+	t.Run("generates valid viewer token", func(t *testing.T) {
+		token, err := auth.GenerateClusterToken("read-replica", RoleViewer)
+		if err != nil {
+			t.Fatalf("GenerateClusterToken() error = %v", err)
+		}
+
+		claims, err := auth.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() error = %v", err)
+		}
+
+		if len(claims.Roles) != 1 || claims.Roles[0] != "viewer" {
+			t.Errorf("expected roles ['viewer'], got %v", claims.Roles)
+		}
+	})
+
+	t.Run("generates valid editor token", func(t *testing.T) {
+		token, err := auth.GenerateClusterToken("worker-node", RoleEditor)
+		if err != nil {
+			t.Fatalf("GenerateClusterToken() error = %v", err)
+		}
+
+		claims, err := auth.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() error = %v", err)
+		}
+
+		if len(claims.Roles) != 1 || claims.Roles[0] != "editor" {
+			t.Errorf("expected roles ['editor'], got %v", claims.Roles)
+		}
+	})
+
+	t.Run("different nodes get different tokens", func(t *testing.T) {
+		token1, _ := auth.GenerateClusterToken("node-1", RoleAdmin)
+		token2, _ := auth.GenerateClusterToken("node-2", RoleAdmin)
+
+		if token1 == token2 {
+			t.Error("different nodes should get different tokens")
+		}
+	})
+
+	t.Run("token without expiry never expires", func(t *testing.T) {
+		token, err := auth.GenerateClusterToken("no-expiry-node", RoleAdmin)
+		if err != nil {
+			t.Fatalf("GenerateClusterToken() error = %v", err)
+		}
+
+		claims, err := auth.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() error = %v", err)
+		}
+
+		// Default config has no expiry, so Exp should be 0
+		if claims.Exp != 0 {
+			t.Errorf("expected Exp = 0 (never expires), got %d", claims.Exp)
+		}
+	})
+
+	t.Run("fails without JWT secret", func(t *testing.T) {
+		noSecretAuth, _ := NewAuthenticator(AuthConfig{
+			SecurityEnabled: false,
+		})
+
+		_, err := noSecretAuth.GenerateClusterToken("node", RoleAdmin)
+		if err == nil {
+			t.Error("expected error when generating token without secret")
+		}
+	})
+
+	t.Run("logs audit event", func(t *testing.T) {
+		var events []AuditEvent
+		auth.SetAuditLogger(func(e AuditEvent) {
+			events = append(events, e)
+		})
+
+		_, _ = auth.GenerateClusterToken("audited-node", RoleAdmin)
+
+		found := false
+		for _, e := range events {
+			if e.EventType == "cluster_token_generated" && e.Username == "audited-node" {
+				found = true
+				if !e.Success {
+					t.Error("expected Success=true")
+				}
+			}
+		}
+
+		if !found {
+			t.Error("expected cluster_token_generated audit event")
+		}
+	})
+}
+
+// TestGenerateClusterTokenWithExpiry tests cluster token generation with custom expiry
+func TestGenerateClusterTokenWithExpiry(t *testing.T) {
+	auth := newTestAuthenticator(t)
+
+	t.Run("generates token with 24h expiry", func(t *testing.T) {
+		token, err := auth.GenerateClusterTokenWithExpiry("node-1", RoleAdmin, 24*time.Hour)
+		if err != nil {
+			t.Fatalf("GenerateClusterTokenWithExpiry() error = %v", err)
+		}
+
+		claims, err := auth.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() error = %v", err)
+		}
+
+		if claims.Exp == 0 {
+			t.Error("expected Exp to be set")
+		}
+
+		// Check expiry is approximately 24 hours from now
+		expectedExp := time.Now().Add(24 * time.Hour).Unix()
+		diff := claims.Exp - expectedExp
+		if diff < -60 || diff > 60 {
+			t.Errorf("expected Exp around %d, got %d (diff: %d)", expectedExp, claims.Exp, diff)
+		}
+	})
+
+	t.Run("generates token with short expiry", func(t *testing.T) {
+		token, err := auth.GenerateClusterTokenWithExpiry("node-1", RoleAdmin, 1*time.Hour)
+		if err != nil {
+			t.Fatalf("GenerateClusterTokenWithExpiry() error = %v", err)
+		}
+
+		claims, err := auth.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() error = %v", err)
+		}
+
+		expectedExp := time.Now().Add(1 * time.Hour).Unix()
+		diff := claims.Exp - expectedExp
+		if diff < -60 || diff > 60 {
+			t.Errorf("expected Exp around %d, got %d", expectedExp, claims.Exp)
+		}
+	})
+
+	t.Run("zero expiry means never expires", func(t *testing.T) {
+		token, err := auth.GenerateClusterTokenWithExpiry("node-1", RoleAdmin, 0)
+		if err != nil {
+			t.Fatalf("GenerateClusterTokenWithExpiry() error = %v", err)
+		}
+
+		claims, err := auth.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() error = %v", err)
+		}
+
+		if claims.Exp != 0 {
+			t.Errorf("expected Exp = 0, got %d", claims.Exp)
+		}
+	})
+
+	t.Run("short-lived token expires", func(t *testing.T) {
+		// Generate token that expires in 1 second
+		token, err := auth.GenerateClusterTokenWithExpiry("node-1", RoleAdmin, 1*time.Second)
+		if err != nil {
+			t.Fatalf("GenerateClusterTokenWithExpiry() error = %v", err)
+		}
+
+		// Should be valid immediately
+		_, err = auth.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("token should be valid immediately: %v", err)
+		}
+
+		// Wait for expiry
+		time.Sleep(2 * time.Second)
+
+		// Should be expired now
+		_, err = auth.ValidateToken(token)
+		if err == nil {
+			t.Error("expected token to be expired")
+		}
+		if err != ErrSessionExpired {
+			t.Errorf("expected ErrSessionExpired, got %v", err)
+		}
+	})
+
+	t.Run("fails without JWT secret", func(t *testing.T) {
+		noSecretAuth, _ := NewAuthenticator(AuthConfig{
+			SecurityEnabled: false,
+		})
+
+		_, err := noSecretAuth.GenerateClusterTokenWithExpiry("node", RoleAdmin, 1*time.Hour)
+		if err == nil {
+			t.Error("expected error when generating token without secret")
+		}
+	})
+
+	t.Run("logs audit event with expiry info", func(t *testing.T) {
+		var events []AuditEvent
+		auth.SetAuditLogger(func(e AuditEvent) {
+			events = append(events, e)
+		})
+
+		_, _ = auth.GenerateClusterTokenWithExpiry("expiry-node", RoleAdmin, 7*24*time.Hour)
+
+		found := false
+		for _, e := range events {
+			if e.EventType == "cluster_token_generated" && e.Username == "expiry-node" {
+				found = true
+				if !strings.Contains(e.Details, "expiry=") {
+					t.Error("expected expiry info in details")
+				}
+			}
+		}
+
+		if !found {
+			t.Error("expected cluster_token_generated audit event")
+		}
+	})
+}
+
+// TestClusterTokenCrossValidation tests that tokens generated with one authenticator
+// can be validated by another using the same secret
+func TestClusterTokenCrossValidation(t *testing.T) {
+	sharedSecret := []byte("shared-cluster-secret-32-chars!!")
+
+	auth1, _ := NewAuthenticator(AuthConfig{
+		SecurityEnabled: true,
+		JWTSecret:       sharedSecret,
+	})
+
+	auth2, _ := NewAuthenticator(AuthConfig{
+		SecurityEnabled: true,
+		JWTSecret:       sharedSecret,
+	})
+
+	t.Run("token from auth1 validates on auth2", func(t *testing.T) {
+		token, err := auth1.GenerateClusterToken("node-from-auth1", RoleAdmin)
+		if err != nil {
+			t.Fatalf("GenerateClusterToken() error = %v", err)
+		}
+
+		claims, err := auth2.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() on auth2 failed: %v", err)
+		}
+
+		if claims.Username != "node-from-auth1" {
+			t.Errorf("expected username 'node-from-auth1', got %q", claims.Username)
+		}
+	})
+
+	t.Run("token from auth2 validates on auth1", func(t *testing.T) {
+		token, err := auth2.GenerateClusterToken("node-from-auth2", RoleViewer)
+		if err != nil {
+			t.Fatalf("GenerateClusterToken() error = %v", err)
+		}
+
+		claims, err := auth1.ValidateToken(token)
+		if err != nil {
+			t.Fatalf("ValidateToken() on auth1 failed: %v", err)
+		}
+
+		if claims.Username != "node-from-auth2" {
+			t.Errorf("expected username 'node-from-auth2', got %q", claims.Username)
+		}
+	})
+
+	t.Run("token with different secret fails", func(t *testing.T) {
+		rogueAuth, _ := NewAuthenticator(AuthConfig{
+			SecurityEnabled: true,
+			JWTSecret:       []byte("different-secret-not-trusted!!!"),
+		})
+
+		rogueToken, _ := rogueAuth.GenerateClusterToken("rogue-node", RoleAdmin)
+
+		_, err := auth1.ValidateToken(rogueToken)
+		if err == nil {
+			t.Error("expected validation to fail with different secret")
+		}
+		if err != ErrInvalidToken {
+			t.Errorf("expected ErrInvalidToken, got %v", err)
+		}
+	})
+}
+
+// TestClusterTokenRoles tests that roles are correctly preserved in tokens
+func TestClusterTokenRoles(t *testing.T) {
+	auth := newTestAuthenticator(t)
+
+	roles := []Role{RoleAdmin, RoleEditor, RoleViewer, RoleNone}
+
+	for _, role := range roles {
+		t.Run(string(role), func(t *testing.T) {
+			token, err := auth.GenerateClusterToken("test-node", role)
+			if err != nil {
+				t.Fatalf("GenerateClusterToken() error = %v", err)
+			}
+
+			claims, err := auth.ValidateToken(token)
+			if err != nil {
+				t.Fatalf("ValidateToken() error = %v", err)
+			}
+
+			if len(claims.Roles) != 1 {
+				t.Errorf("expected 1 role, got %d", len(claims.Roles))
+			}
+
+			if claims.Roles[0] != string(role) {
+				t.Errorf("expected role %q, got %q", role, claims.Roles[0])
+			}
+		})
+	}
+}

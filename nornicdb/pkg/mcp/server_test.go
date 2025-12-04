@@ -140,8 +140,8 @@ func TestDefaultServerConfig(t *testing.T) {
 	if config.Address != "localhost" {
 		t.Errorf("Expected address localhost, got %s", config.Address)
 	}
-	if config.Port != 9042 {
-		t.Errorf("Expected port 9042, got %d", config.Port)
+	if config.Port != 7474 {
+		t.Errorf("Expected port 7474, got %d", config.Port)
 	}
 	if config.ReadTimeout != 30*time.Second {
 		t.Errorf("Expected read timeout 30s, got %v", config.ReadTimeout)
@@ -564,12 +564,12 @@ func TestSanitizePropertiesForLLM(t *testing.T) {
 		{
 			name: "keeps normal properties",
 			input: map[string]interface{}{
-				"title":      "Test Title",
-				"content":    "Some content",
-				"tags":       []interface{}{"a", "b"},
-				"priority":   "high",
-				"count":      42,
-				"is_active":  true,
+				"title":     "Test Title",
+				"content":   "Some content",
+				"tags":      []interface{}{"a", "b"},
+				"priority":  "high",
+				"count":     42,
+				"is_active": true,
 			},
 			wantKeys: []string{"title", "content", "tags", "priority", "count", "is_active"},
 		},

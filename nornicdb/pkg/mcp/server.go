@@ -23,13 +23,14 @@
 // Note: File indexing (index/unindex) is handled by Mimir (the intelligence layer).
 // NornicDB is the storage/embedding layer - it receives already-processed content.
 //
-// Example Usage:
+// Example Usage (standalone, usually MCP is integrated into main server on port 7474):
 //
 //	db, _ := nornicdb.Open("./data", nil)
 //	server := mcp.NewServer(db, nil)
 //
-//	// Start the server
-//	if err := server.Start(":9042"); err != nil {
+//	// For integration with main NornicDB server, use RegisterRoutes() instead
+//	// For standalone testing:
+//	if err := server.Start(":7474"); err != nil {
 //	    log.Fatal(err)
 //	}
 //
@@ -83,7 +84,7 @@ type Server struct {
 type ServerConfig struct {
 	// Address to bind to (default: "localhost")
 	Address string `yaml:"address"`
-	// Port to listen on (default: 9042)
+	// Port to listen on (default: 7474, same as NornicDB HTTP API)
 	Port int `yaml:"port"`
 	// ReadTimeout for requests
 	ReadTimeout time.Duration `yaml:"read_timeout"`
@@ -107,7 +108,7 @@ type ServerConfig struct {
 func DefaultServerConfig() *ServerConfig {
 	return &ServerConfig{
 		Address:          "localhost",
-		Port:             9042,
+		Port:             7474,
 		ReadTimeout:      30 * time.Second,
 		WriteTimeout:     60 * time.Second,
 		MaxRequestSize:   10 * 1024 * 1024, // 10MB

@@ -6,6 +6,7 @@
 
 - **[System Design](system-design.md)** - High-level architecture overview
 - **[Replication](replication.md)** - Clustering and replication internals
+- **[Clustering Roadmap](clustering-roadmap.md)** - Future sharding and scaling plans
 - **[Plugin System](plugin-system.md)** - Extensibility architecture
 - **[Norns Mythology](norns-mythology.md)** - Project naming and philosophy
 
@@ -32,8 +33,9 @@
 ### Replication
 - Hot Standby (2-node HA)
 - Raft Consensus (3+ node strong consistency)
-- Multi-Region (geographic distribution)
-- WAL streaming and failover
+- Multi-Region (geographic distribution with async replication)
+- WAL streaming and automatic failover
+- Chaos-tested for extreme latency scenarios
 
 ### GPU Acceleration
 - Multi-backend support (Metal, CUDA, OpenCL)

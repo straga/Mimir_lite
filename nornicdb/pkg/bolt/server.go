@@ -304,14 +304,26 @@ type QueryResult struct {
 }
 
 // BoltAuthenticator is the interface for authenticating Bolt protocol connections.
-// This supports Neo4j-compatible authentication schemes (basic auth with username/password).
+// This supports Neo4j-compatible authentication schemes:
+//   - "basic": Username/password authentication
+//   - "bearer": JWT token authentication (for cluster inter-node auth)
+//   - "none": Anonymous access (if allowed)
 //
 // The Bolt protocol HELLO message contains authentication credentials:
-//   - scheme: "basic" (username/password) or "none" (anonymous)
-//   - principal: username
-//   - credentials: password
+//   - scheme: "basic", "bearer", or "none"
+//   - principal: username (basic) or empty (bearer/none)
+//   - credentials: password (basic) or JWT token (bearer)
 //
-// Server-to-server clustering can use service accounts or API keys.
+// For cluster deployments, use "bearer" scheme with a shared JWT secret:
+//
+//	# Generate cluster token on any node:
+//	curl -X POST http://node1:7474/api/v1/auth/cluster-token \
+//	  -H "Authorization: Bearer $ADMIN_TOKEN" \
+//	  -d '{"node_id": "node-2", "role": "admin"}'
+//
+//	# Use token to connect from other nodes:
+//	driver = GraphDatabase.driver("bolt://node1:7687",
+//	    auth=("", token))  # scheme=bearer when principal is empty
 //
 // Example Implementation:
 //
@@ -320,32 +332,28 @@ type QueryResult struct {
 //	}
 //
 //	func (a *MyAuthenticator) Authenticate(scheme, principal, credentials string) (*BoltAuthResult, error) {
-//		if scheme == "none" && a.allowAnonymous {
-//			return &BoltAuthResult{Authenticated: true, Roles: []string{"viewer"}}, nil
+//		switch scheme {
+//		case "none":
+//			if a.allowAnonymous {
+//				return &BoltAuthResult{Authenticated: true, Roles: []string{"viewer"}}, nil
+//			}
+//			return nil, fmt.Errorf("anonymous auth not allowed")
+//		case "bearer":
+//			claims, err := a.auth.ValidateToken(credentials)
+//			if err != nil {
+//				return nil, err
+//			}
+//			return &BoltAuthResult{Authenticated: true, Username: claims.Username, Roles: claims.Roles}, nil
+//		case "basic":
+//			// ... username/password validation
 //		}
-//		if scheme != "basic" {
-//			return nil, fmt.Errorf("unsupported auth scheme: %s", scheme)
-//		}
-//		user, err := a.auth.ValidateCredentials(principal, credentials)
-//		if err != nil {
-//			return nil, err
-//		}
-//		roles := make([]string, len(user.Roles))
-//		for i, r := range user.Roles {
-//			roles[i] = string(r)
-//		}
-//		return &BoltAuthResult{
-//			Authenticated: true,
-//			Username:      principal,
-//			Roles:         roles,
-//		}, nil
 //	}
 type BoltAuthenticator interface {
 	// Authenticate validates credentials from the Bolt HELLO message.
 	// Returns auth result on success, error on failure.
-	// scheme: "basic" or "none"
-	// principal: username (empty for "none")
-	// credentials: password (empty for "none")
+	// scheme: "basic", "bearer", or "none"
+	// principal: username (basic), empty (bearer/none)
+	// credentials: password (basic), JWT token (bearer), empty (none)
 	Authenticate(scheme, principal, credentials string) (*BoltAuthResult, error)
 }
 
@@ -1016,6 +1024,12 @@ func (s *Session) dispatchMessage(msgType byte, data []byte) error {
 // Authentication schemes:
 //   - "none": Anonymous access (if AllowAnonymous is true)
 //   - "basic": Username/password authentication
+//   - "bearer": JWT token authentication (credentials contains the token)
+//
+// For cluster authentication with shared JWT:
+//   - All nodes share the same JWT secret (NORNICDB_JWT_SECRET)
+//   - Generate a cluster token: POST /api/v1/auth/cluster-token
+//   - Connect using bearer scheme with the token as credentials
 //
 // Server-to-server clustering uses the same auth mechanism with service accounts.
 func (s *Session) handleHello(data []byte) error {
@@ -1053,6 +1067,19 @@ func (s *Session) handleHello(data []byte) error {
 				}
 				fmt.Printf("[BOLT] Auth failed for %q from %s: %v\n", principal, remoteAddr, err)
 				return s.sendFailure("Neo.ClientError.Security.Unauthorized", "Invalid credentials")
+			}
+			s.authenticated = true
+			s.authResult = result
+		} else if scheme == "bearer" {
+			// JWT token authentication - used for cluster inter-node auth
+			result, err := s.server.config.Authenticator.Authenticate(scheme, principal, credentials)
+			if err != nil {
+				remoteAddr := "unknown"
+				if s.conn != nil {
+					remoteAddr = s.conn.RemoteAddr().String()
+				}
+				fmt.Printf("[BOLT] Bearer auth failed from %s: %v\n", remoteAddr, err)
+				return s.sendFailure("Neo.ClientError.Security.Unauthorized", "Invalid or expired token")
 			}
 			s.authenticated = true
 			s.authResult = result

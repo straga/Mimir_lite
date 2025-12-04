@@ -1589,6 +1589,91 @@ func TestBackup(t *testing.T) {
 	})
 }
 
+func TestRestore(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("restore from backup", func(t *testing.T) {
+		// Create source database with data
+		sourceDB, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+
+		// Create some nodes
+		node1, err := sourceDB.CreateNode(ctx, []string{"Person"}, map[string]interface{}{
+			"name": "Alice",
+			"age":  30,
+		})
+		require.NoError(t, err)
+
+		node2, err := sourceDB.CreateNode(ctx, []string{"Person"}, map[string]interface{}{
+			"name": "Bob",
+			"age":  25,
+		})
+		require.NoError(t, err)
+
+		// Create edge
+		_, err = sourceDB.CreateEdge(ctx, node1.ID, node2.ID, "KNOWS", map[string]interface{}{
+			"since": "2024",
+		})
+		require.NoError(t, err)
+
+		// Backup
+		backupPath := filepath.Join(t.TempDir(), "backup.json")
+		err = sourceDB.Backup(ctx, backupPath)
+		require.NoError(t, err)
+		sourceDB.Close()
+
+		// Create new database and restore
+		targetDB, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer targetDB.Close()
+
+		err = targetDB.Restore(ctx, backupPath)
+		require.NoError(t, err)
+
+		// Verify nodes were restored
+		restored1, err := targetDB.GetNode(ctx, node1.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Alice", restored1.Properties["name"])
+
+		restored2, err := targetDB.GetNode(ctx, node2.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Bob", restored2.Properties["name"])
+	})
+
+	t.Run("restore with empty backup", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Create empty backup
+		backupPath := filepath.Join(t.TempDir(), "empty-backup.json")
+		err = db.Backup(ctx, backupPath)
+		require.NoError(t, err)
+
+		// Restore should succeed with empty data
+		err = db.Restore(ctx, backupPath)
+		require.NoError(t, err)
+	})
+
+	t.Run("returns error when file not found", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		err = db.Restore(ctx, "/nonexistent/backup.json")
+		assert.Error(t, err)
+	})
+
+	t.Run("returns error when closed", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		db.Close()
+
+		err = db.Restore(ctx, "/any/path.json")
+		assert.ErrorIs(t, err, ErrClosed)
+	})
+}
+
 // =============================================================================
 // GDPR Compliance Tests
 // =============================================================================
@@ -1703,6 +1788,289 @@ func TestAnonymizeUserData(t *testing.T) {
 		db.Close()
 
 		err = db.AnonymizeUserData(ctx, "user-123")
+		assert.ErrorIs(t, err, ErrClosed)
+	})
+}
+
+// =============================================================================
+// Consent Management Tests (GDPR Article 7)
+// =============================================================================
+
+func TestRecordConsent(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("records new consent", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		consent := &Consent{
+			UserID:  "user-123",
+			Purpose: "marketing",
+			Given:   true,
+			Source:  "web_form",
+		}
+
+		err = db.RecordConsent(ctx, consent)
+		require.NoError(t, err)
+
+		// Verify consent was recorded
+		hasConsent, err := db.HasConsent(ctx, "user-123", "marketing")
+		require.NoError(t, err)
+		assert.True(t, hasConsent)
+	})
+
+	t.Run("updates existing consent", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Record initial consent
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-456",
+			Purpose: "analytics",
+			Given:   true,
+			Source:  "web_form",
+		})
+		require.NoError(t, err)
+
+		// Update consent to false
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-456",
+			Purpose: "analytics",
+			Given:   false,
+			Source:  "preference_center",
+		})
+		require.NoError(t, err)
+
+		// Verify consent was updated
+		hasConsent, err := db.HasConsent(ctx, "user-456", "analytics")
+		require.NoError(t, err)
+		assert.False(t, hasConsent)
+	})
+
+	t.Run("requires user_id", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		err = db.RecordConsent(ctx, &Consent{
+			Purpose: "marketing",
+			Given:   true,
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "user_id")
+	})
+
+	t.Run("requires purpose", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		err = db.RecordConsent(ctx, &Consent{
+			UserID: "user-123",
+			Given:  true,
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "purpose")
+	})
+
+	t.Run("returns error when closed", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		db.Close()
+
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-123",
+			Purpose: "marketing",
+			Given:   true,
+		})
+		assert.ErrorIs(t, err, ErrClosed)
+	})
+}
+
+func TestHasConsent(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("returns false when no consent recorded", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		hasConsent, err := db.HasConsent(ctx, "user-unknown", "marketing")
+		require.NoError(t, err)
+		assert.False(t, hasConsent)
+	})
+
+	t.Run("returns true when consent given", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-789",
+			Purpose: "email",
+			Given:   true,
+		})
+		require.NoError(t, err)
+
+		hasConsent, err := db.HasConsent(ctx, "user-789", "email")
+		require.NoError(t, err)
+		assert.True(t, hasConsent)
+	})
+
+	t.Run("returns false when consent revoked", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Give consent
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-abc",
+			Purpose: "tracking",
+			Given:   true,
+		})
+		require.NoError(t, err)
+
+		// Revoke consent
+		err = db.RevokeConsent(ctx, "user-abc", "tracking")
+		require.NoError(t, err)
+
+		hasConsent, err := db.HasConsent(ctx, "user-abc", "tracking")
+		require.NoError(t, err)
+		assert.False(t, hasConsent)
+	})
+
+	t.Run("returns error when closed", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		db.Close()
+
+		_, err = db.HasConsent(ctx, "user-123", "marketing")
+		assert.ErrorIs(t, err, ErrClosed)
+	})
+}
+
+func TestRevokeConsent(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("revokes existing consent", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Record consent
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-revoke-1",
+			Purpose: "marketing",
+			Given:   true,
+		})
+		require.NoError(t, err)
+
+		// Verify consent exists
+		hasConsent, err := db.HasConsent(ctx, "user-revoke-1", "marketing")
+		require.NoError(t, err)
+		assert.True(t, hasConsent)
+
+		// Revoke consent
+		err = db.RevokeConsent(ctx, "user-revoke-1", "marketing")
+		require.NoError(t, err)
+
+		// Verify consent is revoked
+		hasConsent, err = db.HasConsent(ctx, "user-revoke-1", "marketing")
+		require.NoError(t, err)
+		assert.False(t, hasConsent)
+	})
+
+	t.Run("creates revocation record if no prior consent", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Revoke consent that was never given
+		err = db.RevokeConsent(ctx, "user-never-consented", "marketing")
+		require.NoError(t, err)
+
+		// Verify consent is false
+		hasConsent, err := db.HasConsent(ctx, "user-never-consented", "marketing")
+		require.NoError(t, err)
+		assert.False(t, hasConsent)
+	})
+
+	t.Run("returns error when closed", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		db.Close()
+
+		err = db.RevokeConsent(ctx, "user-123", "marketing")
+		assert.ErrorIs(t, err, ErrClosed)
+	})
+}
+
+func TestGetUserConsents(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("returns all consents for user", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Record multiple consents
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-multi-consent",
+			Purpose: "marketing",
+			Given:   true,
+			Source:  "web",
+		})
+		require.NoError(t, err)
+
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-multi-consent",
+			Purpose: "analytics",
+			Given:   false,
+			Source:  "api",
+		})
+		require.NoError(t, err)
+
+		err = db.RecordConsent(ctx, &Consent{
+			UserID:  "user-multi-consent",
+			Purpose: "personalization",
+			Given:   true,
+			Source:  "app",
+		})
+		require.NoError(t, err)
+
+		// Get all consents
+		consents, err := db.GetUserConsents(ctx, "user-multi-consent")
+		require.NoError(t, err)
+		assert.Len(t, consents, 3)
+
+		// Verify purposes
+		purposes := make(map[string]bool)
+		for _, c := range consents {
+			purposes[c.Purpose] = c.Given
+		}
+		assert.True(t, purposes["marketing"])
+		assert.False(t, purposes["analytics"])
+		assert.True(t, purposes["personalization"])
+	})
+
+	t.Run("returns empty slice when no consents", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		defer db.Close()
+
+		consents, err := db.GetUserConsents(ctx, "user-no-consents")
+		require.NoError(t, err)
+		assert.Empty(t, consents)
+	})
+
+	t.Run("returns error when closed", func(t *testing.T) {
+		db, err := Open(t.TempDir(), nil)
+		require.NoError(t, err)
+		db.Close()
+
+		_, err = db.GetUserConsents(ctx, "user-123")
 		assert.ErrorIs(t, err, ErrClosed)
 	})
 }
