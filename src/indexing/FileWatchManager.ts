@@ -274,9 +274,40 @@ export class FileWatchManager {
       return;
     }
 
-    // Mark as "watching" immediately
-    this.watchers.set(config.path, 'manual' as any);
-    console.log(`📁 Registered for manual indexing: ${config.path}`);
+    // Translate host path to container path for file operations
+    const { translateHostToContainer } = await import('../utils/path-utils.js');
+    const containerPath = translateHostToContainer(config.path);
+
+    // Create chokidar watcher
+    const watcherOptions = {
+      ignored: [
+        /(^|[\/\\])\../, // dotfiles
+        '**/node_modules/**',
+        '**/__pycache__/**',
+        '**/.git/**',
+      ],
+      persistent: true,
+      ignoreInitial: true, // Don't emit events for initial scan (we do our own indexing)
+      // Wait for files to finish writing before triggering events
+      // Prevents "empty file" or "invalid structure" errors when copying over network
+      awaitWriteFinish: {
+        stabilityThreshold: 2000, // Wait 2 seconds after last change
+        pollInterval: 100
+      }
+    };
+
+    const watcher = chokidar.watch(containerPath, watcherOptions);
+
+    // Set up event handlers for live file changes
+    watcher
+      .on('ready', () => console.log(`👁️  Watcher ready: ${config.path}`))
+      .on('add', (filePath) => this.handleFileAdded(path.relative(containerPath, filePath), config))
+      .on('change', (filePath) => this.handleFileChanged(path.relative(containerPath, filePath), config))
+      .on('unlink', (filePath) => this.handleFileDeleted(path.relative(containerPath, filePath), config))
+      .on('error', (error) => console.error(`Watcher error for ${config.path}:`, error));
+
+    this.watchers.set(config.path, watcher);
+    console.log(`📁 Started watching: ${config.path}`);
 
     // Queue the indexing work and store promise for cancellation tracking
     const indexingPromise = this.queueIndexing(config);
@@ -542,17 +573,48 @@ export class FileWatchManager {
   }
 
   /**
+   * Run tasks with limited concurrency
+   */
+  private async runWithConcurrency<T>(
+    tasks: (() => Promise<T>)[],
+    concurrency: number,
+    signal?: AbortSignal
+  ): Promise<T[]> {
+    const results: T[] = [];
+    let index = 0;
+
+    const runNext = async (): Promise<void> => {
+      while (index < tasks.length) {
+        if (signal?.aborted) break;
+        const currentIndex = index++;
+        results[currentIndex] = await tasks[currentIndex]();
+      }
+    };
+
+    // Start `concurrency` parallel workers
+    const workers = Array(Math.min(concurrency, tasks.length))
+      .fill(null)
+      .map(() => runNext());
+
+    await Promise.all(workers);
+    return results;
+  }
+
+  /**
    * Index all files in a folder (one-time operation)
+   * Uses two-phase approach:
+   * 1. Fast scan phase: Check all files in parallel (high concurrency)
+   * 2. Index phase: Index only changed/new files (limited concurrency)
    */
   async indexFolder(folderPath: string, config: WatchConfig, signal?: AbortSignal): Promise<number> {
     // Translate host path to container path for file operations
     const { translateHostToContainer } = await import('../utils/path-utils.js');
     const containerPath = translateHostToContainer(folderPath);
     console.log(`📂 Indexing folder: ${folderPath} (container: ${containerPath})`);
-    
+
     const gitignoreHandler = new GitignoreHandler();
     await gitignoreHandler.loadIgnoreFile(containerPath);
-    
+
     if (config.ignore_patterns.length > 0) {
       gitignoreHandler.addPatterns(config.ignore_patterns);
     }
@@ -571,24 +633,69 @@ export class FileWatchManager {
       this.emitProgress(progress);
     }
 
-    let indexed = 0;
-    let skipped = 0;
-    let errored = 0;
     const generateEmbeddings = config.generate_embeddings || false;
     const indexingId = `idx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    
+    const scanConcurrency = parseInt(process.env.MIMIR_SCAN_CONCURRENCY || '50', 10);
+    const indexConcurrency = parseInt(process.env.MIMIR_INDEX_CONCURRENCY || '3', 10);
+
     if (generateEmbeddings) {
       console.log(`🧮 Vector embeddings enabled for this watch [${indexingId}] path=${config.path}`);
     }
-    
-    for (const file of files) {
-      // Check if indexing has been cancelled
-      if (signal?.aborted) {
-        console.log(`🛑 Indexing cancelled for ${config.path} (indexed ${indexed}/${files.length} files before cancellation)`);
-        throw new Error('Indexing cancelled');
-      }
+    console.log(`📊 Scan concurrency: ${scanConcurrency}, Index concurrency: ${indexConcurrency}`);
 
-      // Update current file in progress and emit BEFORE indexing
+    // ========== PHASE 1: Fast scan (high concurrency) ==========
+    console.log(`🔍 Phase 1: Fast scanning ${files.length} files...`);
+    const scanStartTime = Date.now();
+
+    let fastSkipped = 0;
+    const filesToIndex: string[] = [];
+
+    const scanTasks = files.map((file) => async () => {
+      if (signal?.aborted) return;
+
+      const result = await this.indexer.checkFastSkip(file);
+      if (result.skip) {
+        fastSkipped++;
+        const hostPath = file; // Already in host format locally
+        console.log(`⚡ Fast skip: ${hostPath}`);
+      } else {
+        filesToIndex.push(file);
+      }
+    });
+
+    await this.runWithConcurrency(scanTasks, scanConcurrency, signal);
+
+    const scanElapsed = Date.now() - scanStartTime;
+    console.log(`✅ Phase 1 complete: ${fastSkipped} fast-skipped, ${filesToIndex.length} to index (${scanElapsed}ms)`);
+
+    if (signal?.aborted) {
+      throw new Error('Indexing cancelled');
+    }
+
+    // ========== PHASE 2: Index changed/new files (limited concurrency) ==========
+    if (filesToIndex.length === 0) {
+      console.log(`✅ All files up to date, nothing to index`);
+      if (progress) {
+        progress.indexed = 0;
+        progress.skipped = fastSkipped;
+        this.emitProgress(progress);
+      }
+      // Update stats - all files were fast-skipped (already indexed)
+      await this.configManager.updateStats(config.id, fastSkipped);
+      return 0;
+    }
+
+    console.log(`📝 Phase 2: Indexing ${filesToIndex.length} files...`);
+    const indexStartTime = Date.now();
+
+    let indexed = 0;
+    let skipped = 0;
+    let errored = 0;
+
+    const indexTasks = filesToIndex.map((file) => async () => {
+      if (signal?.aborted) return;
+
+      // Update current file in progress
       if (progress) {
         progress.currentFile = path.basename(file);
         this.emitProgress(progress);
@@ -597,30 +704,28 @@ export class FileWatchManager {
       try {
         await this.indexer.indexFile(file, containerPath, generateEmbeddings, config.id);
         indexed++;
-        
-        // Update progress and emit event after indexing
+
         if (progress) {
           progress.indexed = indexed;
-          progress.currentFile = undefined; // Clear current file after completion
+          progress.currentFile = undefined;
           this.emitProgress(progress);
         }
-        
-        // Add delay when generating embeddings to avoid overwhelming Ollama
-        // Ollama's runner process can crash under heavy load, so we need significant delays
+
+        // Delay for embeddings
         if (generateEmbeddings) {
           const delay = parseInt(process.env.MIMIR_EMBEDDINGS_DELAY_MS || '500', 10);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
-        
-        if ((indexed + skipped) % 10 === 0) {
+
+        if ((indexed + skipped + errored) % 10 === 0) {
           const processed = indexed + skipped + errored;
-          console.log(`  [${indexingId}] Processed ${processed}/${files.length} files (✅ ${indexed} indexed, ⏭️  ${skipped} skipped, ❌ ${errored} errors)...`);
+          console.log(`  [${indexingId}] Indexed ${processed}/${filesToIndex.length} files (✅ ${indexed}, ⏭️ ${skipped}, ❌ ${errored})...`);
         }
       } catch (error: any) {
-        if (error.message === 'Binary file') {
+        if (error.message === 'Binary file' || error.message === 'Binary or non-indexable file') {
           skipped++;
           if (progress) {
-            progress.skipped = skipped;
+            progress.skipped = fastSkipped + skipped;
             this.emitProgress(progress);
           }
         } else {
@@ -632,17 +737,71 @@ export class FileWatchManager {
           }
         }
       }
+    });
+
+    await this.runWithConcurrency(indexTasks, indexConcurrency, signal);
+
+    const indexElapsed = Date.now() - indexStartTime;
+    const totalSkipped = fastSkipped + skipped;
+
+    console.log(`✅ Indexing complete for ${config.path}`);
+    console.log(`   📊 Total files: ${files.length}`);
+    console.log(`   ⚡ Fast-skipped: ${fastSkipped} (${scanElapsed}ms)`);
+    console.log(`   ✅ Indexed: ${indexed} | ⏭️ Skipped: ${skipped} | ❌ Errors: ${errored} (${indexElapsed}ms)`);
+
+    // Update stats in Neo4j - total indexed = fast-skipped (already in DB) + newly indexed
+    const totalIndexed = fastSkipped + indexed;
+    await this.configManager.updateStats(config.id, totalIndexed);
+
+    return indexed;
+  }
+
+  /**
+   * Check if error is retryable (file not fully written yet)
+   */
+  private isRetryableError(errorMessage: string): boolean {
+    const retryablePatterns = [
+      'empty',
+      'Invalid PDF structure',
+      'invalid structure',
+      'size is zero',
+      'EBUSY',  // File locked
+      'EAGAIN', // Resource temporarily unavailable
+    ];
+    return retryablePatterns.some(pattern =>
+      errorMessage.toLowerCase().includes(pattern.toLowerCase())
+    );
+  }
+
+  /**
+   * Retry indexing with exponential backoff for partially written files
+   */
+  private async retryIndexing<T>(
+    fn: () => Promise<T>,
+    relativePath: string,
+    maxRetries: number = 3
+  ): Promise<T> {
+    let lastError: any;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn(); // Success
+      } catch (error: any) {
+        lastError = error;
+
+        // Don't retry non-retryable errors
+        if (!this.isRetryableError(error.message) || attempt === maxRetries) {
+          throw error;
+        }
+
+        // Exponential backoff: 2s, 4s, 8s
+        const delayMs = 2000 * Math.pow(2, attempt);
+        console.log(`⏳ File "${relativePath}" not ready, retry ${attempt + 1}/${maxRetries} in ${delayMs/1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
     }
 
-    const totalProcessed = indexed + skipped + errored;
-    console.log(`✅ Indexing complete for ${config.path}`);
-    console.log(`   📊 Processed: ${totalProcessed}/${files.length} files`);
-    console.log(`   ✅ Indexed: ${indexed} | ⏭️  Skipped: ${skipped} | ❌ Errors: ${errored}`);
-    
-    // Update stats in Neo4j
-    await this.configManager.updateStats(config.id, indexed);
-    
-    return indexed;
+    throw lastError;
   }
 
   /**
@@ -651,9 +810,12 @@ export class FileWatchManager {
   private async handleFileAdded(relativePath: string, config: WatchConfig): Promise<void> {
     const fullPath = path.join(config.path, relativePath);
     console.log(`➕ File added: ${relativePath}`);
-    
+
     try {
-      await this.indexer.indexFile(fullPath, config.path, config.generate_embeddings, config.id);
+      await this.retryIndexing(
+        () => this.indexer.indexFile(fullPath, config.path, config.generate_embeddings, config.id),
+        relativePath
+      );
     } catch (error: any) {
       if (error.message !== 'Binary file') {
         console.error(`Failed to index ${relativePath}:`, error.message);
@@ -667,9 +829,12 @@ export class FileWatchManager {
   private async handleFileChanged(relativePath: string, config: WatchConfig): Promise<void> {
     const fullPath = path.join(config.path, relativePath);
     console.log(`✏️  File changed: ${relativePath}`);
-    
+
     try {
-      await this.indexer.updateFile(fullPath, config.path);
+      await this.retryIndexing(
+        () => this.indexer.updateFile(fullPath, config.path),
+        relativePath
+      );
     } catch (error: any) {
       if (error.message !== 'Binary file') {
         console.error(`Failed to update ${relativePath}:`, error.message);

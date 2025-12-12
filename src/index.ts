@@ -41,7 +41,6 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { createGraphManager, type IGraphManager } from "./managers/index.js";
-import { ContextManager } from "./managers/ContextManager.js";
 import { 
   GRAPH_TOOLS,
   handleMemoryNode,
@@ -51,7 +50,6 @@ import {
   handleMemoryClear
 } from "./tools/index.js";
 import type { NodeType, EdgeType, ClearType } from "./types/index.js";
-import type { AgentType } from "./types/context.types.js";
 
 // File Indexing
 import { FileWatchManager } from "./indexing/FileWatchManager.js";
@@ -78,12 +76,6 @@ import {
   handleTodoList
 } from "./tools/todoList.tools.js";
 
-// Orchestration
-import { orchestrationTools } from "./tools/orchestration.tools.js";
-import { 
-  executeWorkflowFromJSON, 
-  executionStates 
-} from "./api/orchestration/workflow-executor.js";
 
 // ============================================================================
 // Global State
@@ -253,125 +245,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // ========================================================================
-      // CONTEXT ISOLATION (specialized tool)
-      // ========================================================================
-
-      case "get_task_context": {
-        const { taskId, agentType } = args as { taskId: string; agentType: AgentType };
-        const contextManager = new ContextManager(graphManager);
-        const { context, metrics } = await contextManager.getFilteredTaskContext(taskId, agentType);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ success: true, context, metrics }, null, 2)
-            }
-          ]
-        };
-      }
-
-      // ========================================================================
-      // ORCHESTRATION OPERATIONS
-      // ========================================================================
-
-      case "execute_workflow": {
-        const { tasks } = args as { tasks: any[] };
-        
-        // Use configured server URL (defaults to localhost for local, internal for Docker)
-        const serverUrl = process.env.MIMIR_SERVER_URL || 'http://localhost:9042';
-        
-        // Call the orchestration API
-        const response = await fetch(`${serverUrl}/api/execute-workflow`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tasks })
-        });
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Orchestration API error: ${response.status} ${response.statusText} - ${errorText}`);
-        }
-        
-        const result = await response.json();
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
-        };
-      }
-
-      case "get_execution_status": {
-        const { execution_id } = args as { execution_id: string };
-        
-        const serverUrl = process.env.MIMIR_SERVER_URL || 'http://localhost:9042';
-        const response = await fetch(`${serverUrl}/api/executions/${execution_id}`);
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Failed to get execution status: ${response.status} - ${errorText}`);
-        }
-        
-        const result = await response.json();
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
-        };
-      }
-
-      case "get_execution_results": {
-        const { execution_id } = args as { execution_id: string };
-        
-        const serverUrl = process.env.MIMIR_SERVER_URL || 'http://localhost:9042';
-        const response = await fetch(`${serverUrl}/api/deliverables/${execution_id}`);
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Failed to get execution results: ${response.status} - ${errorText}`);
-        }
-        
-        const result = await response.json();
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
-        };
-      }
-
-      case "cancel_execution": {
-        const { execution_id } = args as { execution_id: string };
-        
-        const serverUrl = process.env.MIMIR_SERVER_URL || 'http://localhost:9042';
-        const response = await fetch(`${serverUrl}/api/cancel-execution/${execution_id}`, {
-          method: 'POST'
-        });
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Failed to cancel execution: ${response.status} - ${errorText}`);
-        }
-        
-        const result = await response.json();
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
-        };
-      }
-
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -420,7 +293,7 @@ export async function initializeGraphManager() {
     const fileIndexingTools = createFileIndexingTools(graphManager.getDriver(), fileWatchManager);
     const vectorSearchTools = createVectorSearchTools(graphManager.getDriver());
     const todoTools = createTodoListTools();
-    allTools = [...GRAPH_TOOLS, ...fileIndexingTools, ...vectorSearchTools, ...todoTools, ...orchestrationTools];
+    allTools = [...GRAPH_TOOLS, ...fileIndexingTools, ...vectorSearchTools, ...todoTools];
   }
   return graphManager;
 }
@@ -442,21 +315,18 @@ async function restoreFileWatchers() {
   
   for (const config of activeConfigs) {
     try {
-      // Translate host path to container path for existence check AND indexing
+      // Translate host path to container path for existence check
       const containerPath = translateHostToContainer(config.path);
-      console.error(`🔍 Checking path: ${config.path} -> ${containerPath}`);
-      
-      const pathExists = await import('fs').then(fs => 
+
+      const pathExists = await import('fs').then(fs =>
         fs.promises.access(containerPath).then(() => true).catch(() => false)
       );
-      
+
       if (pathExists) {
-        // Use original config (path is host path for UI/SSE matching)
-        // FileWatchManager will translate to container internally when needed
         await fileWatchManager.startWatch(config);
-        console.error(`✅ Restored watcher: ${config.path} (container: ${containerPath})`);
-      } else{
-        console.error(`⚠️  Path no longer exists: ${containerPath} (from ${config.path})`);
+        console.error(`✅ Restored watcher: ${config.path}`);
+      } else {
+        console.error(`⚠️  Path no longer exists: ${containerPath}`);
         await configManager.markInactive(config.id, 'path_not_found');
       }
     } catch (error: any) {

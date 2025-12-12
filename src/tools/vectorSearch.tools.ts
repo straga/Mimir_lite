@@ -7,6 +7,8 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Driver } from 'neo4j-driver';
 import { UnifiedSearchService } from '../managers/UnifiedSearchService.js';
+import { applyPathMappingToResult } from '../utils/path-utils.js';
+import { getRequestPathMappings } from '../http-server.js';
 
 export function createVectorSearchTools(driver: Driver): Tool[] {
   return [
@@ -237,8 +239,12 @@ export async function handleVectorSearchNodes(
       }
     }
     
-    return result;
-    
+    // Apply path mapping for remote server scenarios
+    // Priority: header X-Mimir-Path-Map > env MIMIR_PATH_MAP
+    // (e.g., server paths /data/projects -> client paths /Users/dev/projects)
+    const mappings = getRequestPathMappings();
+    return applyPathMappingToResult(result, mappings);
+
   } catch (error: any) {
     return {
       status: 'error',

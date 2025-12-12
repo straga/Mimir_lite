@@ -27,16 +27,16 @@
  * ```
  */
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import neo4j from 'neo4j-driver';
-import { requirePermission } from '../middleware/rbac.js';
+
+// No auth in mimir-lite - noop middleware
+const noAuth = (_req: Request, _res: Response, next: NextFunction) => next();
 
 const router = Router();
 
 /**
  * Safely convert Neo4j integers to JavaScript numbers.
- * Handles both Neo4j Integer objects (with .toInt()) and plain numbers.
- * Works with both Neo4j and NornicDB backends.
  */
 const toInt = (value: any): number => {
   if (value === null || value === undefined) return 0;
@@ -56,7 +56,7 @@ const toInt = (value: any): number => {
  * fetch('/api/nodes/types').then(r => r.json())
  *   .then(data => console.log(data.types));
  */
-router.get('/types', requirePermission('nodes:read'), async (req: Request, res: Response) => {
+router.get('/types', noAuth, async (req: Request, res: Response) => {
   const driver = neo4j.driver(
     process.env.NEO4J_URI || 'bolt://localhost:7687',
     neo4j.auth.basic(
@@ -112,7 +112,7 @@ router.get('/types', requirePermission('nodes:read'), async (req: Request, res: 
  * fetch('/api/nodes/vector-search?query=authentication&limit=10')
  *   .then(r => r.json());
  */
-router.get('/vector-search', requirePermission('search:execute'), async (req: Request, res: Response) => {
+router.get('/vector-search', noAuth, async (req: Request, res: Response) => {
   try {
     const query = req.query.query as string;
     const limit = parseInt(req.query.limit as string, 10) || 50;
@@ -211,7 +211,7 @@ router.get('/vector-search', requirePermission('search:execute'), async (req: Re
  *     console.log(`Page ${data.pagination.page} of ${data.pagination.totalPages}`);
  *   });
  */
-router.get('/types/:type', requirePermission('nodes:read'), async (req: Request, res: Response) => {
+router.get('/types/:type', noAuth, async (req: Request, res: Response) => {
   const { type } = req.params;
   const page = Math.floor(parseInt(req.query.page as string, 10)) || 1;
   const limit = Math.floor(parseInt(req.query.limit as string, 10)) || 20;
@@ -338,7 +338,7 @@ router.get('/types/:type', requirePermission('nodes:read'), async (req: Request,
  *     });
  *   });
  */
-router.get('/types/:type/:id/details', requirePermission('nodes:read'), async (req: Request, res: Response) => {
+router.get('/types/:type/:id/details', noAuth, async (req: Request, res: Response) => {
   const { type, id } = req.params;
 
   const driver = neo4j.driver(
@@ -448,7 +448,7 @@ router.get('/types/:type/:id/details', requirePermission('nodes:read'), async (r
  * fetch('/api/nodes/node-123', { method: 'DELETE' })
  *   .then(r => r.json());
  */
-router.delete('/:id', requirePermission('nodes:delete'), async (req: Request, res: Response) => {
+router.delete('/:id', noAuth, async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const driver = neo4j.driver(
@@ -577,7 +577,7 @@ router.delete('/:id', requirePermission('nodes:delete'), async (req: Request, re
  *   console.error('Failed to generate embeddings:', error);
  * }
  */
-router.post('/:id/embeddings', requirePermission('nodes:write'), async (req: Request, res: Response) => {
+router.post('/:id/embeddings', noAuth, async (req: Request, res: Response) => {
   const { id } = req.params;
 
   const driver = neo4j.driver(
@@ -766,7 +766,7 @@ router.post('/:id/embeddings', requirePermission('nodes:write'), async (req: Req
  *   })
  * }).then(r => r.json());
  */
-router.post('/', requirePermission('nodes:write'), async (req: Request, res: Response) => {
+router.post('/', noAuth, async (req: Request, res: Response) => {
   const { type, properties } = req.body;
 
   if (!type) {
@@ -836,7 +836,7 @@ router.post('/', requirePermission('nodes:write'), async (req: Request, res: Res
  *   })
  * }).then(r => r.json());
  */
-router.put('/:id', requirePermission('nodes:write'), async (req: Request, res: Response) => {
+router.put('/:id', noAuth, async (req: Request, res: Response) => {
   const { id } = req.params;
   const { properties } = req.body;
 
@@ -921,7 +921,7 @@ router.put('/:id', requirePermission('nodes:write'), async (req: Request, res: R
  *   })
  * }).then(r => r.json());
  */
-router.patch('/:id', requirePermission('nodes:write'), async (req: Request, res: Response) => {
+router.patch('/:id', noAuth, async (req: Request, res: Response) => {
   const { id } = req.params;
   const properties = req.body;
 
@@ -966,7 +966,7 @@ router.patch('/:id', requirePermission('nodes:write'), async (req: Request, res:
  * @example
  * fetch('/api/nodes/node-123').then(r => r.json());
  */
-router.get('/:id', requirePermission('nodes:read'), async (req: Request, res: Response) => {
+router.get('/:id', noAuth, async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {

@@ -1,0 +1,27 @@
+# Mimir Lite - Neo4j Only
+# For hybrid mode: Neo4j in Docker, mimir-lite on host
+# Usage: cd docker && docker compose -f docker-compose.neo4j.yml up -d
+
+services:
+  neo4j:
+    image: neo4j:5.15
+    container_name: mimir-neo4j
+    restart: unless-stopped
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - ./data/neo4j:/data
+    ports:
+      - "7474:7474"  # Browser
+      - "7687:7687"  # Bolt
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+networks:
+  default:
+    name: mimir-network

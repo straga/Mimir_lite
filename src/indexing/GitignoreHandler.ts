@@ -19,7 +19,14 @@ export class GitignoreHandler {
       '*.log',
       'build/',
       'dist/',
-      'package-lock.json'  // Always exclude lock files from indexing
+      'package-lock.json',
+      // Python cache/build
+      '__pycache__/',
+      '.mypy_cache/',
+      '*.pyc',
+      '*.pyo',
+      '.pytest_cache/',
+      '*.egg-info/',
     ]);
   }
 

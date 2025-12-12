@@ -1,5 +1,0 @@
-# Windsurf Configuration
-# Links to custom system prompt for Claudette Mimir v7.3.0
-
-chatOptions:
-  systemPromptFile: ./.agents/claudette-mimir-v3.yaml

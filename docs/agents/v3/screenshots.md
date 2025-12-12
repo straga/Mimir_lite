@@ -1,9 +1,0 @@
-<img width="711" height="228" alt="Screenshot 2025-11-28 at 12 12 35 PM" src="https://github.com/user-attachments/assets/f63aebbb-ee29-4b6a-9ee1-3a466cbc6d3a" />
-<img width="711" height="228" alt="Screenshot 2025-11-28 at 12 12 35 PM" src="https://github.com/user-attachments/assets/e526f2b4-45c3-4d36-84f8-96e6240640a0" />
-<img width="570" height="1049" alt="Screenshot 2025-11-28 at 12 14 32 PM" src="https://github.com/user-attachments/assets/3c5d4f1d-e60c-45d8-8532-cb7712f584a4" />
-<img width="859" height="665" alt="Screenshot 2025-11-28 at 1 12 24 PM" src="https://github.com/user-attachments/assets/bced6813-e8c9-4d0e-b49f-504da0202461" />
-<img width="990" height="1057" alt="Screenshot 2025-11-28 at 6 58 41 PM" src="https://github.com/user-attachments/assets/0ff5f627-1148-493d-9aa2-1bd374ef6f22" />
-<img width="807" height="925" alt="Screenshot 2025-11-28 at 7 05 32 PM" src="https://github.com/user-attachments/assets/8893820e-08a3-43da-a84e-778cb7f25269" />
-<img width="802" height="940" alt="Screenshot 2025-11-28 at 7 05 41 PM" src="https://github.com/user-attachments/assets/62f29560-63a4-461b-9651-ad05d3471595" />
-<img width="826" height="865" alt="Screenshot 2025-11-28 at 7 05 47 PM" src="https://github.com/user-attachments/assets/2f7e5729-abb3-4d56-8623-07714e3c5ba9" />
-<img width="841" height="976" alt="Screenshot 2025-11-28 at 7 06 55 PM" src="https://github.com/user-attachments/assets/314b3085-9eb3-47ca-b14c-ef0e1f0b2a36" />

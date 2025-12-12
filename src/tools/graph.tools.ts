@@ -1,6 +1,6 @@
 // ============================================================================
 // Unified Graph Tools - Consolidated for Better UX
-// 6 tools: memory_node, memory_edge, memory_batch, memory_lock, get_task_context, memory_clear
+// 5 tools: memory_node, memory_edge, memory_batch, memory_lock, memory_clear
 // Reduced from 22 tools while maintaining all functionality
 // ============================================================================
 
@@ -259,30 +259,7 @@ Examples:
   },
 
   // ============================================================================
-  // TOOL 5: get_task_context - Context isolation (specialized)
-  // ============================================================================
-  {
-    name: "get_task_context",
-    description: "Get filtered task context based on agent type (PM/worker/QC). Server-side context isolation for multi-agent workflows. PM agents get full context (100%), workers get minimal context (<10% - only files, dependencies, requirements), QC agents get requirements + worker output for verification. Implements 90%+ context reduction for worker agents.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        taskId: {
-          type: "string",
-          description: "Task node ID to retrieve context for"
-        },
-        agentType: {
-          type: "string",
-          enum: ["pm", "worker", "qc"],
-          description: "Agent type requesting context - determines filtering level"
-        }
-      },
-      required: ["taskId", "agentType"]
-    }
-  },
-
-  // ============================================================================
-  // TOOL 6: memory_clear - Dangerous operation (deserves own tool)
+  // TOOL 5: memory_clear - Dangerous operation (deserves own tool)
   // ============================================================================
   {
     name: "memory_clear",

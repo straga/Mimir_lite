@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mimir-lite</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>BUN_PATH</string>
+        <string>run</string>
+        <string>MIMIR_LITE_PATH/build/http-server.js</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>MIMIR_LITE_PATH</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NODE_ENV</key>
+        <string>production</string>
+        <key>PORT</key>
+        <string>3000</string>
+        <!-- Neo4j -->
+        <key>NEO4J_URI</key>
+        <string>bolt://localhost:7687</string>
+        <key>NEO4J_USER</key>
+        <string>neo4j</string>
+        <key>NEO4J_PASSWORD</key>
+        <string>password</string>
+        <!-- Embeddings - adjust for your setup -->
+        <key>MIMIR_EMBEDDINGS_PROVIDER</key>
+        <string>ollama</string>
+        <key>MIMIR_EMBEDDINGS_API</key>
+        <string>http://localhost:11434</string>
+        <key>MIMIR_EMBEDDINGS_ENABLED</key>
+        <string>true</string>
+        <key>MIMIR_EMBEDDINGS_MODEL</key>
+        <string>mxbai-embed-large</string>
+        <key>MIMIR_EMBEDDINGS_DIMENSIONS</key>
+        <string>1024</string>
+        <!-- Performance -->
+        <key>MIMIR_SCAN_CONCURRENCY</key>
+        <string>50</string>
+        <key>MIMIR_INDEX_CONCURRENCY</key>
+        <string>3</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>MIMIR_LITE_PATH/logs/mimir.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>MIMIR_LITE_PATH/logs/mimir-error.log</string>
+</dict>
+</plist>

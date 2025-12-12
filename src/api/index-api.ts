@@ -9,8 +9,6 @@ const router = Router();
 
 /**
  * Safely convert Neo4j integers to JavaScript numbers.
- * Handles both Neo4j Integer objects (with .toInt()) and plain numbers.
- * Works with both Neo4j and NornicDB backends.
  */
 const toInt = (value: any): number => {
   if (value === null || value === undefined) return 0;

@@ -233,13 +233,15 @@ export class UnifiedSearchService {
    */
   private async vectorSearch(query: string, options: UnifiedSearchOptions): Promise<SearchResult[]> {
     const session = this.driver.session();
-    
+
     try {
       // Generate embedding for query
       const queryEmbedding = await this.embeddingsService.generateEmbedding(query);
-      
+
       const limit = Math.floor(options.limit || 10);
-      const minSimilarity = options.minSimilarity || 0.75;
+      // Default minSimilarity from env or 0.5 (0.75 was too strict)
+      const defaultMinSimilarity = parseFloat(process.env.MIMIR_MIN_SIMILARITY || '0.5');
+      const minSimilarity = options.minSimilarity || defaultMinSimilarity;
 
       // Build type filter if provided
       let typeFilter = '';

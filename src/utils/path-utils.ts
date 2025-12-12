@@ -285,10 +285,9 @@ export function getHostWorkspaceRoot(): string {
  */
 export function translateHostToContainer(hostPath: string): string {
   if (!hostPath) return hostPath;
-  
+
   // Skip translation if running locally (not in Docker)
   if (!isRunningInDocker()) {
-    console.log(`💻 Running locally - no path translation needed: ${hostPath}`);
     return normalizeAndResolve(hostPath);
   }
   
@@ -431,10 +430,9 @@ export function translateHostToContainer(hostPath: string): string {
  */
 export function translateContainerToHost(containerPath: string): string {
   if (!containerPath) return containerPath;
-  
+
   // Skip translation if running locally (not in Docker)
   if (!isRunningInDocker()) {
-    console.log(`💻 Running locally - no path translation needed: ${containerPath}`);
     return normalizeSlashes(containerPath);
   }
   
@@ -508,10 +506,10 @@ export function validateAndSanitizePath(userPath: string, allowRelative: boolean
   if (!userPath || typeof userPath !== 'string') {
     throw new Error('Path parameter is required and must be a string');
   }
-  
+
   // Normalize and resolve
   const resolved = normalizeAndResolve(userPath);
-  
+
   // Security check: ensure the original path doesn't contain suspicious patterns
   // after resolution (e.g., null bytes, control characters)
   // Check for ASCII control characters (0-31) without using regex to avoid linter warnings
@@ -521,6 +519,166 @@ export function validateAndSanitizePath(userPath: string, allowRelative: boolean
       throw new Error('Path contains invalid control characters');
     }
   }
-  
+
   return resolved;
+}
+
+// ============================================================================
+// Path Mapping for Remote Server Scenarios
+// ============================================================================
+
+/**
+ * Parse path mappings from string (from HTTP header X-Mimir-Path-Map)
+ *
+ * Supports two formats:
+ * 1. Array (recommended): ["/workspace/docs=/Users/dev/docs", "/workspace/src=/Users/dev/src"]
+ * 2. Simple: "/workspace/docs=/Users/dev/docs,/workspace/src=/Users/dev/src"
+ *
+ * Array format is best for JSON config files - each mapping on its own line.
+ *
+ * @example
+ * // Array format (recommended - readable in JSON config)
+ * "X-Mimir-Path-Map": [
+ *   "/workspace/docs=/Users/dev/docs",
+ *   "/workspace/src=/Users/dev/src"
+ * ]
+ *
+ * // Simple format (single line)
+ * "X-Mimir-Path-Map": "/workspace/docs=/Users/dev/docs"
+ */
+export function parsePathMappingsFromString(pathMapStr: string | undefined | null): Array<[string, string]> {
+  if (!pathMapStr || pathMapStr.trim() === '') {
+    return [];
+  }
+
+  const trimmed = pathMapStr.trim();
+
+  // Detect JSON array format: ["from=to", "from2=to2"]
+  if (trimmed.startsWith('[')) {
+    try {
+      const jsonArr = JSON.parse(trimmed);
+      if (!Array.isArray(jsonArr)) {
+        console.error('X-Mimir-Path-Map: expected array but got:', typeof jsonArr);
+        return [];
+      }
+
+      const mappings: Array<[string, string]> = [];
+      for (const item of jsonArr) {
+        if (typeof item !== 'string') continue;
+
+        const eqIndex = item.indexOf('=');
+        if (eqIndex === -1) continue;
+
+        const from = normalizeSlashes(item.substring(0, eqIndex).trim());
+        const to = normalizeSlashes(item.substring(eqIndex + 1).trim());
+
+        if (from && to) {
+          mappings.push([from, to]);
+        }
+      }
+
+      return mappings;
+    } catch (e) {
+      console.error('Failed to parse X-Mimir-Path-Map as JSON array:', e);
+      return [];
+    }
+  }
+
+  // Simple format: from1=to1,from2=to2
+  const mappings: Array<[string, string]> = [];
+  const pairs = trimmed.split(',');
+
+  for (const pair of pairs) {
+    const pairTrimmed = pair.trim();
+    if (!pairTrimmed) continue;
+
+    const eqIndex = pairTrimmed.indexOf('=');
+    if (eqIndex === -1) continue;
+
+    const from = normalizeSlashes(pairTrimmed.substring(0, eqIndex).trim());
+    const to = normalizeSlashes(pairTrimmed.substring(eqIndex + 1).trim());
+
+    if (from && to) {
+      mappings.push([from, to]);
+    }
+  }
+
+  return mappings;
+}
+
+/**
+ * Apply path mappings to a single path
+ *
+ * Used for translating server paths to client paths in MCP responses.
+ * Mappings come from HTTP header X-Mimir-Path-Map.
+ * If no mappings or path doesn't match, returns path unchanged.
+ *
+ * @param filepath - Path to translate (e.g., from Neo4j)
+ * @param mappings - Mappings from header (parsed by parsePathMappingsFromString)
+ * @returns Translated path (or original if no mapping matches)
+ *
+ * @example
+ * const mappings = [['/data/projects', '/Users/dev/projects']];
+ * applyPathMapping('/data/projects/myapp/file.py', mappings)
+ * // => '/Users/dev/projects/myapp/file.py'
+ */
+export function applyPathMapping(filepath: string, mappings?: Array<[string, string]>): string {
+  if (!filepath) return filepath;
+  if (!mappings || mappings.length === 0) return filepath;
+
+  const normalizedPath = normalizeSlashes(filepath);
+
+  // Try each mapping in order
+  for (const [from, to] of mappings) {
+    if (normalizedPath.startsWith(from)) {
+      // Replace prefix
+      const result = to + normalizedPath.substring(from.length);
+      return result;
+    }
+  }
+
+  // No mapping matched
+  return filepath;
+}
+
+/**
+ * Apply path mappings to all path fields in an object (recursive)
+ *
+ * Looks for common path field names: path, file_path, filePath, location
+ *
+ * @param obj - Object to process (modified in place for arrays/objects)
+ * @param mappings - Optional explicit mappings (from header), if not provided uses env
+ * @returns Processed object with mapped paths
+ */
+export function applyPathMappingToResult(obj: any, mappings?: Array<[string, string]>): any {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+
+  // String - might be a path, but we only map known fields
+  if (typeof obj === 'string') {
+    return obj;
+  }
+
+  // Array - process each element
+  if (Array.isArray(obj)) {
+    return obj.map(item => applyPathMappingToResult(item, mappings));
+  }
+
+  // Object - process known path fields and recurse
+  if (typeof obj === 'object') {
+    const pathFields = ['path', 'file_path', 'filePath', 'location', 'source_path', 'sourcePath'];
+
+    for (const key of Object.keys(obj)) {
+      if (pathFields.includes(key) && typeof obj[key] === 'string') {
+        obj[key] = applyPathMapping(obj[key], mappings);
+      } else if (typeof obj[key] === 'object') {
+        obj[key] = applyPathMappingToResult(obj[key], mappings);
+      }
+    }
+
+    return obj;
+  }
+
+  return obj;
 }

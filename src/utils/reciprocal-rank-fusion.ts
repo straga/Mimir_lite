@@ -48,7 +48,7 @@ export const DEFAULT_RRF_CONFIG: RRFConfig = {
   k: 60,
   vectorWeight: 1.0,
   bm25Weight: 1.0,
-  minScore: 0.01
+  minScore: 0.005  // Lowered to support KEYWORD profile with vectorWeight=0.5
 };
 
 /**

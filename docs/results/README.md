@@ -1,1 +1,0 @@
-Research folder for all result reports of testing agent output

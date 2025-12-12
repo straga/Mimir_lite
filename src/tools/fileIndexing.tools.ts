@@ -8,7 +8,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { FileWatchManager } from '../indexing/FileWatchManager.js';
 import { WatchConfigManager } from '../indexing/WatchConfigManager.js';
-import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
+import { getEmbeddingsConfig, isEmbeddingsEnabled } from '../config/embeddings-config.js';
 import {
   translateHostToContainer,
   translateContainerToHost,
@@ -205,9 +205,7 @@ export async function handleIndexFolder(
   }
 
   // Check global embeddings configuration
-  const configLoader = LLMConfigLoader.getInstance();
-  const embeddingsConfig = await configLoader.getEmbeddingsConfig();
-  const globalEmbeddingsEnabled = embeddingsConfig?.enabled ?? false;
+  const globalEmbeddingsEnabled = isEmbeddingsEnabled();
   
   // Use global setting if not explicitly overridden
   const generateEmbeddings = params.generate_embeddings ?? globalEmbeddingsEnabled;

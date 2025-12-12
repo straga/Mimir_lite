@@ -1,16 +1,15 @@
 /**
  * @file src/indexing/EmbeddingsService.ts
  * @description Vector embeddings service supporting multiple providers
- * 
+ *
  * Supports:
  * - Ollama (local models like nomic-embed-text)
  * - OpenAI/Copilot (text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large)
- * 
- * Feature flag controlled via LLM configuration.
+ *
+ * Configuration via environment variables (no LLMConfigLoader)
  */
 
-import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
-import { createSecureFetchOptions } from '../utils/fetch-helper.js';
+import { getEmbeddingsConfig, type EmbeddingsConfig } from '../config/embeddings-config.js';
 
 /**
  * Sanitize text for embedding API by removing/replacing invalid Unicode
@@ -177,7 +176,6 @@ const getModelLoadingBaseDelay = () => parseInt(process.env.MIMIR_EMBEDDINGS_MOD
 const getMaxDelay = () => parseInt(process.env.MIMIR_EMBEDDINGS_MAX_DELAY || '30000', 10);
 
 export class EmbeddingsService {
-  private configLoader: LLMConfigLoader;
   public enabled: boolean = false;
   private provider: string = 'ollama';
   private baseUrl: string = 'http://localhost:11434';
@@ -185,7 +183,7 @@ export class EmbeddingsService {
   private apiKey: string = 'dummy-key-not-used';
 
   constructor() {
-    this.configLoader = LLMConfigLoader.getInstance();
+    // No dependencies - config from environment
   }
 
   /**
@@ -221,9 +219,9 @@ export class EmbeddingsService {
    * }
    */
   async initialize(): Promise<void> {
-    const config = await this.configLoader.getEmbeddingsConfig();
-    
-    if (!config || !config.enabled) {
+    const config = getEmbeddingsConfig();
+
+    if (!config.enabled) {
       this.enabled = false;
       console.log('ℹ️  Vector embeddings disabled');
       return;
@@ -232,26 +230,8 @@ export class EmbeddingsService {
     this.enabled = true;
     this.provider = config.provider;
     this.model = config.model;
-    
-    // Use embeddings-specific API URL if provided, otherwise fall back to LLM provider config
-    if (process.env.MIMIR_EMBEDDINGS_API) {
-      this.baseUrl = process.env.MIMIR_EMBEDDINGS_API;
-    } else {
-      // Fallback: Get provider base URL from llmConfig
-      const llmConfig = await this.configLoader.load();
-      const providerConfig = llmConfig.providers[config.provider];
-      if (providerConfig?.baseUrl) {
-        this.baseUrl = providerConfig.baseUrl;
-      }
-    }
-    
-    // Use embeddings-specific API key if provided
-    if (process.env.MIMIR_EMBEDDINGS_API_KEY) {
-      this.apiKey = process.env.MIMIR_EMBEDDINGS_API_KEY;
-    } else if (this.provider === 'copilot' || this.provider === 'openai') {
-      // Fallback: For OpenAI/Copilot, use dummy key
-      this.apiKey = 'dummy-key-not-used';
-    }
+    this.baseUrl = config.baseUrl;
+    this.apiKey = config.apiKey;
 
     console.log(`✅ Vector embeddings enabled: ${config.provider}/${config.model}`);
     console.log(`   Base URL: ${this.baseUrl}`);
@@ -402,11 +382,10 @@ export class EmbeddingsService {
           result = await this.generateOllamaEmbedding(chunks[i]);
         }
         embeddings.push(result.embedding);
-        
-        // Small delay between chunks to avoid overwhelming the API
-        if (i < chunks.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
+
+        // TODO: For cloud APIs (OpenAI, etc) implement proper rate limiting
+        // with token bucket or sliding window instead of fixed delay.
+        // Local Ollama doesn't need throttling.
       } catch (error: any) {
         console.warn(`⚠️  Failed to generate embedding for chunk ${i + 1}/${chunks.length}: ${error.message}`);
         // Continue with other chunks
@@ -510,27 +489,24 @@ export class EmbeddingsService {
 
     const chunkSize = getChunkSize();
     const chunkOverlap = getChunkOverlap();
-    const chunks: ChunkEmbeddingResult[] = [];
-    
+
+    // Step 1: Split text into chunks
+    const textChunks: Array<{ text: string; start: number; end: number }> = [];
     let start = 0;
-    let chunkIndex = 0;
 
     while (start < text.length) {
       let end = start + chunkSize;
-      
-      // If this isn't the last chunk, try to break at a natural boundary
+
+      // Try to break at natural boundary
       if (end < text.length) {
-        // Try to break at paragraph boundary
         const paragraphBreak = text.lastIndexOf('\n\n', end);
         if (paragraphBreak > start + chunkSize / 2) {
           end = paragraphBreak + 2;
         } else {
-          // Try to break at sentence boundary
           const sentenceBreak = text.lastIndexOf('. ', end);
           if (sentenceBreak > start + chunkSize / 2) {
             end = sentenceBreak + 2;
           } else {
-            // Try to break at word boundary
             const wordBreak = text.lastIndexOf(' ', end);
             if (wordBreak > start + chunkSize / 2) {
               end = wordBreak + 1;
@@ -540,87 +516,87 @@ export class EmbeddingsService {
       }
 
       const chunkText = text.substring(start, end).trim();
-      
       if (chunkText.length > 0) {
-        // Retry logic for individual chunks with transient errors
-        let chunkRetries = 0;
-        const maxChunkRetries = getMaxRetries();
-        let lastChunkError: Error | null = null;
-        
-        while (chunkRetries <= maxChunkRetries) {
-          try {
-            // Generate embedding for this chunk
-            let result: EmbeddingResult;
-            if (this.provider === 'copilot' || this.provider === 'openai' || this.provider === 'llama.cpp') {
-              result = await this.generateOpenAIEmbedding(chunkText);
-            } else {
-              result = await this.generateOllamaEmbedding(chunkText);
-            }
-
-            chunks.push({
-              text: chunkText,
-              embedding: result.embedding,
-              dimensions: result.dimensions,
-              model: result.model,
-              startOffset: start,
-              endOffset: end,
-              chunkIndex: chunkIndex
-            });
-
-            chunkIndex++;
-
-            // Small delay between chunks to avoid overwhelming the API
-            if (start + chunkSize < text.length) {
-              await new Promise(resolve => setTimeout(resolve, 50));
-            }
-            
-            // Success - break out of retry loop
-            break;
-          } catch (error: any) {
-            lastChunkError = error;
-            
-            // Check if this is a retryable error at the chunk level
-            // (The inner methods already retry, but model loading can persist)
-            const isModelLoading = error.message?.includes('503') || 
-                                  error.message?.includes('Loading model') ||
-                                  error.message?.includes('unavailable_error');
-            const isFetchFailed = error.message?.includes('fetch failed');
-            const isRetryable = isModelLoading || isFetchFailed;
-            
-            if (!isRetryable || chunkRetries >= maxChunkRetries) {
-              console.warn(`⚠️  Failed to generate embedding for chunk ${chunkIndex}: ${error.message}`);
-              // Skip this chunk and continue with others
-              break;
-            }
-            
-            // Wait longer for model loading at chunk level (models may need time to fully load)
-            const chunkDelay = isModelLoading ? 5000 * (chunkRetries + 1) : 2000 * (chunkRetries + 1);
-            console.warn(
-              `⚠️  Chunk ${chunkIndex} failed (${isModelLoading ? 'model loading' : 'fetch failed'}), ` +
-              `retry ${chunkRetries + 1}/${maxChunkRetries} in ${chunkDelay}ms...`
-            );
-            await new Promise(resolve => setTimeout(resolve, chunkDelay));
-            chunkRetries++;
-          }
-        }
+        textChunks.push({ text: chunkText, start, end });
       }
-      
-      // Move start position with overlap for context continuity
+
       start = end - chunkOverlap;
       if (start < 0) start = 0;
-      
-      // Prevent infinite loop
-      if (start >= end) {
-        start = end;
+      if (start >= end) start = end;
+    }
+
+    if (textChunks.length === 0) {
+      throw new Error('No valid chunks generated from text');
+    }
+
+    // Step 2: Generate embeddings (batch for Ollama, sequential for others)
+    let embeddings: number[][];
+
+    if (this.provider === 'ollama') {
+      // Batch API for Ollama - much faster
+      embeddings = await this.generateOllamaBatchEmbeddings(textChunks.map(c => c.text));
+    } else {
+      // Sequential for OpenAI/Copilot (they have their own batching)
+      embeddings = [];
+      for (const chunk of textChunks) {
+        const result = await this.generateOpenAIEmbedding(chunk.text);
+        embeddings.push(result.embedding);
       }
     }
 
-    if (chunks.length === 0) {
-      throw new Error('Failed to generate embeddings for any chunks');
-    }
+    // Step 3: Build results
+    const results: ChunkEmbeddingResult[] = textChunks.map((chunk, idx) => ({
+      text: chunk.text,
+      embedding: embeddings[idx],
+      dimensions: embeddings[idx].length,
+      model: this.model,
+      startOffset: chunk.start,
+      endOffset: chunk.end,
+      chunkIndex: idx
+    }));
 
-    console.log(`📄 Generated ${chunks.length} chunk embeddings for text (${text.length} chars)`);
-    return chunks;
+    console.log(`📄 Generated ${results.length} chunk embeddings (batch) for text (${text.length} chars)`);
+    return results;
+  }
+
+  /**
+   * Batch embedding generation for Ollama using /api/embed endpoint
+   */
+  private async generateOllamaBatchEmbeddings(texts: string[]): Promise<number[][]> {
+    const sanitizedTexts = texts.map(t => sanitizeTextForEmbedding(t));
+
+    return this.retryWithBackoff(async () => {
+      const baseUrl = process.env.MIMIR_EMBEDDINGS_API || this.baseUrl || 'http://localhost:11434';
+      const batchUrl = `${baseUrl}/api/embed`;
+      const apiKey = process.env.MIMIR_EMBEDDINGS_API_KEY;
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (apiKey && apiKey !== 'dummy-key') {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+      }
+
+      const response = await fetch(batchUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: this.model,
+          input: sanitizedTexts,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Ollama batch API error (${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.embeddings || !Array.isArray(data.embeddings)) {
+        throw new Error('Invalid response from Ollama batch: missing embeddings array');
+      }
+
+      return data.embeddings;
+    }, `Ollama batch embedding (${texts.length} chunks)`);
   }
 
   /**
@@ -712,7 +688,7 @@ export class EmbeddingsService {
           headers['Authorization'] = `Bearer ${apiKey}`;
         }
         
-        const fetchOptions = createSecureFetchOptions(embeddingsUrl, {
+        const response = await fetch(embeddingsUrl, {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -720,8 +696,6 @@ export class EmbeddingsService {
             prompt: sanitizedText,
           }),
         });
-        
-        const response = await fetch(embeddingsUrl, fetchOptions);
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -788,13 +762,11 @@ export class EmbeddingsService {
           input: input,
         });
         
-        const fetchOptions = createSecureFetchOptions(embeddingsUrl, {
+        const response = await fetch(embeddingsUrl, {
           method: 'POST',
           headers,
           body: requestBody,
         });
-        
-        const response = await fetch(embeddingsUrl, fetchOptions);
 
         if (!response.ok) {
           const errorText = await response.text();

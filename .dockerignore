@@ -1,26 +1,20 @@
+# Dependencies
 node_modules
+
+# Build output (rebuild in container)
 build
+
+# Git
 .git
-coverage
-testing
-.mcp-memory-store.json
+.gitignore
+
+# Environment (don't copy secrets)
 .env
-
-# Build artifacts (frontend/dist is pre-built locally to avoid Alpine ARM64 rollup bug)
-# frontend/dist - KEEP THIS, we copy pre-built frontend
-frontend/node_modules
-vscode-extension/dist
-vscode-extension/node_modules
-
-# Ignore markdown except README.md
-*.md
-!README.md
+.env.*
 
 # Development and runtime data
 data
 logs
-copilot-data
-ollama_models
 
 # IDE and editor files
 .vscode
@@ -33,20 +27,17 @@ ollama_models
 .DS_Store
 Thumbs.db
 
-# Generated agents
-generated-agents
-
 # Test files
 *.test.ts
 *.spec.ts
 __tests__
+coverage
+
+# Documentation (except README)
+*.md
+!README.md
 
 # Docker files (don't need in context)
 docker-compose*.yml
 Dockerfile*
 .dockerignore
-
-# Scripts not needed in container
-scripts
-deliverables
-docker/llama-cpp/models/*

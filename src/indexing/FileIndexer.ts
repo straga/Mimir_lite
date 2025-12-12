@@ -12,9 +12,10 @@ import { createHash } from 'crypto';
 import { EmbeddingsService, ChunkEmbeddingResult, formatMetadataForEmbedding, FileMetadata } from './EmbeddingsService.js';
 import { DocumentParser } from './DocumentParser.js';
 import { getHostWorkspaceRoot } from '../utils/path-utils.js';
-import { ImageProcessor } from './ImageProcessor.js';
-import { VLService } from './VLService.js';
-import { LLMConfigLoader } from '../config/LLMConfigLoader.js';
+import { getEmbeddingsConfig } from '../config/embeddings-config.js';
+
+// Image extensions to skip (no VL service in mimir-lite)
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico']);
 
 /**
  * Generate a deterministic hash-based ID for content
@@ -52,55 +53,14 @@ export class FileIndexer {
   private embeddingsInitialized: boolean = false;
   private embeddingsInitPromise: Promise<void> | null = null; // Mutex for initialization
   private documentParser: DocumentParser;
-  private imageProcessor: ImageProcessor | null = null;
-  private vlService: VLService | null = null;
-  private configLoader: LLMConfigLoader;
-  private isNornicDB: boolean = false;
-  private providerDetected: boolean = false;
 
   constructor(private driver: Driver) {
     this.embeddingsService = new EmbeddingsService();
     this.documentParser = new DocumentParser();
-    this.configLoader = LLMConfigLoader.getInstance();
-  }
-
-  /**
-   * Detect database provider (NornicDB vs Neo4j)
-   * Same detection logic as GraphManager for consistency
-   */
-  private async detectDatabaseProvider(): Promise<void> {
-    // Check for manual override
-    const manualProvider = process.env.MIMIR_DATABASE_PROVIDER?.toLowerCase();
-    if (manualProvider === 'nornicdb') {
-      this.isNornicDB = true;
-      return;
-    } else if (manualProvider === 'neo4j') {
-      this.isNornicDB = false;
-      return;
-    }
-
-    // Auto-detect via server metadata
-    const session = this.driver.session();
-    try {
-      const result = await session.run('RETURN 1 as test');
-      const serverAgent = result.summary.server?.agent || '';
-      
-      if (serverAgent.toLowerCase().includes('nornicdb')) {
-        this.isNornicDB = true;
-      } else {
-        this.isNornicDB = false;
-      }
-    } catch (error) {
-      // Default to Neo4j on error
-      this.isNornicDB = false;
-    } finally {
-      await session.close();
-    }
   }
 
   /**
    * Initialize embeddings service (lazy loading)
-   * Skips initialization if connected to NornicDB
    * Uses mutex pattern to prevent race conditions in concurrent calls
    */
   private async initEmbeddings(): Promise<void> {
@@ -129,20 +89,7 @@ export class FileIndexer {
    * Internal initialization logic (called once via mutex)
    */
   private async doInitEmbeddings(): Promise<void> {
-    // Detect provider on first call
-    if (!this.providerDetected) {
-      await this.detectDatabaseProvider();
-      this.providerDetected = true;
-      
-      if (this.isNornicDB) {
-        console.log('🗄️  FileIndexer: NornicDB detected - skipping embeddings service initialization');
-      }
-    }
-    
-    // Only initialize embeddings service for Neo4j
-    if (!this.isNornicDB) {
-      await this.embeddingsService.initialize();
-    }
+    await this.embeddingsService.initialize();
     this.embeddingsInitialized = true;
   }
 
@@ -210,41 +157,6 @@ export class FileIndexer {
   }
 
   /**
-   * Initialize image processing services (lazy loading)
-   */
-  private async initImageServices(): Promise<void> {
-    const config = await this.configLoader.getEmbeddingsConfig();
-    
-    if (!config?.images?.enabled) {
-      return;
-    }
-
-    // Initialize ImageProcessor
-    if (!this.imageProcessor) {
-      this.imageProcessor = new ImageProcessor({
-        maxPixels: config.images.maxPixels,
-        targetSize: config.images.targetSize,
-        resizeQuality: config.images.resizeQuality
-      });
-    }
-
-    // Initialize VLService if describe mode is enabled
-    if (config.images.describeMode && config.vl && !this.vlService) {
-      this.vlService = new VLService({
-        provider: config.vl.provider,
-        api: config.vl.api,
-        apiPath: config.vl.apiPath,
-        apiKey: config.vl.apiKey,
-        model: config.vl.model,
-        contextSize: config.vl.contextSize,
-        maxTokens: config.vl.maxTokens,
-        temperature: config.vl.temperature
-      });
-      console.log('🖼️  Image embedding services initialized (VL describe mode)');
-    }
-  }
-
-  /**
    * Translate container path to host path
    * e.g., /workspace/my-project/file.ts -> /Users/user/src/my-project/file.ts
    * If not in Docker, both paths are the same
@@ -277,8 +189,58 @@ export class FileIndexer {
   }
 
   /**
+   * Check if file can be fast-skipped (already indexed and unchanged)
+   * Used for parallel scanning on restart - no embeddings generation, just check.
+   *
+   * @param filePath - Absolute path to file
+   * @returns Object with skip boolean and file stats if available
+   */
+  async checkFastSkip(filePath: string): Promise<{ skip: boolean; reason?: string }> {
+    const session = this.driver.session();
+
+    try {
+      const stats = await fs.stat(filePath);
+      const mtimeStr = stats.mtime.toISOString();
+
+      const quickCheck = await session.run(
+        `MATCH (f:File {path: $path})
+         OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+         RETURN f.size_bytes AS size, f.last_modified AS mtime, f.has_embedding AS has_embedding, count(c) AS chunk_count`,
+        { path: filePath }
+      );
+
+      if (quickCheck.records.length > 0) {
+        const rec = quickCheck.records[0];
+        const storedSize = rec.get('size')?.toNumber?.() || rec.get('size');
+        const storedMtime = rec.get('mtime');
+        const hasEmbedding = rec.get('has_embedding') === true;
+        const chunkCount = rec.get('chunk_count')?.toNumber?.() || 0;
+
+        // If size+mtime match AND has embeddings → skip
+        if (storedSize === stats.size &&
+            storedMtime === mtimeStr &&
+            (hasEmbedding || chunkCount > 0)) {
+          return { skip: true, reason: 'unchanged' };
+        }
+
+        // File exists in DB but changed
+        return { skip: false, reason: 'changed' };
+      }
+
+      // File not in DB
+      return { skip: false, reason: 'new' };
+
+    } catch (error: any) {
+      // File doesn't exist or other error
+      return { skip: false, reason: error.message };
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
    * Index a single file into Neo4j with optional vector embeddings
-   * 
+   *
    * Creates a File node in the graph database with metadata and content.
    * For large files with embeddings enabled, splits content into chunks
    * with individual embeddings for precise semantic search (industry standard).
@@ -357,102 +319,61 @@ export class FileIndexer {
     const session = this.driver.session();
     let content: string = '';
     let isImage = false;
-    
-    // CRITICAL: Detect provider BEFORE making content storage decisions
-    // This ensures NornicDB detection happens before shouldStoreFullContent is evaluated
-    if (!this.providerDetected) {
-      await this.detectDatabaseProvider();
-      this.providerDetected = true;
-      
-      if (this.isNornicDB) {
-        console.log('🗄️  FileIndexer: NornicDB detected - full content will be stored for native embedding');
-      }
-    }
-    
+
     try {
       const relativePath = path.relative(rootPath, filePath);
       const extension = path.extname(filePath).toLowerCase();
       const binaryDoc = this.documentParser.isSupportedFormat(extension);
-      
-      // Check if this is an image file BEFORE the binary skip
-      if (ImageProcessor.isImageFile(filePath) && generateEmbeddings) {
-        await this.initImageServices();
-        const config = await this.configLoader.getEmbeddingsConfig();
-        
-        if (config?.images?.enabled) {
-          isImage = true;
-          
-          // For NornicDB: ALWAYS use VL description mode (NornicDB can only embed text)
-          // For Neo4j: Use configured mode (describeMode or direct multimodal)
-          const useVLDescription = this.isNornicDB || config.images.describeMode;
-          
-          if (useVLDescription && this.vlService && this.imageProcessor) {
-            // Path 1: VL Description Method (DEFAULT, REQUIRED for NornicDB)
-            // Uses VL model to generate text description, then embeds the description
-            console.log(`🖼️  Processing image with VL description: ${relativePath}${this.isNornicDB ? ' (NornicDB requires text)' : ''}`);
-            
-            // 1. Prepare image (resize if needed)
-            const processedImage = await this.imageProcessor.prepareImageForVL(filePath);
-            
-            if (processedImage.wasResized) {
-              console.log(`   Resized from ${processedImage.originalSize.width}×${processedImage.originalSize.height} to ${processedImage.processedSize.width}×${processedImage.processedSize.height}`);
-            }
-            
-            // 2. Create Data URL
-            const dataURL = this.imageProcessor.createDataURL(processedImage.base64, processedImage.format);
-            
-            // 3. Get description from VL model
-            const result = await this.vlService.describeImage(dataURL);
-            content = result.description;
-            
-            console.log(`   Generated description (${content.length} chars) in ${result.processingTimeMs}ms`);
-          } else if (!config.images.describeMode && !this.isNornicDB && this.imageProcessor) {
-            // Path 2: Direct Multimodal Embedding (Neo4j only)
-            // Sends image directly to multimodal embeddings endpoint
-            // NOTE: This path is NOT available for NornicDB (requires text content)
-            console.log(`🖼️  Processing image with direct multimodal embedding: ${relativePath}`);
-            
-            // 1. Prepare image (resize if needed)
-            const processedImage = await this.imageProcessor.prepareImageForVL(filePath);
-            
-            if (processedImage.wasResized) {
-              console.log(`   Resized from ${processedImage.originalSize.width}×${processedImage.originalSize.height} to ${processedImage.processedSize.width}×${processedImage.processedSize.height}`);
-            }
-            
-            // 2. Create Data URL for embedding
-            const dataURL = this.imageProcessor.createDataURL(processedImage.base64, processedImage.format);
-            
-            // 3. Store the data URL as content - will be sent to embeddings service
-            // The embeddings service will handle multimodal input
-            content = dataURL;
-            
-            console.log(`   Prepared image for direct embedding (${processedImage.sizeBytes} bytes)`);
-          } else if (this.isNornicDB && !this.vlService) {
-            // NornicDB requires VL service for image embedding (can't do multimodal)
-            console.warn(`⚠️  Skipping image ${relativePath}: NornicDB requires VL service for image descriptions`);
-            throw new Error('Image indexing requires VL service for NornicDB (text-only embedding)');
-          } else {
-            // Missing required services
-            const missingServices = [];
-            if (!this.imageProcessor) missingServices.push('ImageProcessor');
-            if (config.images.describeMode && !this.vlService) missingServices.push('VLService');
-            
-            throw new Error(`Image processing requires: ${missingServices.join(', ')}`);
+
+      // Check if this is an image file - skip in mimir-lite (no VL service)
+      if (IMAGE_EXTENSIONS.has(extension)) {
+        throw new Error('Image indexing disabled in mimir-lite');
+      }
+
+      // FAST PATH: Quick check by size+mtime BEFORE reading file
+      // If file hasn't changed and already has embeddings, skip entirely
+      if (generateEmbeddings) {
+        const stats = await fs.stat(filePath);
+        const mtimeStr = stats.mtime.toISOString();
+
+        const quickCheck = await session.run(
+          `MATCH (f:File {path: $path})
+           OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+           RETURN f.size_bytes AS size, f.last_modified AS mtime, f.has_embedding AS has_embedding, count(c) AS chunk_count`,
+          { path: filePath }
+        );
+
+        if (quickCheck.records.length > 0) {
+          const rec = quickCheck.records[0];
+          const storedSize = rec.get('size')?.toNumber?.() || rec.get('size');
+          const storedMtime = rec.get('mtime');
+          const hasEmbedding = rec.get('has_embedding') === true;
+          const chunkCount = rec.get('chunk_count')?.toNumber?.() || 0;
+
+          // If size+mtime match AND has embeddings → skip without reading file
+          if (storedSize === stats.size &&
+              storedMtime === mtimeStr &&
+              (hasEmbedding || chunkCount > 0)) {
+            const hostPath = this.translateToHostPath(filePath);
+            console.log(`⚡ Fast skip: ${hostPath || filePath}`);
+            return {
+              file_node_id: 'cached',
+              path: relativePath,
+              size_bytes: stats.size,
+              chunks_created: 0
+            };
           }
-        } else {
-          // Images disabled, skip
-          throw new Error('Image indexing disabled');
         }
-      } else if (binaryDoc) {
-        // Extract text from PDF or DOCX
+      }
+
+      // SLOW PATH: Read file content
+      const stats = await fs.stat(filePath);
+      if (binaryDoc) {
         const buffer = await fs.readFile(filePath);
         content = await this.documentParser.extractText(buffer, extension);
         console.log(`📄 Extracted ${content.length} chars from ${extension} document: ${relativePath}`);
       } else if (!this.shouldSkipFile(filePath, extension)) {
-        // Read as plain text file
         content = await fs.readFile(filePath, 'utf-8');
-        
-        // Check if content is actually text (not binary masquerading as text)
         if (!this.isTextContent(content)) {
           throw new Error('Binary content detected');
         }
@@ -460,69 +381,57 @@ export class FileIndexer {
         throw new Error('Binary or non-indexable file');
       }
 
-      const stats = await fs.stat(filePath);
       const language = this.detectLanguage(filePath);
-      
-      // Check if file already has chunks
-      let hasExistingChunks = false;
+      const contentHash = generateContentHash(content, '');
+
+      // Check if embeddings need regeneration (content hash changed)
+      let hasExistingEmbeddings = false;
       if (generateEmbeddings) {
         const checkResult = await session.run(
-          `MATCH (f:File {path: $path})-[:HAS_CHUNK]->(c:FileChunk)
-           RETURN count(c) AS chunk_count, f.last_modified AS last_modified`,
+          `MATCH (f:File {path: $path})
+           OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
+           RETURN count(c) AS chunk_count, f.content_hash AS content_hash, f.has_embedding AS has_embedding`,
           { path: filePath }
         );
-        
+
         if (checkResult.records.length > 0) {
-          const chunkCount = checkResult.records[0].get('chunk_count').toNumber();
-          hasExistingChunks = chunkCount > 0;
-          const existingModified = checkResult.records[0].get('last_modified');
-          
-          // Re-generate if file was modified
-          if (hasExistingChunks && existingModified) {
-            const existingModifiedDate = new Date(existingModified);
-            if (stats.mtime > existingModifiedDate) {
-              console.log(`📝 File modified, regenerating chunks: ${relativePath}`);
-              hasExistingChunks = false;
-              
-              // Delete old chunks (use filePath which is the absolute container path)
+          const chunkCount = checkResult.records[0].get('chunk_count')?.toNumber?.() || 0;
+          const hasDirectEmbedding = checkResult.records[0].get('has_embedding') === true;
+          hasExistingEmbeddings = chunkCount > 0 || hasDirectEmbedding;
+          const existingHash = checkResult.records[0].get('content_hash');
+
+          // Re-generate if content changed (hash mismatch)
+          if (hasExistingEmbeddings && existingHash && existingHash !== contentHash) {
+            console.log(`📝 File content changed, regenerating embeddings: ${relativePath}`);
+            hasExistingEmbeddings = false;
+
+            if (chunkCount > 0) {
               await session.run(
                 `MATCH (f:File {path: $path})-[:HAS_CHUNK]->(c:FileChunk)
                  DETACH DELETE c`,
                 { path: filePath }
               );
             }
+            await session.run(
+              `MATCH (f:File {path: $path})
+               SET f.embedding = null, f.has_embedding = false`,
+              { path: filePath }
+            );
           }
         }
       }
+      const hasExistingChunks = hasExistingEmbeddings;
       
       // Determine if file needs chunking (based on embeddings config chunk size)
       const needsChunking = generateEmbeddings && content.length > 1000; // Will be refined by EmbeddingsService
       
       // Storage strategy:
-      // - If NornicDB → ALWAYS store full content (NornicDB handles chunking/embedding natively)
       // - If embeddings ENABLED and file is LARGE → Store in chunks (chunk nodes) + no content on File node
       // - If embeddings DISABLED → ALWAYS store full content on File node (enables full-text search)
       // - If embeddings ENABLED and file is SMALL → Store content on File node + embedding
-      const shouldStoreFullContent = this.isNornicDB || !generateEmbeddings || !needsChunking;
-      
-      // For NornicDB: Enrich content with metadata BEFORE storing
-      // This gives NornicDB's embedding worker richer context for better embeddings
-      // (Same enrichment that happens for Neo4j in the chunking/embedding path below)
-      let contentToStore = content;
-      if (this.isNornicDB && shouldStoreFullContent && generateEmbeddings) {
-        const fileMetadata: FileMetadata = {
-          name: path.basename(filePath),
-          relativePath: relativePath,
-          language: language,
-          extension: extension,
-          directory: path.dirname(relativePath),
-          sizeBytes: stats.size
-        };
-        const metadataPrefix = formatMetadataForEmbedding(fileMetadata);
-        contentToStore = metadataPrefix + content;
-        console.log(`📝 Enriched content for NornicDB embedding: ${relativePath} (+${metadataPrefix.length} chars metadata)`);
-      }
-      
+      const shouldStoreFullContent = !generateEmbeddings || !needsChunking;
+      const contentToStore = content;
+
       // Create File node with BOTH container and host paths
       // f.path = absolute container path (e.g., /app/docs/README.md)
       // f.host_path = absolute host path (e.g., /Users/user/src/Mimir/docs/README.md)
@@ -539,7 +448,7 @@ export class FileIndexer {
         const query = watchConfigId ? `
           MERGE (f:File:Node {path: $path})
           ON CREATE SET f.id = 'file-' + toString(timestamp()) + '-' + substring(randomUUID(), 0, 8)
-          SET 
+          SET
             f.host_path = $host_path,
             f.name = $name,
             f.extension = $extension,
@@ -547,6 +456,7 @@ export class FileIndexer {
             f.size_bytes = $size_bytes,
             f.line_count = $line_count,
             f.last_modified = $last_modified,
+            f.content_hash = $content_hash,
             f.indexed_date = datetime(),
             f.type = 'file',
             f.has_chunks = $has_chunks,
@@ -559,7 +469,7 @@ export class FileIndexer {
         ` : `
           MERGE (f:File:Node {path: $path})
           ON CREATE SET f.id = 'file-' + toString(timestamp()) + '-' + substring(randomUUID(), 0, 8)
-          SET 
+          SET
             f.host_path = $host_path,
             f.name = $name,
             f.extension = $extension,
@@ -567,6 +477,7 @@ export class FileIndexer {
             f.size_bytes = $size_bytes,
             f.line_count = $line_count,
             f.last_modified = $last_modified,
+            f.content_hash = $content_hash,
             f.indexed_date = datetime(),
             f.type = 'file',
             f.has_chunks = $has_chunks,
@@ -583,8 +494,9 @@ export class FileIndexer {
           size_bytes: stats.size,
           line_count: content.split('\n').length,
           last_modified: stats.mtime.toISOString(),
+          content_hash: contentHash,
           has_chunks: needsChunking,
-          content: shouldStoreFullContent ? contentToStore : null, // Store enriched content for NornicDB, raw content for Neo4j
+          content: shouldStoreFullContent ? contentToStore : null,
           watchConfigId: watchConfigId || null
         });
       }, `Create/update File node for ${relativePath}`);
@@ -593,8 +505,7 @@ export class FileIndexer {
       let chunksCreated = 0;
 
       // Generate and store embeddings if enabled and not already present
-      // Skip embedding generation for NornicDB (database handles it natively)
-      if (generateEmbeddings && !hasExistingChunks && !this.isNornicDB) {
+      if (generateEmbeddings && !hasExistingChunks) {
         await this.initEmbeddings();
         if (this.embeddingsService.isEnabled()) {
           try {
@@ -671,10 +582,10 @@ export class FileIndexer {
               // Small file: Store embedding directly on File node with metadata enrichment
               const enrichedContent = metadataPrefix + content;
               const embedding = await this.embeddingsService.generateEmbedding(enrichedContent);
-              
+
               await session.run(`
                 MATCH (f:File) WHERE id(f) = $fileNodeId
-                SET 
+                SET
                   f.embedding = $embedding,
                   f.embedding_dimensions = $dimensions,
                   f.embedding_model = $model,
@@ -685,7 +596,7 @@ export class FileIndexer {
                 dimensions: embedding.dimensions,
                 model: embedding.model
               });
-              
+
               console.log(`✅ Created file embedding for ${displayPath}`);
             }
           } catch (error: any) {
@@ -695,7 +606,7 @@ export class FileIndexer {
       } else if (generateEmbeddings && hasExistingChunks) {
         console.log(`⏭️  Skipping embeddings (already exist): ${displayPath}`);
       }
-      
+
       return {
         file_node_id: `file-${fileNodeId}`,
         path: relativePath,
@@ -861,13 +772,29 @@ export class FileIndexer {
     ];
     
     const sensitiveFileNames = new Set(
-      process.env.MIMIR_SENSITIVE_FILES 
+      process.env.MIMIR_SENSITIVE_FILES
         ? process.env.MIMIR_SENSITIVE_FILES.split(',').map(f => f.trim()).filter(f => f.length > 0)
         : defaultSensitiveFiles
     );
-    
+
     if (sensitiveFileNames.has(fileName)) {
       return true;
+    }
+
+    // Check for wildcard patterns in MIMIR_SENSITIVE_FILES (e.g., "*.po")
+    if (process.env.MIMIR_SENSITIVE_FILES) {
+      for (const pattern of process.env.MIMIR_SENSITIVE_FILES.split(',').map(p => p.trim())) {
+        if (pattern.includes('*')) {
+          // Convert glob pattern to regex
+          const regexPattern = pattern
+            .replace(/\./g, '\\.')  // Escape dots
+            .replace(/\*/g, '.*');   // Convert * to .*
+          const regex = new RegExp(`^${regexPattern}$`);
+          if (regex.test(fileName)) {
+            return true;
+          }
+        }
+      }
     }
     
     // Skip files with sensitive patterns in name

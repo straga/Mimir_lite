@@ -1,40 +1,35 @@
+# Dependencies
 node_modules/
+
+# Build output
 build/
 dist/
-coverage/
-# Memory persistence files
-.mcp-memory-store.json
-.mcp-memory-store.json.tmp
-.mcp-memory-store.json.healthcheck.env
-validation-output/
-generated-agents/tmp
-generated-agents/worker-*
-generated-agents/qc-*
-test-output-executor/
+
+# Environment
 .env
-data/
+.env.local
+.env.*.local
+
+# Logs
 logs/
-# Snyk Security Extension - AI Rules (auto-generated)
-.cursor/rules/snyk_rules.mdc
+*.log
+
+# OS
 .DS_Store
-test-results-claudette-mini/
-test-results-claudette-quantized/
-copilot-data/github_token
-pipelines\__pycache__
-ollama_models/
-# Custom RBAC configurations (user-specific, not checked in)
-config/rbac.local.json
-config/rbac.*.json
-!config/rbac.json
-docker/llama-cpp/models/*
-nornicdb/nornicdb
-nornicdb/nornicdb_local
-# BadgerDB test data directories (created by nornicdb tests)
-nornicdb/pkg/nornicdb/testdata/
-nornicdb/pkg/nornicdb/custom/
-nornicdb/models/*
-# llama.cpp pre-built static libraries (too large, platform-specific)
-# Users should build locally using scripts/build-llama-cuda.ps1 (Windows) or build-llama.sh (Linux)
-# Headers (.h) and VERSION file are checked in for CGO compilation
-nornicdb/lib/llama/**/*.lib
-nornicdb/lib/llama/**/*.a
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Neo4j data (if running locally)
+data/
+
+# Test coverage
+coverage/
+
+# Temp files
+*.tmp
+*.temp
