@@ -2,6 +2,35 @@
 
 Run mimir-lite as a background service using launchd.
 
+## Prerequisites
+
+### Neo4j
+
+```bash
+# Start Neo4j in Docker
+cd /path/to/mimir-lite/docker
+docker compose -f docker-compose.neo4j.yml up -d
+```
+
+### Ollama (local embeddings)
+
+```bash
+# Install Ollama
+brew install ollama
+
+# Start Ollama service
+brew services start ollama
+
+# Download embedding model
+ollama pull mxbai-embed-large
+```
+
+Verify Ollama is running:
+```bash
+curl http://localhost:11434/api/tags
+# Should list available models including mxbai-embed-large
+```
+
 ## Quick Start
 
 ```bash
