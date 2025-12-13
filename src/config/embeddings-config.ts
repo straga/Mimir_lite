@@ -20,7 +20,7 @@ export interface EmbeddingsConfig {
  */
 export function getEmbeddingsConfig(): EmbeddingsConfig {
   return {
-    enabled: process.env.MIMIR_EMBEDDINGS_ENABLED === 'true',
+    enabled: process.env.MIMIR_EMBEDDINGS_ENABLED !== 'false',
     provider: process.env.MIMIR_EMBEDDINGS_PROVIDER || 'ollama',
     model: process.env.MIMIR_EMBEDDINGS_MODEL || 'nomic-embed-text',
     dimensions: parseInt(process.env.MIMIR_EMBEDDINGS_DIMENSIONS || '768', 10),
@@ -34,5 +34,5 @@ export function getEmbeddingsConfig(): EmbeddingsConfig {
  * Check if embeddings are enabled
  */
 export function isEmbeddingsEnabled(): boolean {
-  return process.env.MIMIR_EMBEDDINGS_ENABLED === 'true';
+  return process.env.MIMIR_EMBEDDINGS_ENABLED !== 'false';
 }

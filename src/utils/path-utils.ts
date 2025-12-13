@@ -280,185 +280,36 @@ export function getHostWorkspaceRoot(): string {
  * ```
  */
 /**
- * Translate host path to container path
- * @example translateHostToContainer('/Users/john/src/project') // => '/workspace/project'
+ * Normalize path for storage - NO translation, just normalization
+ *
+ * SIMPLIFIED: Store paths as the filesystem sees them.
+ * - Local Mac: stores /Users/dev/...
+ * - Docker: stores /workspace/...
+ *
+ * Translation happens ONLY at query time via X-Mimir-Path-Map header.
+ *
+ * @example translateHostToContainer('/Users/john/src/project') // => '/Users/john/src/project' (normalized)
+ * @example translateHostToContainer('~/src/project') // => '/Users/john/src/project' (tilde expanded)
  */
 export function translateHostToContainer(hostPath: string): string {
   if (!hostPath) return hostPath;
 
-  // Skip translation if running locally (not in Docker)
-  if (!isRunningInDocker()) {
-    return normalizeAndResolve(hostPath);
-  }
-  
-  // Get container workspace root (defaults to /workspace for backwards compatibility)
-  const containerRoot = process.env.WORKSPACE_ROOT || '/workspace';
-  
-  // Normalize and resolve the input path
-  const normalizedPath = normalizeAndResolve(hostPath);
-  
-  // If already a container path, return as-is (idempotent)
-  if (normalizedPath.startsWith(containerRoot)) {
-    return normalizedPath;
-  }
-  
-  // Special exception: /app paths are built-in container paths (docs, node_modules, etc.)
-  // These are always accessible inside the container and don't need translation
-  if (normalizedPath.startsWith('/app')) {
-    return normalizedPath;
-  }
-  
-  // Get host root from environment
-  const hostRootEnv = process.env.HOST_WORKSPACE_ROOT;
-  
-  if (!hostRootEnv) {
-    console.warn('⚠️  HOST_WORKSPACE_ROOT not set, cannot translate path');
-    return normalizedPath;
-  }
-  
-  // Normalize the host root (handles Windows backslashes)
-  let hostRoot = normalizeSlashes(hostRootEnv).replace(/\/$/, ''); // Remove trailing slash
-  
-  // Check if HOST_WORKSPACE_ROOT contains tilde
-  const hasTilde = hostRoot.includes('~');
-  
-  if (hasTilde) {
-    // Tilde cannot be expanded using os.homedir() in Docker because it returns container's home
-    // Instead, check for HOST_HOME environment variable (host's $HOME passed to container)
-    const hostHome = process.env.HOST_HOME;
-    
-    if (hostHome) {
-      // Expand tilde using HOST_HOME
-      const expandedRoot = hostRoot.replace(/^~/, hostHome);
-      console.log(`🏠 Expanded tilde using HOST_HOME: ${hostRoot} -> ${expandedRoot}`);
-      
-      // Update hostRoot with expanded path (reuse the variable)
-      hostRoot = normalizeSlashes(expandedRoot).replace(/\/$/, '');
-      
-      // Continue with normal processing using expanded path
-      // (fall through to the code below)
-    } else {
-      // HOST_HOME not available - cannot expand tilde
-      console.warn(
-        '⚠️  HOST_WORKSPACE_ROOT contains tilde (~) but HOST_HOME is not set.\n' +
-        '    Tilde expressions cannot be automatically expanded.\n' +
-        `    Current value: ${hostRootEnv}\n\n` +
-        '    Solutions:\n' +
-        '    1. Pass HOST_HOME to container: docker run -e HOST_HOME=$HOME ...\n' +
-        '    2. Expand tilde in Docker config: HOST_WORKSPACE_ROOT=$HOME/src\n' +
-        '    3. Use absolute path: HOST_WORKSPACE_ROOT=/Users/john/src\n'
-      );
-      
-      // Return normalized path as-is (cannot translate without knowing host root)
-      return normalizedPath;
-    }
-  }
-  
-  // HOST_WORKSPACE_ROOT is absolute - we can do proper string matching
-  // Check if the path is under the host workspace root
-  if (normalizedPath.startsWith(hostRoot)) {
-    // Calculate relative path from host root
-    let relativePath = normalizedPath.substring(hostRoot.length);
-    
-    // Ensure relative path starts with / for clean joining
-    if (!relativePath.startsWith('/')) {
-      relativePath = '/' + relativePath;
-    }
-    
-    // Build container path and normalize (remove trailing slashes)
-    let containerPath = `${containerRoot}${relativePath}`;
-    
-    // Remove trailing slashes (except for root)
-    if (containerPath.length > 1) {
-      containerPath = containerPath.replace(/\/+$/, '');
-    }
-    
-    console.log(`📍 Host -> Container: ${hostPath} -> ${containerPath}`);
-    return containerPath;
-  }
-  
-  // Path is outside workspace root - try to make it relative
-  console.warn(`⚠️  Path is outside workspace root: ${normalizedPath} (root: ${hostRoot})`);
-  
-  // Try to make it relative to workspace root
-  const relativePath = path.relative(hostRoot, normalizedPath);
-  
-  // If the relative path goes up (..), it's truly outside the workspace
-  if (relativePath.startsWith('..')) {
-    console.error(`❌ Path is outside workspace root and cannot be translated: ${normalizedPath}`);
-    throw new Error(`Path is outside workspace root: ${normalizedPath} (root: ${hostRoot})`);
-  }
-  
-  let containerPath = `${containerRoot}/${relativePath}`;
-  
-  // Remove trailing slashes (except for root)
-  if (containerPath.length > 1) {
-    containerPath = containerPath.replace(/\/+$/, '');
-  }
-  
-  console.log(`📍 Host -> Container (relative): ${hostPath} -> ${containerPath}`);
-  return containerPath;
+  // Just normalize - no translation
+  // Expands tilde, resolves relative paths, normalizes slashes
+  return normalizeAndResolve(hostPath);
 }
 
 /**
- * Translate container path to host path
- * 
- * Maps paths from the Docker container's workspace directory back to the host filesystem.
- * Uses WORKSPACE_ROOT environment variable (defaults to /workspace).
- * 
- * Environment Variables:
- * - WORKSPACE_ROOT: Container workspace path (default: /workspace)
- * - HOST_WORKSPACE_ROOT: Host-side workspace path to translate to
- * 
- * @param containerPath - Path inside the container (WORKSPACE_ROOT/...)
- * @returns Path on the host system
- * 
- * @example
- * ```ts
- * // WORKSPACE_ROOT=/workspace, HOST_WORKSPACE_ROOT=/Users/john/src
- * translateContainerToHost('/workspace/project')      // => '/Users/john/src/project'
- * translateContainerToHost('/workspace/sub/file.txt') // => '/Users/john/src/sub/file.txt'
- * translateContainerToHost('/other/path')             // => '/other/path' (passthrough)
- * 
- * // WORKSPACE_ROOT=/mnt/data, HOST_WORKSPACE_ROOT=/Users/john/src
- * translateContainerToHost('/mnt/data/project')       // => '/Users/john/src/project'
- * ```
- */
-/**
- * Translate container path to host path
- * @example translateContainerToHost('/workspace/project') // => '/Users/john/src/project'
+ * Normalize container path - NO translation, just normalization
+ *
+ * SIMPLIFIED: No more complex host/container translation.
+ * Just normalizes slashes for consistency.
+ *
+ * @example translateContainerToHost('/workspace/project') // => '/workspace/project'
  */
 export function translateContainerToHost(containerPath: string): string {
   if (!containerPath) return containerPath;
-
-  // Skip translation if running locally (not in Docker)
-  if (!isRunningInDocker()) {
-    return normalizeSlashes(containerPath);
-  }
-  
-  // Get container workspace root (defaults to /workspace for backwards compatibility)
-  const containerRoot = process.env.WORKSPACE_ROOT || '/workspace';
-  
-  // Normalize the container path
-  const normalizedPath = normalizeSlashes(containerPath);
-  
-  // Get host root
-  const hostRoot = getHostWorkspaceRoot();
-  
-  // Check if the path starts with container workspace root
-  if (normalizedPath.startsWith(containerRoot)) {
-    // Calculate relative path from container root
-    const relativePath = normalizedPath.substring(containerRoot.length);
-    
-    // Build host path
-    const hostPath = `${hostRoot}${relativePath}`;
-    
-    console.log(`📍 Container -> Host: ${containerPath} -> ${hostPath}`);
-    return hostPath;
-  }
-  
-  // Not a workspace path - return as-is
-  return containerPath;
+  return normalizeSlashes(containerPath);
 }
 
 /**

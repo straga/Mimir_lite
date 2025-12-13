@@ -51,49 +51,27 @@ router.get('/indexed-folders', async (req: Request, res: Response) => {
       watchConfigs.map(async (config) => {
         const session = driver!.session();
         try {
-          // Translate host path to container path for querying files
-          // Files may be stored with different path formats:
-          // 1. Container path: /workspace/ngx-cmk-translate/...
-          // 2. Full host path: /Users/c815719/src/ngx-cmk-translate/...
-          // 3. Tilde host path: ~/src/ngx-cmk-translate/... (legacy)
-          const containerPath = translateHostToContainer(config.path);
-          const containerFolderPath = containerPath.endsWith('/') ? containerPath : containerPath + '/';
-          
-          // Also check for host path format (config.path might be host or container)
-          const hostFolderPath = config.path.endsWith('/') ? config.path : config.path + '/';
-          
-          // Check for tilde-based path (legacy format)
-          const hostWorkspaceRoot = getHostWorkspaceRoot();
-          let tildeFolderPath = null;
-          if (config.path.startsWith(hostWorkspaceRoot)) {
-            // Convert /Users/c815719/src/folder -> ~/src/folder
-            const relativePath = config.path.substring(hostWorkspaceRoot.length);
-            tildeFolderPath = `~/src${relativePath}/`;
-          }
-          
+          // SIMPLIFIED: Files are stored with filesystem path as-is
+          // No more multi-format checks - just use config.path directly
+          const folderPath = config.path.endsWith('/') ? config.path : config.path + '/';
+
           const result = await session.run(
             `
             MATCH (f:File)
-            WHERE f.path STARTS WITH $containerFolderPath OR f.path = $containerPath
-               OR f.path STARTS WITH $hostFolderPath OR f.path = $hostPath
-               OR ($tildeFolderPath IS NOT NULL AND (f.path STARTS WITH $tildeFolderPath OR f.path = $tildePath))
+            WHERE f.path STARTS WITH $folderPath OR f.path = $path
             WITH DISTINCT f
             OPTIONAL MATCH (f)-[:HAS_CHUNK]->(c:FileChunk)
-            WITH f, c, 
+            WITH f, c,
                  CASE WHEN c IS NOT NULL AND c.embedding IS NOT NULL THEN 1 ELSE 0 END as chunkHasEmbedding,
                  CASE WHEN f.embedding IS NOT NULL THEN 1 ELSE 0 END as fileHasEmbedding
-            RETURN 
+            RETURN
               COUNT(DISTINCT f) as fileCount,
               COUNT(DISTINCT c) as chunkCount,
               SUM(chunkHasEmbedding) + SUM(fileHasEmbedding) as embeddingCount
             `,
-            { 
-              containerFolderPath,
-              containerPath,
-              hostFolderPath,
-              hostPath: config.path,
-              tildeFolderPath,
-              tildePath: tildeFolderPath ? tildeFolderPath.slice(0, -1) : null
+            {
+              folderPath,
+              path: config.path
             }
           );
 
