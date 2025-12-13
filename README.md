@@ -77,6 +77,7 @@ MIMIR_EMBEDDINGS_API=http://localhost:11434
 MIMIR_EMBEDDINGS_MODEL=mxbai-embed-large
 MIMIR_EMBEDDINGS_DIMENSIONS=1024
 MIMIR_EMBEDDINGS_ENABLED=true
+MIMIR_EMBEDDINGS_CHUNK_SIZE=768  # Characters per chunk (reduce if "input too large" errors)
 
 # Performance
 MIMIR_SCAN_CONCURRENCY=50    # Parallel fast-skip checks (stat + Neo4j SELECT)
@@ -139,6 +140,24 @@ Via REST API:
 curl -X POST http://localhost:3000/api/index-folder \
   -H "Content-Type: application/json" \
   -d '{"path": "/home/user/my-project", "generate_embeddings": true}'
+```
+
+## Troubleshooting
+
+### "input is too large to process" errors
+
+If you see this error during indexing, the embedding server needs larger batch size.
+
+**For llama.cpp (llama-server):**
+```bash
+llama-server -m bge-m3.gguf --embeddings -b 8192 -ub 8192
+```
+
+Add `-b 8192 -ub 8192` to increase batch size.
+
+**Alternative:** Reduce chunk size in mimir:
+```bash
+MIMIR_EMBEDDINGS_CHUNK_SIZE=512  # Default: 768
 ```
 
 ## Known Limitations
