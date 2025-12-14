@@ -611,59 +611,86 @@ export class EmbeddingsService {
     let lastError: Error | null = null;
     const modelLoadingBaseDelay = getModelLoadingBaseDelay();
     const maxDelay = getMaxDelay();
-    
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let attempt = 0;
+
+    while (true) {
       try {
         return await fn();
       } catch (error: any) {
         lastError = error;
-        
+
         // Check for retryable errors
-        const isEOFError = error.message?.includes('EOF') || 
+        const isEOFError = error.message?.includes('EOF') ||
                           error.message?.includes('unexpected end') ||
                           error.code === 'ECONNRESET';
-        
-        const isModelLoading = error.message?.includes('503') || 
+
+        const isModelLoading = error.message?.includes('503') ||
                               error.message?.includes('Loading model') ||
                               error.message?.includes('unavailable_error');
-        
-        const isFetchFailed = error.message?.includes('fetch failed');
-        
-        const isRetryable = isEOFError || isModelLoading || isFetchFailed;
-        
-        // Only retry on transient errors, not on other errors
-        if (!isRetryable || attempt === maxRetries) {
+
+        // Connection refused - check both error and error.cause (Node fetch wraps errors)
+        const isConnectionRefused = error.code === 'ECONNREFUSED' ||
+                                   error.cause?.code === 'ECONNREFUSED' ||
+                                   error.message?.includes('ECONNREFUSED') ||
+                                   error.cause?.message?.includes('ECONNREFUSED');
+
+        // Fetch failed but NOT connection refused = temporary network issue
+        const isFetchFailed = error.message?.includes('fetch failed') && !isConnectionRefused;
+
+        const isRetryable = isEOFError || isModelLoading || isFetchFailed || isConnectionRefused;
+
+        // For connection refused - wait indefinitely (poll every 60s after initial retries)
+        // For other errors - fail after maxRetries
+        if (!isRetryable) {
           throw error;
         }
-        
-        // Exponential backoff with much longer delays for model loading
-        // Model loading can take 30+ seconds, so we use longer waits:
-        // Model loading: 5s, 10s, 20s, 30s, 30s (with default 5s base)
-        // Fetch failed: 3s, 6s, 12s, 24s, 30s (connection issues may need time)
-        // EOF errors: 1s, 2s, 4s, 8s, 16s
-        let baseDelay: number;
-        if (isModelLoading) {
-          baseDelay = modelLoadingBaseDelay;
-        } else if (isFetchFailed) {
-          baseDelay = 3000;
-        } else {
-          baseDelay = 1000;
+
+        if (!isConnectionRefused && attempt >= maxRetries) {
+          throw error;
         }
-        const delayMs = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
-        
-        const errorType = isModelLoading ? 'model loading' : 
+
+        // Exponential backoff with delays based on error type:
+        // Connection refused: 10s, 20s, 30s, then 60s forever (server down, wait patiently)
+        // Model loading: 5s, 10s, 20s, 30s, 30s (model loading takes time)
+        // Fetch failed: 3s, 6s, 12s, 24s, 30s (network issues)
+        // EOF errors: 1s, 2s, 4s, 8s, 16s (transient)
+        let delayMs: number;
+
+        if (isConnectionRefused) {
+          if (attempt < maxRetries) {
+            // First 5 attempts: exponential backoff 10s, 20s, 30s, 30s, 30s
+            delayMs = Math.min(10000 * Math.pow(2, attempt), maxDelay);
+          } else {
+            // After maxRetries: poll every 60 seconds
+            delayMs = 60000;
+          }
+        } else if (isModelLoading) {
+          delayMs = Math.min(modelLoadingBaseDelay * Math.pow(2, attempt), maxDelay);
+        } else if (isFetchFailed) {
+          delayMs = Math.min(3000 * Math.pow(2, attempt), maxDelay);
+        } else {
+          delayMs = Math.min(1000 * Math.pow(2, attempt), maxDelay);
+        }
+
+        const errorType = isConnectionRefused ? 'connection refused' :
+                         isModelLoading ? 'model loading' :
                          isFetchFailed ? 'fetch failed' : 'EOF';
-        
-        console.warn(
-          `⚠️  ${operation} failed with ${errorType} error (attempt ${attempt + 1}/${maxRetries + 1}). ` +
-          `Retrying in ${Math.round(delayMs / 1000)}s...`
-        );
-        
+
+        // Special message for connection refused - waiting for server
+        if (isConnectionRefused) {
+          if (attempt < maxRetries) {
+            console.warn(`⏳ Embedding server unavailable. Waiting ${Math.round(delayMs / 1000)}s before retry (${attempt + 1}/${maxRetries + 1})...`);
+          } else {
+            console.warn(`⏳ Embedding server still unavailable. Polling every 60s... (attempt ${attempt + 1})`);
+          }
+        } else {
+          console.warn(`⚠️  ${operation} failed with ${errorType} error (attempt ${attempt + 1}/${maxRetries + 1}). Retrying in ${Math.round(delayMs / 1000)}s...`);
+        }
+
         await new Promise(resolve => setTimeout(resolve, delayMs));
+        attempt++;
       }
     }
-    
-    throw lastError || new Error(`${operation} failed after ${maxRetries + 1} attempts`);
   }
 
   /**
@@ -715,9 +742,6 @@ export class EmbeddingsService {
         };
 
       } catch (error: any) {
-        if (error.code === 'ECONNREFUSED') {
-          throw new Error(`Cannot connect to Ollama at ${this.baseUrl}. Make sure Ollama is running.`);
-        }
         throw error;
       }
     }, `Ollama embedding (${text.substring(0, 50)}...)`);
@@ -792,9 +816,6 @@ export class EmbeddingsService {
         };
 
       } catch (error: any) {
-        if (error.code === 'ECONNREFUSED') {
-          throw new Error(`Cannot connect to OpenAI API at ${this.baseUrl}. Make sure copilot-api is running.`);
-        }
         throw error;
       }
     }, `OpenAI embedding (${text.substring(0, 50)}...)`);
