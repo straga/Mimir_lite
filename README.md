@@ -88,6 +88,9 @@ MIMIR_MIN_SIMILARITY=0.5  # cosine similarity threshold (0.0-1.0)
 
 # Exclusions
 MIMIR_SENSITIVE_FILES=*.po,*.pot,*.lock,*.log
+
+# Document parsing
+MIMIR_DISABLE_PDF=true  # Disable PDF parsing (for old CPUs without AVX)
 ```
 
 ## Claude Code MCP Config

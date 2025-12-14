@@ -1,9 +1,19 @@
 /**
  * DocumentParser - Extracts text content from binary document formats
  * Supports PDF and DOCX files for indexing and embedding generation
+ *
+ * Environment variables:
+ * - MIMIR_DISABLE_PDF=true - Disable PDF parsing (for systems without AVX/modern CPU)
  */
 
 import * as mammoth from 'mammoth';
+
+// Check if PDF parsing is disabled (for old CPUs without AVX instructions)
+const PDF_DISABLED = process.env.MIMIR_DISABLE_PDF === 'true';
+
+if (PDF_DISABLED) {
+  console.log('⚠️  PDF parsing disabled (MIMIR_DISABLE_PDF=true)');
+}
 
 export class DocumentParser {
   /**
@@ -84,16 +94,20 @@ export class DocumentParser {
    * @returns Extracted text content
    */
   private async extractPdfText(buffer: Buffer): Promise<string> {
+    if (PDF_DISABLED) {
+      throw new Error('PDF parsing disabled (MIMIR_DISABLE_PDF=true)');
+    }
+
     // pdf-parse exports PDFParse as a named export
     const { PDFParse } = await import('pdf-parse');
     const parser = new PDFParse({ data: buffer });
     const textResult = await parser.getText();
-    
+
     // getText() returns TextResult object with text property
     if (!textResult.text || textResult.text.trim().length === 0) {
       throw new Error('PDF contains no extractable text content');
     }
-    
+
     return textResult.text;
   }
 
@@ -158,6 +172,10 @@ export class DocumentParser {
    * // Output: Supported: .pdf, .docx
    */
   isSupportedFormat(extension: string): boolean {
-    return ['.pdf', '.docx'].includes(extension.toLowerCase());
+    const ext = extension.toLowerCase();
+    if (ext === '.pdf') {
+      return !PDF_DISABLED;
+    }
+    return ['.docx'].includes(ext);
   }
 }

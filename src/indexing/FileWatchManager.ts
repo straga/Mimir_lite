@@ -656,10 +656,14 @@ export class FileWatchManager {
       const result = await this.indexer.checkFastSkip(file);
       if (result.skip) {
         fastSkipped++;
-        const hostPath = file; // Already in host format locally
-        console.log(`⚡ Fast skip: ${hostPath}`);
+        console.log(`⚡ Fast skip: ${file}`);
       } else {
         filesToIndex.push(file);
+      }
+      // Progress every 1000 files
+      const total = fastSkipped + filesToIndex.length;
+      if (total % 1000 === 0) {
+        console.log(`[SCAN] Progress: ${total}/${files.length} checked (${fastSkipped} skipped, ${filesToIndex.length} to index)`);
       }
     });
 
@@ -692,7 +696,7 @@ export class FileWatchManager {
     let skipped = 0;
     let errored = 0;
 
-    const indexTasks = filesToIndex.map((file) => async () => {
+    const indexTasks = filesToIndex.map((file, idx) => async () => {
       if (signal?.aborted) return;
 
       // Update current file in progress

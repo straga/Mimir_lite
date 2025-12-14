@@ -28,6 +28,13 @@ cd docker
 docker compose up -d
 ```
 
+```bash
+
+docker compose -p mimir up -d --build
+docker logs -f mimir-server
+
+```
+
 ## Files
 
 - `Dockerfile` - mimir-lite image
@@ -79,6 +86,9 @@ environment:
 
   # Search
   - MIMIR_MIN_SIMILARITY=0.5
+
+  # Document parsing (optional)
+  - MIMIR_DISABLE_PDF=true  # Disable PDF parsing for old CPUs without AVX
 ```
 
 ## Mounting Project Folders

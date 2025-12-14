@@ -12,6 +12,22 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// ============================================================================
+// DEBUG: Track unexpected process exits
+// ============================================================================
+process.on('exit', (code) => {
+  console.error(`\n[PROCESS EXIT] code=${code}`);
+  console.error(new Error('Exit stack trace').stack);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error(`\n[UNCAUGHT EXCEPTION]`, error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(`\n[UNHANDLED REJECTION]`, reason);
+});
+
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
