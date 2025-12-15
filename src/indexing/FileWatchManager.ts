@@ -836,7 +836,7 @@ export class FileWatchManager {
 
     try {
       await this.retryIndexing(
-        () => this.indexer.updateFile(fullPath, config.path),
+        () => this.indexer.updateFile(fullPath, config.path, config.generate_embeddings, config.id),
         relativePath
       );
     } catch (error: any) {

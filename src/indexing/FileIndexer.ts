@@ -922,8 +922,8 @@ export class FileIndexer {
    * }
    * console.log('Updated', changedFiles.length, 'files');
    */
-  async updateFile(filePath: string, rootPath: string): Promise<void> {
-    // Just re-index the file
-    await this.indexFile(filePath, rootPath);
+  async updateFile(filePath: string, rootPath: string, generateEmbeddings: boolean = false, configId?: string): Promise<void> {
+    // Just re-index the file (with embeddings if enabled)
+    await this.indexFile(filePath, rootPath, generateEmbeddings, configId);
   }
 }
