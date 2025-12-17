@@ -6,9 +6,88 @@
 
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Driver } from 'neo4j-driver';
+import { existsSync } from 'fs';
 import { UnifiedSearchService } from '../managers/UnifiedSearchService.js';
-import { applyPathMappingToResult } from '../utils/path-utils.js';
+import { applyPathMappingToResult, translateContainerToHost } from '../utils/path-utils.js';
 import { getRequestPathMappings } from '../http-server.js';
+
+/**
+ * Lazy file existence check - filters out results for deleted files
+ * and schedules background cleanup of stale index entries
+ *
+ * @param results - Search results to filter
+ * @param driver - Neo4j driver for cleanup operations
+ * @returns Filtered results with only existing files
+ */
+async function filterDeletedFiles(results: any[], driver: Driver): Promise<any[]> {
+  if (!results || results.length === 0) return results;
+
+  const validResults: any[] = [];
+  const deletedNodeIds: string[] = [];
+
+  for (const result of results) {
+    // Get the path to check - try multiple fields since absolute_path is often null
+    let pathToCheck = result.absolute_path
+      || result.parent_file?.absolute_path
+      || result.parent_file?.path  // path often contains absolute path
+      || result.path;
+
+    // Debug: log what we're checking
+    console.log(`🔍 Lazy check: type=${result.type}, path=${pathToCheck || 'NONE'}, id=${result.id?.substring(0, 20)}...`);
+
+    // Only check file-related types
+    const isFileRelated = result.type === 'file' || result.type === 'file_chunk' || pathToCheck;
+
+    if (!isFileRelated || !pathToCheck) {
+      // Not a file result, keep it
+      validResults.push(result);
+      continue;
+    }
+
+    // Translate container path to host path if needed
+    const hostPath = translateContainerToHost(pathToCheck);
+
+    if (existsSync(hostPath)) {
+      validResults.push(result);
+    } else {
+      // File doesn't exist - collect for cleanup
+      deletedNodeIds.push(result.id);
+      console.log(`🗑️  Lazy cleanup: file not found, removing from index: ${hostPath}`);
+    }
+  }
+
+  // Background cleanup of deleted files (don't await - fire and forget)
+  if (deletedNodeIds.length > 0) {
+    cleanupDeletedNodes(deletedNodeIds, driver).catch(err => {
+      console.error('Background cleanup failed:', err.message);
+    });
+  }
+
+  return validResults;
+}
+
+/**
+ * Background cleanup of nodes for deleted files
+ * Deletes the file node and all related chunks/embeddings
+ */
+async function cleanupDeletedNodes(nodeIds: string[], driver: Driver): Promise<void> {
+  const session = driver.session();
+  try {
+    // Delete file nodes and their chunks (CASCADE through relationships)
+    await session.run(`
+      MATCH (n:Node)
+      WHERE n.id IN $nodeIds
+      OPTIONAL MATCH (n)-[:HAS_CHUNK]->(chunk:Node)
+      DETACH DELETE chunk, n
+    `, { nodeIds });
+
+    console.log(`🧹 Cleaned up ${nodeIds.length} stale file(s) from index`);
+  } catch (error: any) {
+    console.error('Failed to cleanup deleted nodes:', error.message);
+  } finally {
+    await session.close();
+  }
+}
 
 export function createVectorSearchTools(driver: Driver): Tool[] {
   return [
@@ -239,6 +318,13 @@ export async function handleVectorSearchNodes(
       }
     }
     
+    // Lazy cleanup: filter out results for deleted files
+    // This removes stale entries from search results and triggers background cleanup
+    if (result.results && result.results.length > 0) {
+      result.results = await filterDeletedFiles(result.results, driver);
+      result.returned = result.results.length;
+    }
+
     // Apply path mapping for remote server scenarios
     // Priority: header X-Mimir-Path-Map > env MIMIR_PATH_MAP
     // (e.g., server paths /data/projects -> client paths /Users/dev/projects)
