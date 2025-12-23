@@ -43,6 +43,79 @@ export class FileWatchManager {
     this.maxConcurrentIndexing = parseInt(process.env.MIMIR_INDEXING_THREADS || '1', 10);
     console.log(`📊 FileWatchManager initialized with max ${this.maxConcurrentIndexing} concurrent indexing threads`);
   }
+
+  /**
+   * Get the system's file watcher limit (inotify max_user_watches)
+   * Returns 0 if unable to read the limit (non-Linux or no access)
+   */
+  private async getSystemWatcherLimit(): Promise<number> {
+    try {
+      const result = await fs.readFile('/proc/sys/fs/inotify/max_user_watches', 'utf-8');
+      return parseInt(result.trim(), 10);
+    } catch {
+      // Not Linux or no access to /proc
+      return 0;
+    }
+  }
+
+  /**
+   * Count files in a directory (recursively)
+   * Used to estimate if we'll hit the file watcher limit
+   */
+  private async countFiles(dir: string, ignore: GitignoreHandler): Promise<number> {
+    let count = 0;
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (ignore.shouldIgnore(fullPath, dir)) {
+          continue;
+        }
+        if (entry.isDirectory()) {
+          count += await this.countFiles(fullPath, ignore);
+        } else {
+          count++;
+        }
+      }
+    } catch {
+      // Directory not accessible, skip
+    }
+    return count;
+  }
+
+  /**
+   * Determine if we should use polling mode based on system limits and directory size
+   */
+  private async shouldUsePolling(containerPath: string, gitignoreHandler: GitignoreHandler): Promise<boolean> {
+    // Check if polling is forced via env
+    if (process.env.MIMIR_USE_POLLING === 'true') {
+      return true;
+    }
+
+    // Get system limit
+    const systemLimit = await this.getSystemWatcherLimit();
+    if (systemLimit === 0) {
+      // Can't determine limit (not Linux), assume we're fine
+      return false;
+    }
+
+    console.log(`📊 System file watcher limit: ${systemLimit}`);
+
+    // Count files in the directory
+    const fileCount = await this.countFiles(containerPath, gitignoreHandler);
+    console.log(`📊 Estimated files to watch: ${fileCount}`);
+
+    // Use a safety margin of 80% of the limit
+    const threshold = Math.floor(systemLimit * 0.8);
+
+    if (fileCount > threshold) {
+      console.warn(`⚠️  File count (${fileCount}) exceeds 80% of system limit (${systemLimit})`);
+      console.warn(`   Switching to polling mode to avoid ENOSPC errors`);
+      return true;
+    }
+
+    return false;
+  }
   
   /**
    * Register a callback for real-time progress updates during file indexing
@@ -278,6 +351,16 @@ export class FileWatchManager {
     const { translateHostToContainer } = await import('../utils/path-utils.js');
     const containerPath = translateHostToContainer(config.path);
 
+    // Load gitignore for file counting
+    const gitignoreHandler = new GitignoreHandler();
+    await gitignoreHandler.loadIgnoreFile(containerPath);
+    if (config.ignore_patterns.length > 0) {
+      gitignoreHandler.addPatterns(config.ignore_patterns);
+    }
+
+    // Auto-detect if we should use polling based on system limits
+    const usePolling = await this.shouldUsePolling(containerPath, gitignoreHandler);
+
     // Create chokidar watcher
     const watcherOptions = {
       ignored: [
@@ -293,18 +376,41 @@ export class FileWatchManager {
       awaitWriteFinish: {
         stabilityThreshold: 2000, // Wait 2 seconds after last change
         pollInterval: 100
-      }
+      },
+      // Fallback to polling for large codebases or when ENOSPC occurs
+      usePolling: usePolling,
+      // Poll interval for polling mode (seconds)
+      interval: parseInt(process.env.MIMIR_POLL_INTERVAL || '10000', 10),
+      binaryInterval: parseInt(process.env.MIMIR_POLL_BINARY_INTERVAL || '300000', 10),
     };
+
+    if (usePolling) {
+      console.log(`⚠️  Using polling mode for ${config.path} (slower but no file watcher limits)`);
+    }
 
     const watcher = chokidar.watch(containerPath, watcherOptions);
 
     // Set up event handlers for live file changes
     watcher
-      .on('ready', () => console.log(`👁️  Watcher ready: ${config.path}`))
+      .on('ready', () => {
+        const mode = usePolling ? 'polling' : 'native';
+        console.log(`👁️  Watcher ready: ${config.path} (${mode} mode)`);
+      })
       .on('add', (filePath) => this.handleFileAdded(path.relative(containerPath, filePath), config))
       .on('change', (filePath) => this.handleFileChanged(path.relative(containerPath, filePath), config))
       .on('unlink', (filePath) => this.handleFileDeleted(path.relative(containerPath, filePath), config))
-      .on('error', (error) => console.error(`Watcher error for ${config.path}:`, error));
+      .on('error', (error: any) => {
+        // Handle ENOSPC - system limit for file watchers reached
+        if (error.code === 'ENOSPC') {
+          console.error(`❌ ENOSPC error for ${config.path}: System limit for file watchers reached`);
+          console.error(`   Solutions:`);
+          console.error(`   1. Increase system limit: sudo sysctl fs.inotify.max_user_watches=524288`);
+          console.error(`   2. Restart with polling mode: MIMIR_USE_POLLING=true`);
+          console.error(`   3. Index a smaller directory`);
+        } else {
+          console.error(`Watcher error for ${config.path}:`, error);
+        }
+      });
 
     this.watchers.set(config.path, watcher);
     console.log(`📁 Started watching: ${config.path}`);

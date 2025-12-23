@@ -64,6 +64,9 @@ cd docker && docker compose -f docker-compose.neo4j.yml up -d
 bun install && bun run build
 cp .env.example .env  # configure
 bun run build/http-server.js
+
+# 3. build , env , run
+
 ```
 
 ## Configuration
@@ -77,7 +80,6 @@ MIMIR_EMBEDDINGS_API=http://localhost:11434
 MIMIR_EMBEDDINGS_MODEL=mxbai-embed-large
 MIMIR_EMBEDDINGS_DIMENSIONS=1024
 MIMIR_EMBEDDINGS_ENABLED=true
-MIMIR_EMBEDDINGS_CHUNK_SIZE=768  # Characters per chunk (reduce if "input too large" errors)
 
 # Performance
 MIMIR_SCAN_CONCURRENCY=50    # Parallel fast-skip checks (stat + Neo4j SELECT)
@@ -86,11 +88,13 @@ MIMIR_INDEX_CONCURRENCY=3    # Parallel file indexing (limited by Ollama)
 # Search
 MIMIR_MIN_SIMILARITY=0.5  # cosine similarity threshold (0.0-1.0)
 
+# File Watcher (for large codebases)
+MIMIR_USE_POLLING=false           # Force polling mode if true (auto-detected by default)
+MIMIR_POLL_INTERVAL=10000        # Polling scan interval in ms (default: 10s)
+MIMIR_POLL_BINARY_INTERVAL=300000 # Binary files scan interval in ms (default: 5min)
+
 # Exclusions
 MIMIR_SENSITIVE_FILES=*.po,*.pot,*.lock,*.log
-
-# Document parsing
-MIMIR_DISABLE_PDF=true  # Disable PDF parsing (for old CPUs without AVX)
 ```
 
 ## Claude Code MCP Config
@@ -145,28 +149,66 @@ curl -X POST http://localhost:3000/api/index-folder \
   -d '{"path": "/home/user/my-project", "generate_embeddings": true}'
 ```
 
-## Troubleshooting
-
-### "input is too large to process" errors
-
-If you see this error during indexing, the embedding server needs larger batch size.
-
-**For llama.cpp (llama-server):**
-```bash
-llama-server -m bge-m3.gguf --embeddings -b 8192 -ub 8192
-```
-
-Add `-b 8192 -ub 8192` to increase batch size.
-
-**Alternative:** Reduce chunk size in mimir:
-```bash
-MIMIR_EMBEDDINGS_CHUNK_SIZE=512  # Default: 768
-```
-
 ## Known Limitations
 
 - **SynologyDrive/Dropbox/network mounts**: File watcher may not detect changes (use local folders)
 - **Docker on macOS**: No filesystem events (use hybrid setup or macos service)
+
+## ENOSPC: System limit for file watchers
+
+When indexing large codebases (e.g., 50,000+ files), you may encounter:
+```
+Error: ENOSPC: System limit for number of file watchers reached
+```
+
+### Auto-detection (NEW)
+
+Mimir-lite now **automatically detects** when file count exceeds system limit and switches to polling mode:
+
+```
+System file watcher limit: 524288
+Estimated files to watch: 52347
+File count (52347) exceeds 80% of system limit (524288)
+   Switching to polling mode to avoid ENOSPC errors
+Using polling mode for /workspace (slower but no file watcher limits)
+Watcher ready: /workspace (polling mode)
+```
+
+### Manual Solutions
+
+If you want to use native file watching (faster):
+
+```bash
+# Check current limit
+cat /proc/sys/fs/inotify/max_user_watches
+
+# Increase limit temporarily
+sudo sysctl fs.inotify.max_user_watches=524288
+
+# Increase permanently
+echo "fs.inotify.max_user_watches=524288" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+
+### Force Polling Mode
+
+To force polling mode (slower but no limits):
+
+```bash
+# In .env
+MIMIR_USE_POLLING=true
+
+# Or inline
+MIMIR_USE_POLLING=true bun run build/http-server.js
+```
+
+### Polling Configuration
+
+```bash
+MIMIR_USE_POLLING=true           # Force polling mode
+MIMIR_POLL_INTERVAL=10000        # Scan interval in ms (default: 10s)
+MIMIR_POLL_BINARY_INTERVAL=300000 # Binary files scan interval (default: 5min)
+```
 
 ## Architecture
 
